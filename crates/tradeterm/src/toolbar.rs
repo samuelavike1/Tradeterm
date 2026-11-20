@@ -38,6 +38,31 @@ pub fn apply_style(ui: &mut Ui, theme: &Theme) {
     style.visuals.selection.stroke = Stroke::new(1.0, theme.text);
 }
 
+/// TradingView-style ticker pill: magnifier + symbol; opens the search.
+pub fn ticker_button(ui: &mut Ui, symbol: &str, theme: &Theme) -> Response {
+    let font = egui::FontId::proportional(14.0);
+    let galley = ui
+        .ctx()
+        .fonts_mut(|f| f.layout_no_wrap(symbol.to_owned(), font, theme.text));
+    let width = (galley.size().x + 50.0).max(130.0);
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, TOOLBAR_HEIGHT), Sense::click());
+    let fill = if resp.hovered() {
+        mix(pill_fill(theme), theme.border, 0.6)
+    } else {
+        pill_fill(theme)
+    };
+    let p = ui.painter();
+    p.rect_filled(rect, rect.height() / 2.0, fill);
+    let icon_c = pos2(rect.left() + 16.0, rect.center().y);
+    icons::paint(p, icon_c, Icon::Search, 15.0, theme.text_muted);
+    p.galley(
+        pos2(rect.left() + 30.0, rect.center().y - galley.size().y / 2.0),
+        galley,
+        theme.text,
+    );
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
 /// A thin vertical separator between button groups.
 pub fn divider(ui: &mut Ui, theme: &Theme) {
     ui.add_space(6.0);
@@ -81,11 +106,6 @@ pub fn icon_button(
 /// A Lucide chevron-down centered at `c`.
 pub fn chevron(p: &Painter, c: Pos2, color: Color32) {
     icons::paint(p, c, Icon::ChevronDown, 14.0, color);
-}
-
-/// A Lucide magnifier centered at `c`.
-pub fn search_icon(p: &Painter, c: Pos2, color: Color32) {
-    icons::paint(p, c, Icon::Search, 15.0, color);
 }
 
 /// A toolbar toggle showing a Lucide icon; highlighted while `on`.

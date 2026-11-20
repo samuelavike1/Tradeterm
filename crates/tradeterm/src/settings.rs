@@ -18,6 +18,19 @@ pub const SETTINGS_ENV: &str = "TRADETERM_SETTINGS";
 /// Changes are written once settings have been stable for this long.
 pub const SAVE_DEBOUNCE: Duration = Duration::from_millis(750);
 
+/// A recently opened symbol, shown when the search field is empty.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecentSymbol {
+    pub symbol: String,
+    #[serde(default)]
+    pub base: String,
+    #[serde(default)]
+    pub quote: String,
+}
+
+/// Most recent symbols kept.
+pub const MAX_RECENT: usize = 12;
+
 /// One chart tab.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -51,6 +64,8 @@ pub struct AppSettings {
     /// Open chart tabs, left to right. Never empty after [`Self::normalized`].
     pub tabs: Vec<TabSettings>,
     pub active_tab: usize,
+    /// Most recent first.
+    pub recent_symbols: Vec<RecentSymbol>,
 }
 
 impl Default for AppSettings {
@@ -61,6 +76,7 @@ impl Default for AppSettings {
             down_color: None,
             tabs: vec![TabSettings::default()],
             active_tab: 0,
+            recent_symbols: Vec::new(),
         }
     }
 }

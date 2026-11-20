@@ -23,7 +23,7 @@ pub const DEFAULT_WS_BASE: &str = "wss://data-stream.binance.vision/ws";
 /// Bars per klines request (Binance maximum).
 pub const MAX_KLINES: usize = 1000;
 /// Search results returned by `search_symbols`.
-const SEARCH_LIMIT: usize = 20;
+const SEARCH_LIMIT: usize = 100;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const HTTP_TIMEOUT: Duration = Duration::from_secs(15);
 /// The full symbol list is ~6 MB; give it more time on slow links.

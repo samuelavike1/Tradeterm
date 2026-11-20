@@ -40,8 +40,13 @@ with a custom chart widget built to handle a million bars.
   colors. Toggle it with **Vol**.
 - **Crosshair:** snaps to bar centers, shows labels on both axes (volume inside the
   volume pane), and an OHLCV + change % readout at the top left.
-- **Symbol search:** type in the symbol box for live search over all Binance trading
-  pairs. Use ↑/↓ and Enter, or click a result. Esc cancels.
+- **Symbol search (TradingView-style):** click the ticker pill or just start typing on
+  the chart to open a search dialog. The field starts with the current symbol selected
+  (or with the letter you typed). Quote-currency chips (All, USDT, USDC, FDUSD, BTC, …)
+  filter results and are remembered. Matches are highlighted in blue. ↑/↓ highlight a
+  row and preview it in the field, Enter opens it (if results are still loading, the top
+  result opens when they arrive), click opens, and Esc or clicking outside closes. An
+  empty field lists recent symbols, which are saved.
 - **Backfill:** scrolling near the oldest loaded bar fetches the previous 1000 bars in
   the background and prepends them without moving the view. It stops at 250k bars.
 - **Live data:** the WebSocket connects before history is fetched, so no bars are
@@ -77,6 +82,7 @@ with a custom chart widget built to handle a million bars.
 | Ctrl+Shift+T (Cmd+Shift+T on macOS) | Toggle dark/light theme |
 | F12 | Performance overlay |
 | Ctrl+Shift+D (Cmd+Shift+D on macOS) | Load 1,000,000 synthetic bars (stress test) |
+| Any letter/digit on the chart | Open symbol search with that text |
 | ↑ / ↓, Enter, Esc | Navigate, choose or cancel symbol search results |
 
 | Mouse | Action |

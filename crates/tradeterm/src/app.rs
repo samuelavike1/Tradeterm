@@ -2,8 +2,8 @@ use crate::chrome::{self, TITLE_BAR_HEIGHT, TabView};
 use crate::icons::Icon;
 use crate::perf::PerfStats;
 use crate::runtime::BackgroundRuntime;
-use crate::search::SearchOutcome;
-use crate::settings::{AppSettings, SettingsStore};
+use crate::search::SymbolSearch;
+use crate::settings::{AppSettings, MAX_RECENT, RecentSymbol, SettingsStore};
 use crate::synthetic;
 use crate::tab::{ChartTab, MAX_HISTORY_BARS, Shared};
 use crate::toolbar;
@@ -42,6 +42,9 @@ pub struct TradeTermApp {
 
     settings_store: SettingsStore,
     perf: PerfStats,
+    search: SymbolSearch,
+    /// Recently opened symbols, most recent first (persisted).
+    recent: Vec<RecentSymbol>,
     /// Owns the tokio thread; dropped last (after the tabs).
     _runtime: BackgroundRuntime,
 }
@@ -95,6 +98,8 @@ impl TradeTermApp {
             theme,
             settings_store,
             perf: PerfStats::default(),
+            search: SymbolSearch::default(),
+            recent: settings.recent_symbols.clone(),
             _runtime: runtime,
         })
     }
@@ -128,6 +133,7 @@ impl TradeTermApp {
             theme_mode: self.theme_mode,
             tabs: self.tabs.iter().map(ChartTab::settings).collect(),
             active_tab: self.active,
+            recent_symbols: self.recent.clone(),
             ..AppSettings::default()
         };
         s.set_overrides(self.overrides);
@@ -193,7 +199,7 @@ impl TradeTermApp {
                 let view = TabView {
                     label: &label,
                     badge: &badge,
-                    badge_color: badge_color(&theme, &label),
+                    badge_color: badge_color(&theme, &tab.base_asset()),
                     change: tab.change_pct(),
                     active: i == self.active,
                     closable,
@@ -298,27 +304,17 @@ impl TradeTermApp {
         let shared = self.shared.clone();
         let theme = self.theme.clone();
         let tab = &mut self.tabs[self.active];
+        let mut open_search: Option<String> = None;
         toolbar::apply_style(ui, &theme);
         ui.horizontal(|ui| {
             ui.set_height(toolbar::TOOLBAR_HEIGHT);
-            tab.search.poll();
-            let reply_shared = shared.clone();
-            let outcome = tab.search.ui(ui, &theme, move |query, reply| {
-                let source = reply_shared.source.clone();
-                let ctx = reply_shared.ctx.clone();
-                reply_shared.handle.spawn(async move {
-                    let result = source
-                        .search_symbols(&query)
-                        .await
-                        .map_err(|e| format!("{e:#}"));
-                    let _ = reply.send((query, result));
-                    ctx.request_repaint();
-                });
-            });
-            match outcome {
-                Some(SearchOutcome::Submit(text)) => tab.set_symbol(Symbol::new(&text), &shared),
-                Some(SearchOutcome::Cancel) => tab.search.input = tab.symbol.to_string(),
-                None => {}
+            // Ticker pill: opens the symbol search (like TradingView's).
+            let label = tab.display_symbol();
+            if toolbar::ticker_button(ui, &label, &theme)
+                .on_hover_text("Symbol search (or just start typing)")
+                .clicked()
+            {
+                open_search = Some(label);
             }
 
             toolbar::divider(ui, &theme);
@@ -358,6 +354,100 @@ impl TradeTermApp {
                 .on_hover_text("Volume pane");
             });
         });
+        if let Some(current) = open_search {
+            self.search.open_with_current(&current);
+        }
+    }
+
+    /// Starts a background symbol search whose reply goes to the dialog.
+    fn request_search(&self, query: String) {
+        let source = self.shared.source.clone();
+        let ctx = self.shared.ctx.clone();
+        let reply = self.search.reply_sender();
+        self.shared.handle.spawn(async move {
+            let result = source
+                .search_symbols(&query)
+                .await
+                .map_err(|e| format!("{e:#}"));
+            let _ = reply.send((query, result));
+            ctx.request_repaint();
+        });
+    }
+
+    /// Typing a letter or digit while nothing has keyboard focus opens the
+    /// symbol search with that character, as on TradingView.
+    fn type_to_search(&mut self, ctx: &egui::Context) {
+        if self.search.is_open() || ctx.memory(|m| m.focused().is_some()) {
+            return;
+        }
+        let typed = ctx.input_mut(|i| {
+            let pos = i.events.iter().position(|e| {
+                matches!(e, egui::Event::Text(t)
+                    if t.chars().next().is_some_and(|c| c.is_ascii_alphanumeric()))
+            })?;
+            match i.events.remove(pos) {
+                egui::Event::Text(t) => Some(t),
+                _ => None,
+            }
+        });
+        if let Some(t) = typed {
+            let query = self.search.open_with_text(&t);
+            if !query.is_empty() {
+                self.request_search(query);
+            }
+        }
+    }
+
+    /// Draws the search dialog; switches the active tab to the chosen symbol.
+    fn search_dialog(&mut self, ctx: &egui::Context) {
+        let recent: Vec<tt_core::SymbolInfo> = self
+            .recent
+            .iter()
+            .map(|r| tt_core::SymbolInfo {
+                base: r.base.clone(),
+                quote: r.quote.clone(),
+                ..tt_core::SymbolInfo::fallback(Symbol::new(&r.symbol))
+            })
+            .collect();
+        let theme = self.theme.clone();
+        let mut pending_query = None;
+        let chosen = self.search.ui(
+            ctx,
+            &theme,
+            &recent,
+            |sym| badge_color(&theme, sym),
+            |query, _reply| pending_query = Some(query),
+        );
+        if let Some(q) = pending_query {
+            self.request_search(q);
+        }
+        if let Some(sym) = chosen {
+            let shared = self.shared.clone();
+            self.tab().set_symbol(sym.clone(), &shared);
+            // Remember it; base/quote come from the search result when known.
+            let (base, quote) = recent
+                .iter()
+                .find(|r| r.symbol == sym)
+                .map(|r| (r.base.clone(), r.quote.clone()))
+                .or_else(|| {
+                    self.search
+                        .last_results()
+                        .iter()
+                        .find(|r| r.symbol == sym)
+                        .map(|r| (r.base.clone(), r.quote.clone()))
+                })
+                .unwrap_or_default();
+            self.recent.retain(|r| r.symbol != sym.as_str());
+            self.recent.insert(
+                0,
+                RecentSymbol {
+                    symbol: sym.to_string(),
+                    base,
+                    quote,
+                },
+            );
+            self.recent.truncate(MAX_RECENT);
+        }
     }
 
     // ---- status bar -------------------------------------------------------
@@ -473,7 +563,8 @@ fn now_unix_ms() -> i64 {
         .map_or(0, |d| d.as_millis() as i64)
 }
 
-/// A stable badge color per symbol, from the series palette.
+/// A stable badge color per base asset (all BTC pairs share one), from the
+/// series palette.
 fn badge_color(theme: &Theme, symbol: &str) -> Color32 {
     let h = symbol
         .bytes()
@@ -513,6 +604,8 @@ impl eframe::App for TradeTermApp {
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.handle_hotkeys(ctx);
+        self.type_to_search(ctx);
+        self.search.poll();
         let shared = self.shared.clone();
         let events: u32 = self.tabs.iter_mut().map(|t| t.drain_events(&shared)).sum();
         self.perf.events.add(Instant::now(), events);
@@ -537,6 +630,7 @@ impl eframe::App for TradeTermApp {
         });
 
         let ctx = ui.ctx().clone();
+        self.search_dialog(&ctx);
         self.perf_overlay(&ctx);
         // Last, so they sit on top of everything else.
         chrome::resize_handles(ui);

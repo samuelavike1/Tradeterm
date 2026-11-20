@@ -3,7 +3,6 @@
 //! Every tab keeps its own live stream, so background tabs stay current and
 //! the tab strip can show their change %.
 
-use crate::search::SymbolSearch;
 use crate::settings::TabSettings;
 use crate::synthetic;
 use crossbeam_channel::Receiver;
@@ -59,7 +58,6 @@ pub struct ChartTab {
     /// `Some(n)`: showing `n` synthetic one-minute bars instead of live data.
     pub synthetic: Option<usize>,
     pub timeframe: Timeframe,
-    pub search: SymbolSearch,
 
     pub series: CandleSeries,
     pub status: ConnectionStatus,
@@ -84,7 +82,6 @@ impl ChartTab {
             stream: None,
             rx,
             sink: None,
-            search: SymbolSearch::new(symbol.as_str()),
             symbol,
             symbol_info: None,
             synthetic,
@@ -125,15 +122,18 @@ impl ChartTab {
         }
     }
 
-    /// Base asset for the tab badge (falls back to the symbol's first letters).
-    pub fn badge(&self) -> String {
-        let base = self
-            .symbol_info
+    /// Base asset (e.g. `BTC`), or the symbol itself until metadata arrives.
+    pub fn base_asset(&self) -> String {
+        self.symbol_info
             .as_ref()
             .map(|i| i.base.clone())
             .filter(|b| !b.is_empty())
-            .unwrap_or_else(|| self.display_symbol());
-        base.chars().take(1).collect()
+            .unwrap_or_else(|| self.display_symbol())
+    }
+
+    /// Letter shown in the tab badge.
+    pub fn badge(&self) -> String {
+        self.base_asset().chars().take(1).collect()
     }
 
     pub fn price_precision(&self) -> usize {
@@ -167,7 +167,6 @@ impl ChartTab {
             self.synthetic = None;
             self.restart(shared);
         }
-        self.search.input = self.symbol.to_string();
     }
 
     pub fn set_timeframe(&mut self, tf: Timeframe, shared: &Shared) {
