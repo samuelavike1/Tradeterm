@@ -2,6 +2,7 @@
 
 mod app;
 mod chart_settings;
+mod drawing_toolbar;
 mod indicators;
 mod menus;
 mod search;

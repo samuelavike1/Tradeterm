@@ -40,7 +40,13 @@ pub struct Shared {
     pub source: Arc<BinanceSource>,
     /// Style new charts start with (fonts are front-end specific).
     pub chart_style: tt_chart::ChartStyle,
+    /// Drawings per symbol, shared by all tabs.
+    pub drawings: DrawingStore,
 }
+
+/// Drawings per symbol key (see [`ChartTab::drawings_key`]).
+pub type DrawingStore =
+    Arc<std::sync::Mutex<std::collections::BTreeMap<String, Vec<tt_chart::Drawing>>>>;
 
 /// Loading of older history when the user scrolls back.
 #[derive(Debug, Default)]
@@ -124,8 +130,38 @@ impl ChartTab {
             restarted_at: Instant::now(),
             first_bars_logged: false,
         };
+        tab.load_drawings(shared);
         tab.restart(shared);
         tab
+    }
+
+    /// Key of this tab's drawings in the store.
+    pub fn drawings_key(&self) -> String {
+        self.display_symbol()
+    }
+
+    /// Writes changed drawings back to the shared store.
+    pub fn stash_drawings(&mut self, shared: &Shared) {
+        if self.chart.drawings.take_dirty() {
+            let key = self.drawings_key();
+            let items = self.chart.drawings.items.clone();
+            if let Ok(mut store) = shared.drawings.lock() {
+                store.insert(key, items);
+            }
+        }
+    }
+
+    /// Shows the store's drawings for the current symbol (after stashing
+    /// this tab's changes), e.g. when the tab becomes active again.
+    pub fn load_drawings(&mut self, shared: &Shared) {
+        self.stash_drawings(shared);
+        let items = shared
+            .drawings
+            .lock()
+            .ok()
+            .and_then(|s| s.get(&self.drawings_key()).cloned())
+            .unwrap_or_default();
+        self.chart.drawings.set_items(items);
     }
 
     pub fn settings(&self) -> TabSettings {
@@ -205,8 +241,10 @@ impl ChartTab {
 
     pub fn set_symbol(&mut self, symbol: Symbol, shared: &Shared) {
         if symbol.is_valid() && (symbol != self.symbol || self.synthetic.is_some()) {
+            self.stash_drawings(shared);
             self.symbol = symbol;
             self.synthetic = None;
+            self.load_drawings(shared);
             self.restart(shared);
         }
     }
@@ -220,7 +258,9 @@ impl ChartTab {
 
     /// Switches to `n` synthetic bars, or back to live data with `None`.
     pub fn set_synthetic(&mut self, n: Option<usize>, shared: &Shared) {
+        self.stash_drawings(shared);
         self.synthetic = n;
+        self.load_drawings(shared);
         self.restart(shared);
     }
 

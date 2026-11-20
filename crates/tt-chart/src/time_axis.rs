@@ -114,6 +114,31 @@ impl<'a> SlotTimes<'a> {
             Some(self.times[i as usize])
         }
     }
+
+    /// Time at a fractional slot, interpolated between neighboring slots.
+    pub fn time_at_frac(&self, slot: f64) -> Option<i64> {
+        let i = slot.floor();
+        let (a, b) = (self.time_at(i as i64)?, self.time_at(i as i64 + 1)?);
+        Some(a + ((b - a) as f64 * (slot - i)).round() as i64)
+    }
+
+    /// Fractional slot of `time`: exact on bar open times, interpolated
+    /// between bars (e.g. a 1m time on an 1h chart) and extrapolated by the
+    /// interval outside the data. Inverse of [`Self::time_at_frac`].
+    pub fn slot_of(&self, time: i64) -> Option<f64> {
+        let n = self.times.len();
+        let (first, last) = (*self.times.first()?, *self.times.last()?);
+        let iv = self.interval_ms as f64;
+        if time <= first {
+            return Some((time - first) as f64 / iv);
+        }
+        if time >= last {
+            return Some((n - 1) as f64 + (time - last) as f64 / iv);
+        }
+        let k = self.times.partition_point(|t| *t <= time) - 1;
+        let (a, b) = (self.times[k], self.times[k + 1]);
+        Some(k as f64 + (time - a) as f64 / (b - a).max(1) as f64)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

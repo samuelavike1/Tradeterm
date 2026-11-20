@@ -17,6 +17,7 @@
 pub mod bars;
 mod derived;
 mod draw;
+pub mod drawings;
 pub mod indicators;
 mod kind;
 pub mod lod;
@@ -28,6 +29,9 @@ mod view;
 pub mod viewport;
 
 pub use draw::LegendButton;
+pub use drawings::{
+    Anchor, Drawing, DrawingPart, DrawingPress, DrawingTool, Drawings, LineStyle, Repaint,
+};
 pub use indicators::Indicator;
 pub use kind::{ChartType, ScaleMode};
 pub use style::{ChartColors, ChartStyle, ScaleButtons};

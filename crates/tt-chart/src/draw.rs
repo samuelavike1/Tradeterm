@@ -58,6 +58,7 @@ pub(crate) struct Scene<'a> {
     /// Exact close time of the last bar, for the countdown.
     pub bar_close_ms: Option<i64>,
     pub title: &'a str,
+    pub drawings: &'a crate::drawings::Drawings,
 }
 
 /// An indicator pane: the indicator (index into `Scene::indicators`) and
@@ -185,6 +186,7 @@ pub(crate) fn draw_base(c: &mut dyn Canvas, s: &Scene<'_>) {
             }
         }
         last_price_line(c, s);
+        crate::drawings::draw_base(c, s);
     }
     for pane in &s.panes {
         c.set_clip(pane.rect());
@@ -255,6 +257,9 @@ pub(crate) fn draw_base(c: &mut dyn Canvas, s: &Scene<'_>) {
     for tag in &tags {
         draw_tag(c, s, tag);
     }
+    for tag in crate::drawings::axis_tags(s) {
+        draw_tag(c, s, &tag);
+    }
 }
 
 /// The pointer layer, drawn over [`draw_base`]: crosshair lines and their
@@ -268,6 +273,8 @@ pub(crate) fn draw_overlay(c: &mut dyn Canvas, s: &Scene<'_>) -> Vec<LegendHit> 
     }
     // The crosshair snaps to any slot (also past the last bar); the readout
     // shows the bar under it, or the last bar over empty space.
+    crate::drawings::draw_overlay(c, s);
+    c.set_clip(s.full);
     let hovered_slot = s.crosshair.map(|p| s.vp.slot_at(p.x));
     let hovered = s.crosshair.and_then(|p| s.vp.bar_at(p.x));
     if let Some(p) = s.crosshair {
@@ -283,7 +290,7 @@ pub(crate) fn draw_overlay(c: &mut dyn Canvas, s: &Scene<'_>) -> Vec<LegendHit> 
 }
 
 impl Scene<'_> {
-    fn vp_rect(&self) -> Rect {
+    pub(crate) fn vp_rect(&self) -> Rect {
         vp_rect(&self.vp)
     }
 
@@ -1147,7 +1154,7 @@ fn spread_tags(tags: &mut [Tag], top: f32, bottom: f32) {
 
 /// A label box on an axis. Price-axis tags span the whole axis width.
 #[derive(Clone)]
-struct Tag {
+pub(crate) struct Tag {
     rect: Rect,
     lines: Vec<String>,
     bg: Color32,
@@ -1155,7 +1162,7 @@ struct Tag {
     on_price_axis: bool,
 }
 
-fn draw_tag(c: &mut dyn Canvas, s: &Scene<'_>, tag: &Tag) {
+pub(crate) fn draw_tag(c: &mut dyn Canvas, s: &Scene<'_>, tag: &Tag) {
     c.fill_rounded_rect(tag.rect, 2.0, tag.bg);
     let line_h = s.style.font_size + 3.0;
     let top = tag.rect.center().y - line_h * tag.lines.len() as f32 / 2.0;
@@ -1172,7 +1179,7 @@ fn draw_tag(c: &mut dyn Canvas, s: &Scene<'_>, tag: &Tag) {
 }
 
 /// A tag spanning the price axis, centered on `y`.
-fn price_axis_tag(s: &Scene<'_>, y: f32, lines: Vec<String>, bg: Color32) -> Tag {
+pub(crate) fn price_axis_tag(s: &Scene<'_>, y: f32, lines: Vec<String>, bg: Color32) -> Tag {
     let line_h = s.style.font_size + 3.0;
     let h = line_h * lines.len() as f32 + 6.0;
     let rect = Rect::from_min_max(
@@ -1409,6 +1416,9 @@ fn readout(c: &mut dyn Canvas, s: &Scene<'_>, bar: Option<usize>) {
 }
 
 #[cfg(test)]
+static NO_DRAWINGS: crate::drawings::Drawings = crate::drawings::Drawings::empty();
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::viewport::{PlotRect, PriceScale};
@@ -1499,6 +1509,7 @@ mod tests {
             now_ms,
             bar_close_ms: Some(series.last().map_or(0, |c| c.open_time_ms + 300_000)),
             title: "",
+            drawings: &NO_DRAWINGS,
         }
     }
 

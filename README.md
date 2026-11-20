@@ -70,6 +70,18 @@ with a custom chart widget built to handle a million bars.
   right: **move up / down**, **delete**, **collapse** (to a strip with just the
   legend; also Ctrl + double-click) and **maximize** (the other panes collapse).
   Collapsed panes are saved with the tab.
+- **Drawing tools** (left toolbar, like TradingView's): cross cursor; **Lines**
+  flyout with trend line (Alt + T), ray, extended line, horizontal line (Alt + H),
+  horizontal ray (Alt + J), vertical line (Alt + V) and cross line (Alt + C);
+  **Fib retracement** (Alt + F) with TradingView's levels and colors;
+  **Rectangle** (Alt + Shift + R); **Measurers**: price range, date range, date and
+  price range (change, %, bars, duration). Click to place each point, or drag out a
+  two-point drawing in one gesture. Click a drawing to select it: drag its body or
+  handles, and a floating toolbar sets color, width, line style, lock and delete.
+  Delete / Backspace removes it, Escape cancels placing or releases the tool. Below:
+  **magnet** (snap to bar open / high / low / close), **keep drawing**, **lock all**,
+  **hide all** and **remove drawings**. Drawings are anchored in time and price,
+  saved per symbol and shown on every timeframe.
 - **Legend:** one row per indicator with its inputs and values at the crosshair.
   Price-pane rows sit under the OHLC readout and collapse to a "⌄ N" button; each
   pane's row is at its top left. Hovering a row shows **eye** (hide), **gear**

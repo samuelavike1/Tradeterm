@@ -71,7 +71,7 @@ pub type TabChart = Entity<Chart<TabSource>>;
 
 pub struct TradeTerm {
     shared: Shared,
-    tabs: Vec<TabChart>,
+    pub(crate) tabs: Vec<TabChart>,
     active: usize,
     next_tab_id: u64,
     theme_mode: ThemeMode,
@@ -91,6 +91,8 @@ pub struct TradeTerm {
     perf_stats: PerfStats,
     /// Quote chip of the symbol search, remembered between openings.
     pub(crate) search_quote: usize,
+    /// Drawing tool and toggles (left toolbar), shared by all charts.
+    pub(crate) draw: crate::drawing_toolbar::DrawMode,
     focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
     /// Owns the tokio thread; dropped after the tabs.
@@ -124,6 +126,7 @@ impl TradeTerm {
             handle: runtime.handle().clone(),
             source,
             chart_style: style.clone(),
+            drawings: Arc::new(std::sync::Mutex::new(settings.drawings.clone())),
         };
 
         // Background data → UI: drain all pending wake-ups, then apply events
@@ -200,6 +203,7 @@ impl TradeTerm {
             perf: false,
             perf_stats: PerfStats::default(),
             search_quote: 0,
+            draw: Default::default(),
             focus: cx.focus_handle(),
             _subscriptions: Vec::new(),
             _runtime: runtime,
@@ -248,13 +252,15 @@ impl TradeTerm {
                 ChartEvent::Changed => app.persist(cx),
                 ChartEvent::StyleChanged(style) => app.set_chart_style(style.clone(), true, cx),
                 ChartEvent::OpenSettings => app.open_chart_settings(window, cx),
+                ChartEvent::DrawingsChanged => app.drawings_changed(chart, cx),
             },
         );
         self._subscriptions.push(sub);
+        self.apply_draw_mode_to(&chart, cx);
         chart
     }
 
-    fn tab_chart(&self) -> Option<&TabChart> {
+    pub(crate) fn tab_chart(&self) -> Option<&TabChart> {
         self.tabs.get(self.active)
     }
 
@@ -322,11 +328,30 @@ impl TradeTerm {
         // Up/down colors live in the chart settings now.
         s.set_overrides(ThemeOverrides::default());
         s.chart_style = self.chart_style.clone();
+        if let Ok(store) = self.shared.drawings.lock() {
+            s.drawings = store
+                .iter()
+                .filter(|(k, v)| !v.is_empty() && k.as_str() != "SYNTH")
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+        }
         s
     }
 
+    /// Moves changed drawings of every tab into the shared store.
+    fn stash_drawings(&self, cx: &mut App) {
+        let shared = self.shared.clone();
+        for chart in &self.tabs {
+            chart.update(cx, |c, cx| {
+                c.state
+                    .update(cx, |s, _| s.source.tab.stash_drawings(&shared))
+            });
+        }
+    }
+
     /// Saves settings (debounced by the store).
-    fn persist(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn persist(&mut self, cx: &mut Context<Self>) {
+        self.stash_drawings(cx);
         let snapshot = self.settings_snapshot(cx);
         if let Some(wait) = self.store.tick(&snapshot, Instant::now()) {
             cx.spawn(async move |this, cx| {
@@ -339,7 +364,8 @@ impl TradeTerm {
         }
     }
 
-    pub fn flush_settings(&mut self, cx: &App) {
+    pub fn flush_settings(&mut self, cx: &mut App) {
+        self.stash_drawings(cx);
         let snapshot = self.settings_snapshot(cx);
         self.store.flush(&snapshot);
     }
@@ -372,7 +398,13 @@ impl TradeTerm {
 
     fn select_tab(&mut self, index: usize, cx: &mut Context<Self>) {
         if index < self.tabs.len() && index != self.active {
+            self.stash_drawings(cx);
             self.active = index;
+            // Another tab may have changed this symbol's drawings.
+            let shared = self.shared.clone();
+            self.tabs[index].update(cx, |c, cx| {
+                c.update_state(cx, |s| s.source.tab.load_drawings(&shared))
+            });
             self.persist(cx);
             cx.notify();
         }
@@ -1013,10 +1045,33 @@ impl Render for TradeTerm {
                 // chart opens the symbol search with it.
                 let k = &e.keystroke;
                 let m = &k.modifiers;
-                if m.control || m.alt || m.platform || window.has_active_dialog(cx) {
+                if window.has_active_dialog(cx) || !this.focus.is_focused(window) {
                     return;
                 }
-                if !this.focus.is_focused(window) {
+                // Drawing keys: Escape, Delete / Backspace, Alt shortcuts.
+                if let Some(chart) = this.tab_chart().cloned() {
+                    let handled = match k.key.as_str() {
+                        "escape" if !m.modified() => chart.update(cx, |c, cx| c.cancel_drawing(cx)),
+                        "delete" | "backspace" if !m.modified() => {
+                            chart.update(cx, |c, cx| c.delete_selected_drawing(cx))
+                        }
+                        key if m.alt && !m.control && !m.platform => {
+                            match crate::drawing_toolbar::shortcut_tool(key, m.shift) {
+                                Some(tool) => {
+                                    this.pick_tool(Some(tool), cx);
+                                    true
+                                }
+                                None => false,
+                            }
+                        }
+                        _ => false,
+                    };
+                    if handled {
+                        cx.stop_propagation();
+                        return;
+                    }
+                }
+                if m.control || m.alt || m.platform {
                     return;
                 }
                 let text = k.key_char.clone().unwrap_or_else(|| k.key.clone());
@@ -1051,12 +1106,25 @@ impl Render for TradeTerm {
             .child(self.title_bar(window, cx))
             .child(self.toolbar(cx))
             .child(
-                div()
-                    .relative()
+                h_flex()
                     .flex_1()
                     .min_h_0()
-                    .children(chart)
-                    .children(self.perf_overlay(cx)),
+                    .child(self.drawing_toolbar(cx))
+                    .child(
+                        div()
+                            .relative()
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            // Clicking the chart gives the keyboard back to the
+                            // app (Escape / Delete for drawings).
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, window, cx| this.focus.focus(window, cx)),
+                            )
+                            .children(chart)
+                            .children(self.perf_overlay(cx)),
+                    ),
             )
             .child(self.status_bar(cx))
     }

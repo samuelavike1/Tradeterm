@@ -1,10 +1,12 @@
 use crate::bars::{collect_bars, price_extent};
 use crate::derived::Derived;
 use crate::draw::{self, LegendButton, LegendHit, Pane, Scene};
+use crate::drawings::{DrawingPress, Drawings, Mapper, Repaint};
 use crate::indicators::Indicator;
 use crate::lod::Lod;
 use crate::render::Canvas;
 use crate::scale::{precision_from_tick_size, price_decimals};
+use crate::time_axis::SlotTimes;
 use crate::viewport::{
     PlotRect, PriceScale, Viewport, fit_price_range_margins, pan_price_range, visible_range_for,
     zoom_price_range,
@@ -172,6 +174,8 @@ pub struct ChartView {
     pub indicators: Vec<Indicator>,
     /// Price-pane legend collapsed to a "⌄ N" button.
     pub legend_collapsed: bool,
+    /// Drawings (trend lines, Fib…) and the drawing tool state.
+    pub drawings: Drawings,
     /// Price pane collapsed to a strip.
     pub main_collapsed: bool,
     /// Pane filling the chart, the others collapsed (0 = price pane,
@@ -217,6 +221,7 @@ impl ChartView {
             invert_scale: false,
             indicators: Vec::new(),
             legend_collapsed: false,
+            drawings: Drawings::default(),
             main_collapsed: false,
             maximized: None,
             main_weight: MAIN_PANE_WEIGHT,
@@ -422,6 +427,64 @@ impl ChartView {
         }
     }
 
+    /// Runs `f` with the drawings and the screen ↔ (time, price) mapping of
+    /// the last frame (`None` before the first frame).
+    fn with_mapper<R>(
+        &mut self,
+        data: ChartData<'_>,
+        f: impl FnOnce(&mut Drawings, &Mapper<'_>, &CandleSeries) -> R,
+    ) -> Option<R> {
+        let (vp, interval) = self.frame.as_ref().map(|fr| (fr.vp, fr.bar_interval_ms))?;
+        let mut derived = std::mem::take(&mut self.derived);
+        let display: &CandleSeries = derived
+            .sync(self.chart_type, data.series)
+            .unwrap_or(data.series);
+        let m = Mapper {
+            vp,
+            slots: SlotTimes::new(display.open_times(), interval),
+        };
+        let r = f(&mut self.drawings, &m, display);
+        self.derived = derived;
+        Some(r)
+    }
+
+    /// Whether `p` is where drawings live (the open price pane).
+    fn in_drawing_area(&self, p: Pos2) -> bool {
+        !self.is_pane_collapsed(0)
+            && self
+                .last_layout
+                .panes
+                .first()
+                .is_some_and(|r| r.contains(p))
+    }
+
+    /// A press on the plot: places a point of the active drawing tool, or
+    /// selects / starts dragging the drawing under the pointer.
+    pub fn drawing_press(&mut self, p: Pos2, data: ChartData<'_>) -> DrawingPress {
+        if !self.in_drawing_area(p) {
+            return DrawingPress::Ignored;
+        }
+        self.with_mapper(data, |d, m, s| d.press(p, m, s))
+            .unwrap_or(DrawingPress::Ignored)
+    }
+
+    /// Pointer motion for drawings (placing, dragging, hover).
+    pub fn drawing_motion(&mut self, p: Pos2, data: ChartData<'_>) -> Repaint {
+        if !self.drawings.busy() && !self.in_drawing_area(p) {
+            return match self.drawings.hovered.take() {
+                Some(_) => Repaint::Overlay,
+                None => Repaint::None,
+            };
+        }
+        self.with_mapper(data, |d, m, s| d.motion(p, m, s))
+            .unwrap_or(Repaint::None)
+    }
+
+    /// Pointer released; returns whether drawings changed.
+    pub fn drawing_release(&mut self, p: Pos2) -> bool {
+        self.drawings.release(p)
+    }
+
     /// Clicks a legend button; returns the indicator whose settings should
     /// open (the gear).
     pub fn press_legend(&mut self, id: u64, button: LegendButton) -> Option<u64> {
@@ -568,6 +631,7 @@ impl ChartView {
                 now_ms: data.now_ms,
                 bar_close_ms: data.bar_close_ms,
                 title: data.title,
+                drawings: &self.drawings,
             };
             f(&scene)
         });
@@ -746,6 +810,15 @@ impl ChartView {
                 .bar_interval_ms
                 .unwrap_or_else(|| bar_interval_ms(series)),
         };
+        let slots = SlotTimes::new(display.open_times(), frame.bar_interval_ms);
+        self.drawings.layout(
+            &Mapper {
+                vp: frame.vp,
+                slots,
+            },
+            price_rect,
+            plot,
+        );
         self.derived = derived;
         self.frame = Some(frame);
         self.with_scene(data, theme, RenderInput::default(), |s| {

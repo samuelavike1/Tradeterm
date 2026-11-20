@@ -144,6 +144,8 @@ pub struct AppSettings {
     pub favorite_indicators: Vec<StudyKind>,
     /// Chart settings (TradingView's Settings dialog), shared by all charts.
     pub chart_style: tt_chart::ChartStyle,
+    /// Drawings per symbol (shown on every timeframe of that symbol).
+    pub drawings: std::collections::BTreeMap<String, Vec<tt_chart::Drawing>>,
 }
 
 impl Default for AppSettings {
@@ -161,6 +163,7 @@ impl Default for AppSettings {
             favorite_chart_types: Vec::new(),
             favorite_indicators: Vec::new(),
             chart_style: tt_chart::ChartStyle::default(),
+            drawings: Default::default(),
         }
     }
 }
