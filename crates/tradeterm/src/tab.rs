@@ -3,7 +3,7 @@
 //! Every tab keeps its own live stream, so background tabs stay current and
 //! the tab strip can show their change %.
 
-use crate::settings::TabSettings;
+use crate::settings::{IndicatorConfig, TabSettings};
 use crate::synthetic;
 use crossbeam_channel::Receiver;
 use std::sync::Arc;
@@ -73,9 +73,11 @@ impl ChartTab {
         }
         let mut chart = ChartView::default();
         chart.style.bold_family = shared.bold_family.clone();
+        chart.style.icon_family = Some(crate::icons::family());
         chart.chart_type = s.chart_type;
         chart.scale_mode = s.scale_mode;
-        chart.show_volume = s.show_volume;
+        chart.indicators = s.indicators.iter().map(|i| i.to_indicator()).collect();
+        chart.legend_collapsed = s.legend_collapsed;
         let (_, rx) = crossbeam_channel::unbounded();
         let mut tab = Self {
             id,
@@ -101,7 +103,14 @@ impl ChartTab {
             timeframe: self.timeframe,
             chart_type: self.chart.chart_type,
             scale_mode: self.chart.scale_mode,
-            show_volume: self.chart.show_volume,
+            indicators: self
+                .chart
+                .indicators
+                .iter()
+                .map(IndicatorConfig::from_indicator)
+                .collect(),
+            legend_collapsed: self.chart.legend_collapsed,
+            show_volume: None,
         }
     }
 

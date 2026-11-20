@@ -534,7 +534,13 @@ fn chip(ui: &mut egui::Ui, label: &str, selected: bool, theme: &Theme) -> egui::
 }
 
 /// `text` with every case-insensitive occurrence of `needle` in the accent blue.
-fn highlighted(text: &str, needle: &str, size: f32, color: Color32, theme: &Theme) -> LayoutJob {
+pub(crate) fn highlighted(
+    text: &str,
+    needle: &str,
+    size: f32,
+    color: Color32,
+    theme: &Theme,
+) -> LayoutJob {
     let mut job = LayoutJob::default();
     let font = FontId::proportional(size);
     let plain = TextFormat::simple(font.clone(), color);

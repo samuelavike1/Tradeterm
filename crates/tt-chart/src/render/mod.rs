@@ -71,6 +71,13 @@ pub trait Canvas {
     /// Size of `text` at `size` without drawing it.
     fn text_size_styled(&mut self, text: &str, size: f32, bold: bool) -> Vec2;
 
+    /// Draws an icon glyph (from the icon font, if the backend has one)
+    /// centered on `center`; returns its bounding rect.
+    fn icon(&mut self, center: Pos2, glyph: char, size: f32, color: Color32) -> Rect {
+        let _ = (glyph, color);
+        Rect::from_center_size(center, Vec2::splat(size))
+    }
+
     /// Regular-weight text; see [`Canvas::text_styled`].
     fn text(&mut self, pos: Pos2, anchor: Align2, text: &str, size: f32, color: Color32) -> Rect {
         self.text_styled(pos, anchor, text, size, color, false)

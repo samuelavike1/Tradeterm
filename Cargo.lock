@@ -4148,6 +4148,7 @@ name = "tt-chart"
 version = "0.1.0"
 dependencies = [
  "egui",
+ "lucide-icons",
  "serde",
  "tt-core",
  "tt-theme",
@@ -4159,6 +4160,7 @@ version = "0.1.0"
 dependencies = [
  "crossbeam-channel",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

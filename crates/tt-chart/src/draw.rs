@@ -1,30 +1,41 @@
 //! Chart scene drawing. Uses only the [`Canvas`] trait, never egui directly.
 
 use crate::bars::{DrawBar, max_volume};
+use crate::indicators::{Indicator, format_value, histogram_down};
 use crate::render::Canvas;
 use crate::scale::{
     self, format_countdown, format_full_time, format_percent, format_price, format_signed_price,
-    format_volume,
 };
 use crate::time_axis;
 use crate::viewport::Viewport;
 use crate::{ChartStyle, ChartType, ScaleMode};
 use egui::{Align2, Color32, Pos2, Rect, pos2, vec2};
-use tt_core::{Candle, CandleSeries};
+use lucide_icons::Icon;
+use std::ops::Range;
+use tt_core::{Candle, CandleSeries, Placement, Plot, Study};
 use tt_theme::{Theme, with_alpha};
 
 /// Everything needed to draw one frame.
 pub(crate) struct Scene<'a> {
-    /// Price viewport; `vp.plot` is the price area (above the volume pane).
+    /// Price viewport; `vp.plot` is the main (price) pane.
     pub vp: Viewport,
     pub theme: &'a Theme,
     pub style: &'a ChartStyle,
     pub chart_type: ChartType,
     /// Whole widget.
     pub full: Rect,
-    /// Plot area including the volume pane.
+    /// Plot area of all panes (left of the price axis, above the time axis).
     pub plot: Rect,
+    /// Bottom of the price pane used by Volume overlays.
     pub volume_rect: Option<Rect>,
+    pub indicators: &'a [Indicator],
+    /// Indicator panes below the price pane.
+    pub panes: Vec<Pane>,
+    /// Indices of the visible bars (`display` indices).
+    pub range: Range<usize>,
+    pub legend_collapsed: bool,
+    /// Legend row under the pointer (indicator id; 0 = collapse button).
+    pub legend_hover: Option<u64>,
     pub price_axis: Rect,
     pub time_axis: Rect,
     /// Series being displayed (raw or Heikin Ashi).
@@ -45,7 +56,47 @@ pub(crate) struct Scene<'a> {
     pub title: &'a str,
 }
 
-pub(crate) fn draw(c: &mut dyn Canvas, s: &Scene<'_>) {
+/// An indicator pane: the indicator (index into `Scene::indicators`) and
+/// its viewport (same x mapping as the price pane, own value range).
+pub(crate) struct Pane {
+    pub index: usize,
+    pub vp: Viewport,
+}
+
+impl Pane {
+    pub fn rect(&self) -> Rect {
+        vp_rect(&self.vp)
+    }
+}
+
+fn vp_rect(vp: &Viewport) -> Rect {
+    Rect::from_min_max(
+        pos2(vp.plot.left, vp.plot.top),
+        pos2(vp.plot.right, vp.plot.bottom),
+    )
+}
+
+/// Clickable parts of the legend, laid out by [`draw`] and hit-tested by the
+/// view on the next frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LegendButton {
+    ToggleVisible,
+    Settings,
+    Remove,
+    /// Collapse / expand the price pane's legend.
+    Collapse,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct LegendHit {
+    /// Indicator id (0 for the collapse button).
+    pub id: u64,
+    pub row: Rect,
+    pub buttons: Vec<(LegendButton, Rect)>,
+}
+
+/// Draws the chart; returns the legend's clickable areas.
+pub(crate) fn draw(c: &mut dyn Canvas, s: &Scene<'_>) -> Vec<LegendHit> {
     let t = s.theme;
     c.set_clip(s.full);
     c.fill_rect(s.full, t.bg);
@@ -59,19 +110,29 @@ pub(crate) fn draw(c: &mut dyn Canvas, s: &Scene<'_>) {
             t.text_muted,
         );
         readout(c, s, None);
-        return;
+        return Vec::new();
     }
 
     let price_ticks = price_ticks(s);
     let time_ticks = time_ticks(c, s);
 
+    let pane_ticks: Vec<Vec<(f32, String)>> = s.panes.iter().map(|p| pane_ticks(s, p)).collect();
+
     // Grid: one line per price label and per time label, like TradingView.
-    c.set_clip(s.plot);
     let ppp = c.pixels_per_point();
+    c.set_clip(s.vp_rect());
     for (y, _) in &price_ticks {
         let y = crisp(*y, ppp);
         grid_line(c, s, pos2(s.plot.left(), y), pos2(s.plot.right(), y));
     }
+    for (pane, ticks) in s.panes.iter().zip(&pane_ticks) {
+        c.set_clip(pane.rect());
+        for (y, _) in ticks {
+            let y = crisp(*y, ppp);
+            grid_line(c, s, pos2(s.plot.left(), y), pos2(s.plot.right(), y));
+        }
+    }
+    c.set_clip(s.plot);
     for tick in &time_ticks {
         grid_line(
             c,
@@ -83,12 +144,39 @@ pub(crate) fn draw(c: &mut dyn Canvas, s: &Scene<'_>) {
 
     if let Some(vr) = s.volume_rect {
         c.set_clip(vr);
-        volume(c, s, vr);
+        for ind in s.indicators.iter().filter(|i| i.visible) {
+            if ind.placement() == Placement::VolumeOverlay {
+                volume(c, s, vr, ind);
+            }
+        }
     }
     c.set_clip(s.vp_rect());
     series(c, s);
-    c.set_clip(s.plot);
+    for ind in s.indicators.iter().filter(|i| i.visible) {
+        if ind.placement() == Placement::Overlay {
+            study_plots(c, s, &s.vp, ind);
+        }
+    }
     last_price_line(c, s);
+    for pane in &s.panes {
+        c.set_clip(pane.rect());
+        let ind = &s.indicators[pane.index];
+        if ind.visible {
+            pane_guides(c, s, pane, ind);
+            study_plots(c, s, &pane.vp, ind);
+        }
+    }
+    // Pane dividers across plot and price axis.
+    c.set_clip(s.full);
+    for pane in &s.panes {
+        let y = crisp(pane.rect().top(), ppp) - 0.5 / ppp;
+        c.line(
+            pos2(s.full.left(), y),
+            pos2(s.full.right(), y),
+            1.0 / ppp,
+            t.border,
+        );
+    }
 
     // Axis tags are computed before the tick labels so labels underneath can
     // be hidden; the crosshair tag is drawn last, on top.
@@ -97,9 +185,26 @@ pub(crate) fn draw(c: &mut dyn Canvas, s: &Scene<'_>) {
     // shows the bar under it, or the last bar over empty space.
     let hovered_slot = s.crosshair.map(|p| s.vp.slot_at(p.x));
     let hovered = s.crosshair.and_then(|p| s.vp.bar_at(p.x));
-    let mut tags: Vec<Tag> = Vec::new();
+    // Axis tags per pane (0 = price pane), spread so they don't overlap.
+    let mut grouped = study_tags(s);
     if let Some(tag) = last_price_tag(c, s) {
-        tags.push(tag);
+        grouped.push((0, tag));
+    }
+    let mut tags: Vec<Tag> = Vec::new();
+    for pane in 0..=s.panes.len() {
+        let (top, bottom) = if pane == 0 {
+            (s.plot.top(), s.vp.plot.bottom)
+        } else {
+            let r = s.panes[pane - 1].rect();
+            (r.top(), r.bottom())
+        };
+        let mut group: Vec<Tag> = grouped
+            .iter()
+            .filter(|(p, _)| *p == pane)
+            .map(|(_, t)| t.clone())
+            .collect();
+        spread_tags(&mut group, top, bottom);
+        tags.extend(group);
     }
     let mut time_tag = None;
     if let Some(p) = s.crosshair {
@@ -108,20 +213,23 @@ pub(crate) fn draw(c: &mut dyn Canvas, s: &Scene<'_>) {
         time_tag = ttag;
     }
 
-    price_labels(c, s, &price_ticks, &tags);
+    price_labels(c, s, &price_ticks, &tags, (s.plot.top(), s.vp.plot.bottom));
+    for (pane, ticks) in s.panes.iter().zip(&pane_ticks) {
+        let r = pane.rect();
+        price_labels(c, s, ticks, &tags, (r.top(), r.bottom()));
+    }
     time_labels(c, s, &time_ticks, time_tag.as_ref());
     for tag in tags.iter().chain(time_tag.iter()) {
         draw_tag(c, s, tag);
     }
-    readout(c, s, hovered.or(s.display.len().checked_sub(1)));
+    let bar = hovered.or(s.display.len().checked_sub(1));
+    readout(c, s, bar);
+    legends(c, s, bar)
 }
 
 impl Scene<'_> {
     fn vp_rect(&self) -> Rect {
-        Rect::from_min_max(
-            pos2(self.vp.plot.left, self.vp.plot.top),
-            pos2(self.vp.plot.right, self.vp.plot.bottom),
-        )
+        vp_rect(&self.vp)
     }
 
     fn colors(&self, up: bool) -> (Color32, Color32) {
@@ -463,22 +571,432 @@ fn decimated(c: &mut dyn Canvas, s: &Scene<'_>, g: &BarGeom) {
     }
 }
 
-fn volume(c: &mut dyn Canvas, s: &Scene<'_>, rect: Rect) {
-    let max = max_volume(s.bars);
-    if max <= 0.0 {
-        return;
+/// Volume scale of the overlay: the busiest visible bar reaches the top.
+fn volume_vp(s: &Scene<'_>, rect: Rect) -> Viewport {
+    let max = max_volume(s.bars).max(f64::MIN_POSITIVE);
+    Viewport {
+        price_min: 0.0,
+        price_max: max,
+        plot: crate::viewport::PlotRect {
+            left: rect.left(),
+            top: rect.top(),
+            right: rect.right(),
+            bottom: rect.bottom(),
+        },
+        scale: crate::viewport::PriceScale::linear(),
+        ..s.vp
     }
+}
+
+/// Whether a bar's volume counts as rising.
+fn volume_rising(ind: &Indicator, close: f64, open: f64, prev_close: f64) -> bool {
+    match ind.study {
+        Study::Volume {
+            color_by_prev_close: true,
+            ..
+        } => close >= prev_close,
+        _ => close >= open,
+    }
+}
+
+/// [`volume_rising`] for bar `i` of the displayed series.
+fn volume_rising_at(s: &Scene<'_>, ind: &Indicator, i: usize) -> bool {
+    let Some(b) = s.display.get(i) else {
+        return true;
+    };
+    let prev = i.checked_sub(1).map_or(b.open, |j| s.display.closes()[j]);
+    volume_rising(ind, b.close, b.open, prev)
+}
+
+/// Volume indicator: columns in the bottom of the price pane (behind the
+/// bars, like TradingView), plus the optional MA line.
+fn volume(c: &mut dyn Canvas, s: &Scene<'_>, rect: Rect, ind: &Indicator) {
+    let vvp = volume_vp(s, rect);
     let g = BarGeom::new(s.vp.bar_spacing, c.pixels_per_point());
     let width = if s.decimated { 1.0 } else { g.body_px };
-    let h = rect.height() * 0.95;
     for b in s.bars {
-        let color = if b.close >= b.open {
+        let color = if volume_rising(ind, b.close, b.open, b.prev_close) {
             s.theme.volume_up
         } else {
             s.theme.volume_down
         };
-        let top = rect.bottom() - (b.volume / max) as f32 * h;
+        let top = vvp.y_of(b.volume);
         c.fill_rect(g.column(g.center_px(b.x), width, top, rect.bottom()), color);
+    }
+    if ind.output_enabled(1)
+        && let Some(ma) = ind.outputs().get(1)
+    {
+        study_line(c, s, &vvp, ma, 1.0, ind.color(1));
+    }
+}
+
+/// Indices to sample when drawing a study: every bar when zoomed in, about
+/// one per pixel column when zoomed out; one extra bar on each side so lines
+/// reach the plot edges.
+fn sample_indices(s: &Scene<'_>, ppp: f32) -> impl Iterator<Item = usize> + use<> {
+    let stride = (1.0 / (s.vp.bar_spacing * ppp)).ceil().max(1.0) as usize;
+    let start = s.range.start.saturating_sub(1) / stride * stride;
+    let end = (s.range.end + 1).min(s.display.len()).max(start);
+    let last = end
+        .checked_sub(1)
+        .filter(|l| *l >= start && !(l - start).is_multiple_of(stride));
+    (start..end).step_by(stride).chain(last)
+}
+
+/// A study output as a line, broken where it is undefined.
+fn study_line(
+    c: &mut dyn Canvas,
+    s: &Scene<'_>,
+    vp: &Viewport,
+    values: &[f64],
+    width: f32,
+    color: Color32,
+) {
+    let mut pts: Vec<Pos2> = Vec::new();
+    for i in sample_indices(s, c.pixels_per_point()) {
+        match values.get(i) {
+            Some(v) if v.is_finite() => pts.push(pos2(vp.x_of(i as f32), vp.y_of(*v))),
+            _ => {
+                if pts.len() > 1 {
+                    c.polyline(&pts, width, color);
+                }
+                pts.clear();
+            }
+        }
+    }
+    if pts.len() > 1 {
+        c.polyline(&pts, width, color);
+    }
+}
+
+/// Draws every enabled output of a study (lines, histograms, band fills).
+fn study_plots(c: &mut dyn Canvas, s: &Scene<'_>, vp: &Viewport, ind: &Indicator) {
+    let outs = ind.outputs();
+    if let Study::BollingerBands { .. } = ind.study
+        && outs.len() == 3
+    {
+        // Light fill between the bands.
+        let (mut top, mut bot) = (Vec::new(), Vec::new());
+        for i in sample_indices(s, c.pixels_per_point()) {
+            if let (Some(&u), Some(&l)) = (outs[1].get(i), outs[2].get(i))
+                && u.is_finite()
+                && l.is_finite()
+            {
+                let x = vp.x_of(i as f32);
+                top.push(pos2(x, vp.y_of(u)));
+                bot.push(pos2(x, vp.y_of(l)));
+            }
+        }
+        c.fill_between(&top, &bot, with_alpha(ind.color(0), 0.08));
+    }
+    for (k, (_, plot)) in ind.study.outputs().iter().enumerate() {
+        if !ind.output_enabled(k) {
+            continue;
+        }
+        let Some(values) = outs.get(k) else { continue };
+        match plot {
+            Plot::Line => study_line(c, s, vp, values, 1.0, ind.color(k)),
+            Plot::Histogram => histogram(c, s, vp, values, ind.color(k)),
+            Plot::VolumeColumns => {}
+        }
+    }
+}
+
+/// Columns from zero with TradingView's MACD coloring: strong while growing
+/// away from zero, faded while shrinking.
+fn histogram(c: &mut dyn Canvas, s: &Scene<'_>, vp: &Viewport, values: &[f64], up: Color32) {
+    let ppp = c.pixels_per_point();
+    let g = BarGeom::new(s.vp.bar_spacing, ppp);
+    let width = if s.decimated { 1.0 } else { g.body_px };
+    let y0 = vp.y_of(0.0);
+    for i in sample_indices(s, ppp) {
+        let Some(&v) = values.get(i) else { continue };
+        if !v.is_finite() {
+            continue;
+        }
+        let prev = i
+            .checked_sub(1)
+            .and_then(|j| values.get(j))
+            .copied()
+            .filter(|p| p.is_finite())
+            .unwrap_or(v);
+        let base = if v >= 0.0 { up } else { histogram_down() };
+        let color = if v.abs() >= prev.abs() {
+            base
+        } else {
+            with_alpha(base, 0.45)
+        };
+        let (a, b) = g.span(y0, vp.y_of(v));
+        c.fill_rect(g.column(g.center_px(vp.x_of(i as f32)), width, a, b), color);
+    }
+}
+
+/// Guide levels of bounded oscillators (RSI 30/50/70…) with a band fill.
+fn pane_guides(c: &mut dyn Canvas, s: &Scene<'_>, pane: &Pane, ind: &Indicator) {
+    let Some((_, _, levels)) = ind.study.bounds() else {
+        return;
+    };
+    let r = pane.rect();
+    let ppp = c.pixels_per_point();
+    if let (Some(lo), Some(hi)) = (levels.first(), levels.last()) {
+        let band = Rect::from_x_y_ranges(r.x_range(), pane.vp.y_of(*hi)..=pane.vp.y_of(*lo));
+        c.fill_rect(band, with_alpha(ind.color(0), 0.08));
+    }
+    for (i, l) in levels.iter().enumerate() {
+        let y = crisp(pane.vp.y_of(*l), ppp);
+        let middle = i > 0 && i + 1 < levels.len();
+        let color = with_alpha(s.theme.text_muted, if middle { 0.35 } else { 0.6 });
+        c.dashed_line(
+            pos2(r.left(), y),
+            pos2(r.right(), y),
+            1.0 / ppp,
+            color,
+            if middle { 1.0 } else { 4.0 },
+            4.0,
+        );
+    }
+}
+
+/// Price-axis labels of an indicator pane.
+fn pane_ticks(s: &Scene<'_>, pane: &Pane) -> Vec<(f32, String)> {
+    let ind = &s.indicators[pane.index];
+    scale::price_ticks(&pane.vp, s.style.price_label_spacing, None)
+        .into_iter()
+        .map(|v| (pane.vp.y_of(v), format_value(&ind.study, v, s.precision)))
+        .collect()
+}
+
+/// Value at the last bar, if defined.
+fn last_value(values: &[f64]) -> Option<f64> {
+    values.last().copied().filter(|v| v.is_finite())
+}
+
+/// Value tags on the price axis for every visible indicator output
+/// (TradingView's "Labels on price scale").
+fn study_tags(s: &Scene<'_>) -> Vec<(usize, Tag)> {
+    let mut tags = Vec::new();
+    let mut push = |pane: usize, vp: &Viewport, ind: &Indicator, v: f64, bg: Color32| {
+        let y = vp.y_of(v);
+        if y >= vp.plot.top && y <= vp.plot.bottom {
+            tags.push((
+                pane,
+                price_axis_tag(s, y, vec![format_value(&ind.study, v, s.precision)], bg),
+            ));
+        }
+    };
+    let last = s.display.len().checked_sub(1);
+    for (idx, ind) in s.indicators.iter().enumerate() {
+        if !ind.visible {
+            continue;
+        }
+        let outs = ind.outputs();
+        let enabled = |k: usize| ind.output_enabled(k);
+        match ind.placement() {
+            Placement::Overlay => {
+                for (k, v) in outs.iter().enumerate() {
+                    if let Some(v) = last_value(v) {
+                        push(0, &s.vp, ind, v, ind.color(k));
+                    }
+                }
+            }
+            Placement::VolumeOverlay => {
+                let (Some(vr), Some(i)) = (s.volume_rect, last) else {
+                    continue;
+                };
+                let bg = if volume_rising_at(s, ind, i) {
+                    s.theme.up
+                } else {
+                    s.theme.down
+                };
+                if let Some(v) = outs.first().and_then(|o| last_value(o)) {
+                    push(0, &volume_vp(s, vr), ind, v, bg);
+                }
+            }
+            Placement::Pane => {
+                let Some((pane_no, pane)) =
+                    s.panes.iter().enumerate().find(|(_, p)| p.index == idx)
+                else {
+                    continue;
+                };
+                for (k, ((_, plot), v)) in ind.study.outputs().iter().zip(outs).enumerate() {
+                    if !enabled(k) {
+                        continue;
+                    }
+                    if let Some(v) = last_value(v) {
+                        let bg = match plot {
+                            Plot::Histogram if v < 0.0 => histogram_down(),
+                            _ => ind.color(k),
+                        };
+                        push(pane_no + 1, &pane.vp, ind, v, bg);
+                    }
+                }
+            }
+        }
+    }
+    tags
+}
+
+const LEGEND_ICON: f32 = 15.0;
+const LEGEND_BUTTON: f32 = 20.0;
+
+/// Legends: price-pane indicators under the OHLC readout (collapsible), and
+/// each pane's indicator at its top left. Values are for `bar`.
+fn legends(c: &mut dyn Canvas, s: &Scene<'_>, bar: Option<usize>) -> Vec<LegendHit> {
+    let mut hits = Vec::new();
+    let row_h = s.style.font_size + 10.0;
+    let mut pos = s.plot.left_top() + vec2(10.0, 8.0 + row_h);
+    let main: Vec<&Indicator> = s
+        .indicators
+        .iter()
+        .filter(|i| i.placement() != Placement::Pane)
+        .collect();
+    if !main.is_empty() {
+        if !s.legend_collapsed {
+            for ind in &main {
+                hits.push(legend_row(c, s, pos, ind, bar));
+                pos.y += row_h;
+            }
+        }
+        // Collapse / expand toggle; collapsed it shows the indicator count.
+        let count = if s.legend_collapsed {
+            main.len().to_string()
+        } else {
+            String::new()
+        };
+        let text_w = if count.is_empty() {
+            0.0
+        } else {
+            c.text_size(&count, s.style.font_size).x + 6.0
+        };
+        let rect = Rect::from_min_size(
+            pos - vec2(4.0, 2.0),
+            vec2(LEGEND_BUTTON + text_w, LEGEND_BUTTON),
+        );
+        let hovered = s.legend_hover == Some(0);
+        let bg = if hovered {
+            s.theme.selection
+        } else {
+            with_alpha(s.theme.bg, 0.85)
+        };
+        c.fill_rounded_rect(rect, 4.0, bg);
+        c.stroke_rect(rect, 1.0, s.theme.border);
+        let icon = if s.legend_collapsed {
+            Icon::ChevronDown
+        } else {
+            Icon::ChevronUp
+        };
+        let ic = c.icon(
+            pos2(rect.left() + LEGEND_BUTTON / 2.0, rect.center().y),
+            char::from(icon),
+            LEGEND_ICON,
+            s.theme.text,
+        );
+        if !count.is_empty() {
+            c.text(
+                pos2(ic.right() + 2.0, rect.center().y),
+                Align2::LEFT_CENTER,
+                &count,
+                s.style.font_size,
+                s.theme.text,
+            );
+        }
+        hits.push(LegendHit {
+            id: 0,
+            row: rect,
+            buttons: vec![(LegendButton::Collapse, rect)],
+        });
+    }
+    for pane in &s.panes {
+        let pos = pane.rect().left_top() + vec2(10.0, 6.0);
+        hits.push(legend_row(c, s, pos, &s.indicators[pane.index], bar));
+    }
+    hits
+}
+
+/// One legend row: title, hover buttons (eye / settings / remove), values.
+fn legend_row(
+    c: &mut dyn Canvas,
+    s: &Scene<'_>,
+    pos: Pos2,
+    ind: &Indicator,
+    bar: Option<usize>,
+) -> LegendHit {
+    let t = s.theme;
+    let size = s.style.font_size;
+    let hovered = s.legend_hover == Some(ind.id);
+    let title = ind.study.legend_title();
+    let name = Rect::from_min_size(pos, c.text_size(&title, size));
+    let name_color = if ind.visible {
+        t.text
+    } else {
+        with_alpha(t.text_muted, 0.6)
+    };
+    if hovered {
+        let r = name.expand2(vec2(5.0, 3.0));
+        c.fill_rounded_rect(r, 3.0, with_alpha(t.bg, 0.85));
+        c.stroke_rect(r, 1.0, t.border);
+    }
+    c.text(pos, Align2::LEFT_TOP, &title, size, name_color);
+    let mut x = name.right() + 8.0;
+    let eye = if ind.visible { Icon::Eye } else { Icon::EyeOff };
+    let shown: &[(LegendButton, Icon)] = if hovered {
+        &[
+            (LegendButton::ToggleVisible, eye),
+            (LegendButton::Settings, Icon::Settings),
+            (LegendButton::Remove, Icon::Trash2),
+        ]
+    } else if !ind.visible {
+        &[(LegendButton::ToggleVisible, eye)]
+    } else {
+        &[]
+    };
+    let mut buttons = Vec::new();
+    for (button, icon) in shown {
+        let r = Rect::from_min_size(
+            pos2(x, name.center().y - LEGEND_BUTTON / 2.0),
+            vec2(LEGEND_BUTTON, LEGEND_BUTTON),
+        );
+        c.fill_rounded_rect(r, 3.0, with_alpha(t.bg, 0.85));
+        c.icon(r.center(), char::from(*icon), LEGEND_ICON, name_color);
+        buttons.push((*button, r));
+        x = r.right() + 2.0;
+    }
+    if !shown.is_empty() {
+        x += 6.0;
+    }
+    if ind.visible
+        && let Some(i) = bar
+    {
+        let outs = ind.outputs();
+        for (k, (_, plot)) in ind.study.outputs().iter().enumerate() {
+            if !ind.output_enabled(k) {
+                continue;
+            }
+            let Some(v) = outs.get(k).and_then(|o| o.get(i)).copied() else {
+                continue;
+            };
+            let color = match plot {
+                Plot::VolumeColumns if volume_rising_at(s, ind, i) => t.up,
+                Plot::VolumeColumns => t.down,
+                Plot::Histogram if v < 0.0 => histogram_down(),
+                _ => ind.color(k),
+            };
+            let r = c.text(
+                pos2(x, pos.y),
+                Align2::LEFT_TOP,
+                &format_value(&ind.study, v, s.precision),
+                size,
+                color,
+            );
+            x = r.right() + 8.0;
+        }
+    }
+    // Hover area covers where the buttons appear, so they don't flicker.
+    let right = x.max(name.right() + 3.0 * LEGEND_BUTTON + 16.0);
+    LegendHit {
+        id: ind.id,
+        row: Rect::from_min_max(pos - vec2(6.0, 3.0), pos2(right, name.bottom() + 3.0)),
+        buttons,
     }
 }
 
@@ -522,7 +1040,28 @@ fn time_ticks(c: &mut dyn Canvas, s: &Scene<'_>) -> Vec<time_axis::TimeTick> {
     )
 }
 
+/// Moves overlapping axis tags apart (keeping their order) within
+/// `top..bottom`, like TradingView stacks colliding price-scale labels.
+fn spread_tags(tags: &mut [Tag], top: f32, bottom: f32) {
+    tags.sort_by(|a, b| a.rect.center().y.total_cmp(&b.rect.center().y));
+    let mut min_top = top;
+    for t in tags.iter_mut() {
+        if t.rect.top() < min_top {
+            t.rect = t.rect.translate(vec2(0.0, min_top - t.rect.top()));
+        }
+        min_top = t.rect.bottom() + 1.0;
+    }
+    let mut max_bottom = bottom;
+    for t in tags.iter_mut().rev() {
+        if t.rect.bottom() > max_bottom {
+            t.rect = t.rect.translate(vec2(0.0, max_bottom - t.rect.bottom()));
+        }
+        max_bottom = t.rect.top() - 1.0;
+    }
+}
+
 /// A label box on an axis. Price-axis tags span the whole axis width.
+#[derive(Clone)]
 struct Tag {
     rect: Rect,
     lines: Vec<String>,
@@ -563,11 +1102,17 @@ fn price_axis_tag(s: &Scene<'_>, y: f32, lines: Vec<String>, bg: Color32) -> Tag
     }
 }
 
-fn price_labels(c: &mut dyn Canvas, s: &Scene<'_>, ticks: &[(f32, String)], tags: &[Tag]) {
+fn price_labels(
+    c: &mut dyn Canvas,
+    s: &Scene<'_>,
+    ticks: &[(f32, String)],
+    tags: &[Tag],
+    (top, bottom): (f32, f32),
+) {
     let x = s.price_axis.left() + 8.0;
     let half = s.style.font_size * 0.7;
     for (y, label) in ticks {
-        if *y < s.plot.top() + half || *y > s.vp.plot.bottom - half {
+        if *y < top + half || *y > bottom - half {
             continue;
         }
         // Hidden under the last-price / crosshair tags, as on TradingView.
@@ -688,14 +1233,14 @@ fn crosshair(c: &mut dyn Canvas, s: &Scene<'_>, p: Pos2, slot: Option<i64>) -> (
     );
     c.set_clip(s.full);
 
-    let label = match s.volume_rect {
-        // Inside the volume pane the axis shows volume, not price.
-        Some(vr) if vr.contains(p) => {
-            let max = max_volume(s.bars);
-            let v = (vr.bottom() - p.y) as f64 / (vr.height() * 0.95) as f64 * max;
-            format_volume(v.max(0.0))
-        }
-        _ => axis_value_label(s, s.vp.price_at(p.y)),
+    // Inside an indicator pane the axis shows the indicator's value.
+    let label = match s.panes.iter().find(|pane| pane.rect().contains(p)) {
+        Some(pane) => format_value(
+            &s.indicators[pane.index].study,
+            pane.vp.price_at(p.y),
+            s.precision,
+        ),
+        None => axis_value_label(s, s.vp.price_at(p.y)),
     };
     let price_tag = price_axis_tag(s, y, vec![label], s.theme.crosshair_label_bg);
 
@@ -755,8 +1300,6 @@ fn readout(c: &mut dyn Canvas, s: &Scene<'_>, bar: Option<usize>) {
         color,
         14.0,
     );
-    put(c, "Vol", t.text_muted, 3.0);
-    put(c, &format_volume(k.volume), t.text, 0.0);
 }
 
 #[cfg(test)]
@@ -831,6 +1374,11 @@ mod tests {
             full: Rect::from_min_max(pos2(0.0, 0.0), pos2(880.0, 528.0)),
             plot,
             volume_rect: None,
+            indicators: &[],
+            panes: Vec::new(),
+            range: 0..series.len(),
+            legend_collapsed: false,
+            legend_hover: None,
             price_axis: Rect::from_min_max(pos2(800.0, 0.0), pos2(880.0, 500.0)),
             time_axis: Rect::from_min_max(pos2(0.0, 500.0), pos2(800.0, 528.0)),
             display: series,
@@ -875,6 +1423,89 @@ mod tests {
         // No clock (synthetic/historical data) → price only.
         let scene = scene_with(&s, &theme, &style, None);
         assert_eq!(last_price_tag(&mut c, &scene).unwrap().lines.len(), 1);
+    }
+
+    #[test]
+    fn indicator_legends_tags_and_panes() {
+        let (s, theme, style) = (series(), Theme::dark(), ChartStyle::default());
+        let mut inds = vec![
+            Indicator::new(tt_core::StudyKind::Volume.default_study()),
+            Indicator::new(tt_core::Study::Sma {
+                length: 3,
+                source: tt_core::Source::Close,
+            }),
+            Indicator::new(tt_core::Study::Rsi {
+                length: 5,
+                source: tt_core::Source::Close,
+            }),
+        ];
+        for i in &mut inds {
+            i.sync(&s);
+        }
+        let mut scene = scene_with(&s, &theme, &style, None);
+        scene.indicators = &inds;
+        scene.volume_rect = Some(Rect::from_min_max(pos2(0.0, 300.0), pos2(800.0, 400.0)));
+        scene.vp.plot.bottom = 400.0;
+        scene.panes = vec![Pane {
+            index: 2,
+            vp: Viewport {
+                price_min: 0.0,
+                price_max: 100.0,
+                plot: PlotRect {
+                    left: 0.0,
+                    top: 400.0,
+                    right: 800.0,
+                    bottom: 500.0,
+                },
+                scale: PriceScale::linear(),
+                ..scene.vp
+            },
+        }];
+        scene.legend_hover = Some(inds[1].id);
+        let mut c = Recorder::default();
+        let hits = draw(&mut c, &scene);
+        for title in ["Vol", "MA 3 close", "RSI 5 close"] {
+            assert!(c.texts.iter().any(|t| t == title), "{title}: {:?}", c.texts);
+        }
+        // Flat closes: the MA sits on the close; RSI of no change is 100.
+        assert!(
+            c.texts.iter().any(|t| t == "1.00"),
+            "volume value {:?}",
+            c.texts
+        );
+        assert!(c.texts.iter().any(|t| t == "100.00"), "{:?}", c.texts);
+        // Hovered row has eye / settings / remove; plus the collapse button.
+        let ma = hits.iter().find(|h| h.id == inds[1].id).unwrap();
+        assert_eq!(ma.buttons.len(), 3);
+        assert!(hits.iter().any(|h| h.id == 0));
+
+        scene.legend_collapsed = true;
+        let mut c = Recorder::default();
+        draw(&mut c, &scene);
+        assert!(!c.texts.iter().any(|t| t == "MA 3 close"));
+        assert!(
+            c.texts.iter().any(|t| t == "2"),
+            "count of price-pane indicators"
+        );
+        assert!(
+            c.texts.iter().any(|t| t == "RSI 5 close"),
+            "pane legends stay"
+        );
+    }
+
+    #[test]
+    fn colliding_tags_are_spread_apart_within_bounds() {
+        let tag = |y: f32| Tag {
+            rect: Rect::from_center_size(pos2(840.0, y), vec2(78.0, 20.0)),
+            lines: vec![],
+            bg: Color32::RED,
+            on_price_axis: true,
+        };
+        let mut tags = vec![tag(105.0), tag(100.0), tag(492.0)];
+        spread_tags(&mut tags, 0.0, 500.0);
+        assert_eq!(tags[0].rect.center().y, 100.0, "order kept, first stays");
+        assert!(tags[1].rect.top() >= tags[0].rect.bottom());
+        assert!(tags[2].rect.bottom() <= 500.0, "kept inside the pane");
     }
 
     #[test]

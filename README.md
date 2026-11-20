@@ -41,10 +41,33 @@ with a custom chart widget built to handle a million bars.
   the last-price or crosshair tags are hidden.
 - **Grid:** dotted (1 px on, 3 px off) at every price and time label, drawn as one
   textured quad per line.
-- **Volume pane:** the bottom 20% of the chart, with its own scale and up/down
-  colors. Toggle it with **Vol**.
-- **Crosshair:** snaps to bar centers, shows labels on both axes (volume inside the
-  volume pane), and an OHLCV + change % readout at the top left.
+- **Indicators (TradingView-style):** the **Indicators** button (or **/**) opens
+  "Indicators, metrics, and strategies": search (keeps the last query; matches in
+  blue), a Favorites / Technicals sidebar, and an alphabetical list with stars.
+  Clicking a row adds it; the dialog stays open. Built in:
+  - Volume (+ optional MA)
+  - Price-pane overlays: Moving Average Simple/Exponential, Bollinger Bands, session
+    VWAP
+  - Own panes: RSI, MACD, Stochastic, ATR, OBV
+- **Volume is an indicator**, as on TradingView. It is drawn in the bottom quarter
+  of the price pane, behind the bars, with its own scale. New charts start with it;
+  remove it like any other indicator. Inputs: MA length, color by previous close,
+  Volume MA.
+- **Indicator panes** each have their own auto-fit scale, grid and labels.
+  Oscillators get guide levels (RSI 30/50/70, Stochastic 20/50/80). Drag a pane
+  divider to resize.
+- **Legend:** one row per indicator with its inputs and values at the crosshair.
+  Price-pane rows sit under the OHLC readout and collapse to a "⌄ N" button; each
+  pane's row is at its top left. Hovering a row shows **eye** (hide), **gear**
+  (settings) and **trash** (remove); double-click opens the settings. Every visible
+  output's last value is tagged on the price axis, and colliding tags stack.
+- **Indicator settings:** Inputs / Style tabs, applied live, with **Defaults ▾**
+  (reset), **Cancel** (restore) and **Ok**.
+- Indicators compute incrementally: a live tick recomputes only the forming bar
+  (RSI, MACD and Stochastic do one full O(n) pass).
+- **Crosshair:** snaps to bar centers, spans every pane, shows labels on both axes
+  (an indicator's value inside its pane), and an OHLC + change % readout at the top
+  left.
 - **Timeframes (TradingView-style):** any number of seconds, minutes, hours, days, weeks
   or months. Toolbar buttons are your favorites (plus the current interval). The chevron
   menu has collapsible Seconds/Minutes/Hours/Days sections: star an interval to add it
@@ -83,7 +106,8 @@ with a custom chart widget built to handle a million bars.
 - **Native fonts:** the UI and chart use the OS UI font (Segoe UI, SF/Helvetica, Noto/DejaVu
   Sans) instead of egui's thin built-in font, with egui's fonts as fallbacks.
 - **Settings persistence:** theme, colors, and every tab (symbol, timeframe, chart type,
-  scale mode, volume) plus the active tab are saved as JSON, 750 ms after the last
+  scale mode, indicators with their inputs, colors and pane sizes) plus the active
+  tab and favorite indicators are saved as JSON, 750 ms after the last
   change and again on exit.
 
 ### Hotkeys
@@ -96,6 +120,7 @@ with a custom chart widget built to handle a million bars.
 | F12 | Performance overlay |
 | Ctrl+Shift+D (Cmd+Shift+D on macOS) | Load 1,000,000 synthetic bars (stress test) |
 | Any letter/digit on the chart | Open symbol search with that text |
+| / | Indicators dialog |
 | ↑ / ↓, Enter, Esc | Navigate, choose or cancel symbol search results |
 
 | Mouse | Action |
@@ -119,7 +144,8 @@ crates/
   tt-core/     Domain types, no UI or network. Symbol, Timeframe, Candle,
                PriceTicks, SymbolInfo, CandleSeries (structure of arrays, with a
                structural version counter), MarketEvent, EventSink, Heikin Ashi,
-               resampling.
+               resampling, and indicator math (studies.rs: Study inputs,
+               outputs, incremental compute).
   tt-theme/    Semantic color tokens (Theme), Dark/Light palettes, ThemeMode, and
                applying the tokens to egui styles.
   tt-brokers/  MarketDataSource trait + Binance adapter (tokio, tokio-tungstenite
@@ -133,7 +159,9 @@ crates/
      lod.rs        Min/max pyramid used for decimation.
      draw.rs       Builds the picture from Canvas primitives only.
      render/       Canvas trait (the backend boundary) + EguiCanvas.
-     view.rs       ChartView: input, layout, caches, per-frame orchestration.
+     indicators.rs Indicator: a Study + colors/visibility, with cached outputs.
+     view.rs       ChartView: input, panes, legend clicks, caches, per-frame
+                   orchestration.
   tradeterm/   eframe app. chrome.rs: custom title bar, tabs, window buttons,
                resize edges. tab.rs: one chart session per tab. Also the toolbar,
                symbol search, status bar, settings, perf overlay and synthetic data.

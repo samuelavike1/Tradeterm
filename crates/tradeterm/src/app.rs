@@ -1,5 +1,6 @@
 use crate::chrome::{self, TITLE_BAR_HEIGHT, TabView};
 use crate::icons::Icon;
+use crate::indicators::{IndicatorSettings, IndicatorsDialog};
 use crate::perf::PerfStats;
 use crate::runtime::BackgroundRuntime;
 use crate::search::SymbolSearch;
@@ -15,7 +16,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use tracing::warn;
 use tt_brokers::{BinanceSource, MarketDataSource};
-use tt_chart::{ChartData, ScaleMode};
+use tt_chart::{ChartData, Indicator, ScaleMode};
 use tt_core::{ConnectionStatus, Symbol};
 use tt_theme::{Theme, ThemeMode, ThemeOverrides};
 
@@ -47,6 +48,10 @@ pub struct TradeTermApp {
     tf_menu: TimeframeMenu,
     /// Chart types pinned to the toolbar (persisted).
     chart_favorites: Vec<tt_chart::ChartType>,
+    indicators_dialog: IndicatorsDialog,
+    indicator_settings: IndicatorSettings,
+    /// Starred indicators (persisted).
+    favorite_indicators: Vec<tt_core::StudyKind>,
     /// Recently opened symbols, most recent first (persisted).
     recent: Vec<RecentSymbol>,
     /// Owns the tokio thread; dropped last (after the tabs).
@@ -104,6 +109,9 @@ impl TradeTermApp {
             perf: PerfStats::default(),
             search: SymbolSearch::default(),
             chart_favorites: settings.favorite_chart_types.clone(),
+            indicators_dialog: IndicatorsDialog::default(),
+            indicator_settings: IndicatorSettings::default(),
+            favorite_indicators: settings.favorite_indicators.clone(),
             tf_menu: TimeframeMenu::new(
                 settings.favorite_timeframes.clone(),
                 settings.custom_timeframes.clone(),
@@ -148,6 +156,7 @@ impl TradeTermApp {
             custom_timeframes: self.tf_menu.custom.clone(),
             collapsed_timeframe_sections: self.tf_menu.collapsed_keys(),
             favorite_chart_types: self.chart_favorites.clone(),
+            favorite_indicators: self.favorite_indicators.clone(),
             ..AppSettings::default()
         };
         s.set_overrides(self.overrides);
@@ -321,6 +330,7 @@ impl TradeTermApp {
         let tf_menu = &mut self.tf_menu;
         let chart_favorites = &mut self.chart_favorites;
         let mut open_search: Option<String> = None;
+        let mut open_indicators = false;
         toolbar::apply_style(ui, &theme);
         ui.horizontal(|ui| {
             ui.set_height(toolbar::TOOLBAR_HEIGHT);
@@ -341,6 +351,13 @@ impl TradeTermApp {
             toolbar::divider(ui, &theme);
             toolbar::chart_type_picker(ui, &mut tab.chart.chart_type, chart_favorites, &theme);
             toolbar::divider(ui, &theme);
+            if toolbar::labeled_icon_button(ui, Icon::SquareFunction, "Indicators", &theme)
+                .on_hover_text("Indicators, metrics, and strategies (/)")
+                .clicked()
+            {
+                open_indicators = true;
+            }
+            toolbar::divider(ui, &theme);
 
             // Display options on the right, like TradingView's chart settings.
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -357,18 +374,13 @@ impl TradeTermApp {
                             ScaleMode::Percent => "Percent change from the first visible bar",
                         });
                 }
-                toolbar::divider(ui, &theme);
-                toolbar::icon_toggle(
-                    ui,
-                    &mut tab.chart.show_volume,
-                    Icon::ChartNoAxesColumn,
-                    &theme,
-                )
-                .on_hover_text("Volume pane");
             });
         });
         if let Some(current) = open_search {
             self.search.open_with_current(&current);
+        }
+        if open_indicators {
+            self.indicators_dialog.open();
         }
     }
 
@@ -390,7 +402,23 @@ impl TradeTermApp {
     /// Typing a letter or digit while nothing has keyboard focus opens the
     /// symbol search with that character, as on TradingView.
     fn type_to_search(&mut self, ctx: &egui::Context) {
-        if self.search.is_open() || ctx.memory(|m| m.focused().is_some()) {
+        if self.search.is_open()
+            || self.indicators_dialog.is_open()
+            || self.indicator_settings.is_open()
+            || ctx.memory(|m| m.focused().is_some())
+        {
+            return;
+        }
+        // "/" opens the indicators dialog, like TradingView.
+        let slash = ctx.input_mut(|i| {
+            let pos = i
+                .events
+                .iter()
+                .position(|e| matches!(e, egui::Event::Text(t) if t == "/"));
+            pos.map(|p| i.events.remove(p)).is_some()
+        });
+        if slash {
+            self.indicators_dialog.open();
             return;
         }
         let typed = ctx.input_mut(|i| {
@@ -644,6 +672,18 @@ impl eframe::App for TradeTermApp {
 
         let ctx = ui.ctx().clone();
         self.search_dialog(&ctx);
+        let theme = self.theme.clone();
+        if let Some(kind) = self
+            .indicators_dialog
+            .ui(&ctx, &theme, &mut self.favorite_indicators)
+        {
+            self.tab()
+                .chart
+                .indicators
+                .push(Indicator::new(kind.default_study()));
+        }
+        let tab = &mut self.tabs[self.active];
+        self.indicator_settings.ui(&ctx, &theme, &mut tab.chart);
         if let Some(tf) = self.tf_menu.dialog_ui(&ctx, &self.theme.clone()) {
             let shared = self.shared.clone();
             self.tab().set_timeframe(tf, &shared);
@@ -723,6 +763,9 @@ impl TradeTermApp {
             .inner;
         if out.needs_older_history {
             tab.request_backfill(&shared);
+        }
+        if let Some(id) = out.open_settings {
+            self.indicator_settings.open(&tab.chart, id);
         }
         self.perf
             .chart

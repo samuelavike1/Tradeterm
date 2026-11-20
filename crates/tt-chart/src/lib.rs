@@ -15,6 +15,7 @@
 pub mod bars;
 mod derived;
 mod draw;
+pub mod indicators;
 mod kind;
 pub mod lod;
 pub mod render;
@@ -24,6 +25,7 @@ pub mod time_axis;
 mod view;
 pub mod viewport;
 
+pub use indicators::Indicator;
 pub use kind::{ChartType, ScaleMode};
 pub use style::ChartStyle;
 pub use view::{BACKFILL_MARGIN_BARS, ChartData, ChartOutput, ChartStats, ChartView};

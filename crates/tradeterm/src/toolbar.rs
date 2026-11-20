@@ -103,21 +103,29 @@ pub fn icon_button(
     resp
 }
 
+/// Icon followed by a text label (TradingView's "Indicators" button).
+pub fn labeled_icon_button(ui: &mut Ui, icon: Icon, label: &str, theme: &Theme) -> Response {
+    let font = egui::FontId::proportional(14.0);
+    let text_w = ui
+        .ctx()
+        .fonts_mut(|f| f.layout_no_wrap(label.to_owned(), font.clone(), theme.text))
+        .size()
+        .x;
+    icon_button(ui, text_w + 42.0, false, theme, |p, rect, fg| {
+        icons::paint(p, pos2(rect.left() + 17.0, rect.center().y), icon, 18.0, fg);
+        p.text(
+            pos2(rect.left() + 32.0, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            label,
+            font,
+            fg,
+        );
+    })
+}
+
 /// A Lucide chevron-down centered at `c`.
 pub fn chevron(p: &Painter, c: Pos2, color: Color32) {
     icons::paint(p, c, Icon::ChevronDown, 14.0, color);
-}
-
-/// A toolbar toggle showing a Lucide icon; highlighted while `on`.
-pub fn icon_toggle(ui: &mut Ui, on: &mut bool, icon: Icon, theme: &Theme) -> Response {
-    let mut resp = icon_button(ui, 32.0, *on, theme, |p, rect, fg| {
-        icons::paint(p, rect.center(), icon, 17.0, fg);
-    });
-    if resp.clicked() {
-        *on = !*on;
-        resp.mark_changed();
-    }
-    resp
 }
 
 /// Draws a 18×18-ish pictogram of `ty` inside `rect`.

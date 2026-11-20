@@ -14,6 +14,8 @@ pub struct EguiCanvas {
     mesh: Mesh,
     /// Font family for bold text, if the app registered one.
     bold_family: Option<FontFamily>,
+    /// Font family for icon glyphs.
+    icon_family: Option<FontFamily>,
     /// Shapes grouped by clip rect, in draw order.
     batches: Vec<(Rect, Vec<Shape>)>,
 }
@@ -28,6 +30,7 @@ impl EguiCanvas {
             clip,
             mesh: Mesh::default(),
             bold_family: None,
+            icon_family: None,
             batches: vec![(clip, Vec::new())],
         }
     }
@@ -35,6 +38,12 @@ impl EguiCanvas {
     /// Uses `family` for bold text (falls back to the regular face if `None`).
     pub fn with_bold_family(mut self, family: Option<FontFamily>) -> Self {
         self.bold_family = family;
+        self
+    }
+
+    /// Uses `family` for [`Canvas::icon`] glyphs (icons are skipped if `None`).
+    pub fn with_icon_family(mut self, family: Option<FontFamily>) -> Self {
+        self.icon_family = family;
         self
     }
 
@@ -292,6 +301,18 @@ impl Canvas for EguiCanvas {
         let font = self.font(size, bold);
         let galley = self.painter.layout_no_wrap(text.to_owned(), font, color);
         let rect = anchor.anchor_size(pos, galley.size());
+        self.add(Shape::galley(rect.min, galley, color));
+        rect
+    }
+
+    fn icon(&mut self, center: Pos2, glyph: char, size: f32, color: Color32) -> Rect {
+        let Some(family) = self.icon_family.clone() else {
+            return Rect::from_center_size(center, egui::Vec2::splat(size));
+        };
+        let galley =
+            self.painter
+                .layout_no_wrap(glyph.to_string(), FontId::new(size, family), color);
+        let rect = Align2::CENTER_CENTER.anchor_size(center, galley.size());
         self.add(Shape::galley(rect.min, galley, color));
         rect
     }

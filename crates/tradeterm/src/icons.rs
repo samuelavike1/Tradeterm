@@ -22,8 +22,12 @@ pub fn register(defs: &mut FontDefinitions) {
         .insert(FontFamily::Name(FAMILY.into()), vec![FAMILY.to_owned()]);
 }
 
+pub fn family() -> FontFamily {
+    FontFamily::Name(FAMILY.into())
+}
+
 pub fn font(size: f32) -> FontId {
-    FontId::new(size, FontFamily::Name(FAMILY.into()))
+    FontId::new(size, family())
 }
 
 /// The icon as a one-character string in the Lucide font.

@@ -4,6 +4,7 @@ mod app;
 mod chrome;
 mod fonts;
 mod icons;
+mod indicators;
 mod perf;
 mod runtime;
 mod search;

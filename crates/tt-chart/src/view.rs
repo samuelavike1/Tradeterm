@@ -1,6 +1,7 @@
 use crate::bars::{collect_bars, price_extent};
 use crate::derived::Derived;
-use crate::draw::{self, Scene};
+use crate::draw::{self, LegendButton, LegendHit, Pane, Scene};
+use crate::indicators::Indicator;
 use crate::lod::Lod;
 use crate::render::{Canvas, EguiCanvas};
 use crate::scale::{precision_from_tick_size, price_decimals};
@@ -11,7 +12,7 @@ use crate::viewport::{
 use crate::{ChartStyle, ChartType, ScaleMode};
 use egui::{CursorIcon, Rect, Response, Sense, Ui, pos2};
 use std::time::{Duration, Instant};
-use tt_core::CandleSeries;
+use tt_core::{CandleSeries, Placement};
 use tt_theme::Theme;
 
 const DEFAULT_SPACING: f32 = 8.0;
@@ -24,8 +25,14 @@ const Y_PADDING: f64 = 0.08;
 const DECIMATE_BELOW_PX: f32 = 2.0;
 /// Zoom sensitivity: scale factor exponent per scrolled point.
 const WHEEL_ZOOM_PER_POINT: f32 = 0.006;
-/// Share of the plot height used by the volume pane.
-const VOLUME_PANE_FRACTION: f32 = 0.2;
+/// Share of the price pane used by Volume overlays (TradingView: bottom quarter).
+const VOLUME_OVERLAY_FRACTION: f32 = 0.25;
+/// Relative height of the price pane; indicator panes default to 1.
+const MAIN_PANE_WEIGHT: f32 = 3.0;
+/// Panes can't be dragged smaller than this.
+const MIN_PANE_HEIGHT: f32 = 40.0;
+/// Padding above and below the values of an indicator pane.
+const PANE_PADDING: f64 = 0.1;
 
 /// Per-frame numbers for performance overlays.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -63,6 +70,9 @@ pub struct ChartOutput {
     /// The view is within [`BACKFILL_MARGIN_BARS`] of the oldest loaded bar;
     /// the caller should load older history (and prepend it) if available.
     pub needs_older_history: bool,
+    /// The settings button (or a double-click) on an indicator's legend row
+    /// was used; the caller shows its settings dialog.
+    pub open_settings: Option<u64>,
 }
 
 /// How close (in bars) to the oldest bar the view may get before
@@ -82,7 +92,15 @@ pub struct ChartView {
     pub style: ChartStyle,
     pub chart_type: ChartType,
     pub scale_mode: ScaleMode,
-    pub show_volume: bool,
+    /// Indicators in draw order. Overlays draw on the price pane, Volume at
+    /// its bottom, others each in their own pane below.
+    pub indicators: Vec<Indicator>,
+    /// Price-pane legend collapsed to a "⌄ N" button.
+    pub legend_collapsed: bool,
+    /// Relative height of the price pane vs. indicator panes.
+    main_weight: f32,
+    /// Legend buttons laid out last frame.
+    legend_hits: Vec<LegendHit>,
     stats: ChartStats,
     bar_spacing: f32,
     right_offset: f32,
@@ -112,7 +130,10 @@ impl ChartView {
             style,
             chart_type: ChartType::default(),
             scale_mode: ScaleMode::default(),
-            show_volume: true,
+            indicators: Vec::new(),
+            legend_collapsed: false,
+            main_weight: MAIN_PANE_WEIGHT,
+            legend_hits: Vec::new(),
             stats: ChartStats::default(),
             bar_spacing: DEFAULT_SPACING,
             right_offset: DEFAULT_RIGHT_OFFSET,
@@ -148,6 +169,11 @@ impl ChartView {
         self.pending_zoom = Some(usize::MAX);
     }
 
+    /// Indicator by runtime id.
+    pub fn indicator_mut(&mut self, id: u64) -> Option<&mut Indicator> {
+        self.indicators.iter_mut().find(|i| i.id == id)
+    }
+
     /// `true` while the price axis auto-fits the visible bars.
     pub fn is_auto_scale(&self) -> bool {
         self.manual_range.is_none()
@@ -167,20 +193,40 @@ impl ChartView {
         }
 
         let (full, _) = ui.allocate_exact_size(ui.available_size(), Sense::hover());
-        let mut canvas =
-            EguiCanvas::new(ui.painter_at(full)).with_bold_family(self.style.bold_family.clone());
+        let mut canvas = EguiCanvas::new(ui.painter_at(full))
+            .with_bold_family(self.style.bold_family.clone())
+            .with_icon_family(self.style.icon_family.clone());
 
         let precision = match data.tick_size {
             Some(t) => precision_from_tick_size(t),
             None => series.last().map_or(2, |c| price_decimals(c.close)),
         };
         let (plot, price_axis, time_axis) = self.layout(full, &mut canvas, series, precision);
+        let mut pane_rects = self.pane_rects(plot);
+        let price_rect = pane_rects[0];
 
         // ---- interaction --------------------------------------------------
         let id = ui.make_persistent_id("tt_chart");
         let plot_resp = ui.interact(plot, id.with("plot"), Sense::click_and_drag());
-        let price_resp = ui.interact(price_axis, id.with("price_axis"), Sense::click_and_drag());
+        let price_resp = ui.interact(
+            Rect::from_x_y_ranges(price_axis.x_range(), price_rect.y_range()),
+            id.with("price_axis"),
+            Sense::click_and_drag(),
+        );
         let time_resp = ui.interact(time_axis, id.with("time_axis"), Sense::click_and_drag());
+        // Pane dividers (registered after the plot so they win the drag).
+        for k in 1..pane_rects.len() {
+            let y = pane_rects[k].top();
+            let r = Rect::from_x_y_ranges(plot.left()..=price_axis.right(), y - 3.0..=y + 3.0);
+            let resp = ui
+                .interact(r, id.with(("pane_divider", k)), Sense::drag())
+                .on_hover_cursor(CursorIcon::ResizeRow);
+            if resp.dragged() {
+                self.drag_divider(k, resp.drag_delta().y, plot.height());
+                pane_rects = self.pane_rects(plot);
+            }
+        }
+        let (legend_hover, open_settings) = self.legend_input(ui, id);
 
         if let Some(bars) = self.pending_zoom
             && n > 0
@@ -202,20 +248,24 @@ impl ChartView {
             _ => None,
         };
 
-        // The volume pane takes the bottom of the plot; prices get the rest.
-        let volume_rect = self.show_volume.then(|| {
-            Rect::from_min_max(
-                pos2(
-                    plot.left(),
-                    plot.bottom() - plot.height() * VOLUME_PANE_FRACTION,
-                ),
-                plot.max,
-            )
-        });
-        let price_rect = match volume_rect {
-            Some(vr) => Rect::from_min_max(plot.min, pos2(plot.right(), vr.top())),
-            None => plot,
-        };
+        let price_rect = pane_rects[0];
+        for ind in &mut self.indicators {
+            ind.sync(display);
+        }
+        // Volume overlays share the bottom of the price pane.
+        let volume_rect = self
+            .indicators
+            .iter()
+            .any(|i| i.visible && i.placement() == Placement::VolumeOverlay)
+            .then(|| {
+                Rect::from_min_max(
+                    pos2(
+                        price_rect.left(),
+                        price_rect.bottom() - price_rect.height() * VOLUME_OVERLAY_FRACTION,
+                    ),
+                    price_rect.max,
+                )
+            });
 
         let range = visible_range_for(n, self.bar_spacing, self.right_offset, plot.width());
         let base = if range.is_empty() {
@@ -253,7 +303,16 @@ impl ChartView {
 
         // ---- vertical range -------------------------------------------------
         let close_only = self.chart_type.uses_close_only();
-        let auto = price_extent(&bars, close_only).map_or((0.0, 1.0), |(lo, hi)| {
+        // Price-pane overlays (moving averages, bands…) take part in auto-fit.
+        let mut extent = price_extent(&bars, close_only);
+        for ind in self.indicators.iter().filter(|i| i.visible) {
+            if ind.placement() == Placement::Overlay
+                && let Some((lo, hi)) = ind.extent(range.clone())
+            {
+                extent = Some(extent.map_or((lo, hi), |(a, b)| (a.min(lo), b.max(hi))));
+            }
+        }
+        let auto = extent.map_or((0.0, 1.0), |(lo, hi)| {
             fit_price_range(lo, hi, vp.scale, Y_PADDING)
         });
         self.last_range = self.manual_range.unwrap_or(auto);
@@ -264,6 +323,33 @@ impl ChartView {
             .hover_pos()
             .filter(|p| plot.contains(*p) && !plot_resp.dragged());
 
+        // Indicator panes: same x mapping, own auto-fit value range.
+        let panes: Vec<Pane> = self
+            .indicators
+            .iter()
+            .enumerate()
+            .filter(|(_, i)| i.placement() == Placement::Pane)
+            .zip(pane_rects.iter().skip(1))
+            .map(|((index, ind), rect)| {
+                let (min, max) = pane_range(ind, range.clone());
+                Pane {
+                    index,
+                    vp: Viewport {
+                        price_min: min,
+                        price_max: max,
+                        plot: PlotRect {
+                            left: rect.left(),
+                            top: rect.top(),
+                            right: rect.right(),
+                            bottom: rect.bottom(),
+                        },
+                        scale: PriceScale::linear(),
+                        ..vp
+                    },
+                }
+            })
+            .collect();
+
         let scene = Scene {
             vp,
             theme,
@@ -272,6 +358,11 @@ impl ChartView {
             full,
             plot,
             volume_rect,
+            indicators: &self.indicators,
+            panes,
+            range: range.clone(),
+            legend_collapsed: self.legend_collapsed,
+            legend_hover,
             price_axis,
             time_axis,
             display,
@@ -288,8 +379,9 @@ impl ChartView {
             bar_close_ms: data.bar_close_ms,
             title: data.title,
         };
-        draw::draw(&mut canvas, &scene);
+        let hits = draw::draw(&mut canvas, &scene);
         canvas.finish();
+        self.legend_hits = hits;
         self.derived = derived;
 
         self.stats = ChartStats {
@@ -314,7 +406,95 @@ impl ChartView {
                 // scrolled back, or every view would page through all history.
                 && (!matches!(self.chart_type, ChartType::Renko | ChartType::LineBreak)
                     || self.right_offset < 0.0),
+            open_settings,
         }
+    }
+
+    /// Price pane first, then one rect per indicator pane, split by weight.
+    fn pane_rects(&self, plot: Rect) -> Vec<Rect> {
+        let weights: Vec<f32> = std::iter::once(self.main_weight)
+            .chain(
+                self.indicators
+                    .iter()
+                    .filter(|i| i.placement() == Placement::Pane)
+                    .map(|i| i.pane_weight),
+            )
+            .collect();
+        let total: f32 = weights.iter().sum();
+        let mut top = plot.top();
+        weights
+            .iter()
+            .enumerate()
+            .map(|(k, w)| {
+                let bottom = if k + 1 == weights.len() {
+                    plot.bottom()
+                } else {
+                    (top + plot.height() * w / total).round()
+                };
+                let r = Rect::from_x_y_ranges(plot.x_range(), top..=bottom);
+                top = bottom;
+                r
+            })
+            .collect()
+    }
+
+    /// Moves divider `k` (above pane `k`; 0 is the price pane) by `dy` points.
+    fn drag_divider(&mut self, k: usize, dy: f32, plot_h: f32) {
+        let mut weights: Vec<&mut f32> = std::iter::once(&mut self.main_weight)
+            .chain(
+                self.indicators
+                    .iter_mut()
+                    .filter(|i| i.placement() == Placement::Pane)
+                    .map(|i| &mut i.pane_weight),
+            )
+            .collect();
+        if k == 0 || k >= weights.len() || plot_h <= 0.0 {
+            return;
+        }
+        let total: f32 = weights.iter().map(|w| **w).sum();
+        let min = total * MIN_PANE_HEIGHT / plot_h;
+        let (above, below) = (*weights[k - 1], *weights[k]);
+        let dw = (dy / plot_h * total).clamp(min - above, below - min);
+        if above + dw >= min && below - dw >= min {
+            *weights[k - 1] = above + dw;
+            *weights[k] = below - dw;
+        }
+    }
+
+    /// Hit-tests last frame's legend layout: hover, and clicks on the eye /
+    /// settings / remove / collapse buttons. Returns (hovered row id,
+    /// indicator whose settings were requested).
+    fn legend_input(&mut self, ui: &Ui, id: egui::Id) -> (Option<u64>, Option<u64>) {
+        let pointer = ui.input(|i| i.pointer.hover_pos());
+        let mut hover = None;
+        let mut settings = None;
+        let hits = std::mem::take(&mut self.legend_hits);
+        for hit in &hits {
+            if pointer.is_some_and(|p| hit.row.contains(p)) {
+                hover = Some(hit.id);
+            }
+            let row = ui.interact(hit.row, id.with(("legend_row", hit.id)), Sense::click());
+            if hit.id != 0 && row.double_clicked() {
+                settings = Some(hit.id);
+            }
+            for (k, (button, rect)) in hit.buttons.iter().enumerate() {
+                let resp = ui.interact(*rect, id.with(("legend", hit.id, k)), Sense::click());
+                if !resp.clicked() {
+                    continue;
+                }
+                match button {
+                    LegendButton::Collapse => self.legend_collapsed = !self.legend_collapsed,
+                    LegendButton::ToggleVisible => {
+                        if let Some(ind) = self.indicator_mut(hit.id) {
+                            ind.visible = !ind.visible;
+                        }
+                    }
+                    LegendButton::Settings => settings = Some(hit.id),
+                    LegendButton::Remove => self.indicators.retain(|i| i.id != hit.id),
+                }
+            }
+        }
+        (hover, settings)
     }
 
     /// Splits the widget into plot, price axis (right) and time axis (bottom).
@@ -413,6 +593,24 @@ impl ChartView {
         self.right_offset += dist / new_spacing - dist / self.bar_spacing;
         self.bar_spacing = new_spacing;
     }
+}
+
+/// Value range of an indicator pane: the visible values (plus guide levels
+/// for bounded oscillators) with some padding.
+fn pane_range(ind: &Indicator, range: std::ops::Range<usize>) -> (f64, f64) {
+    let mut ext = ind.extent(range);
+    if let Some((_, _, levels)) = ind.study.bounds()
+        && let (Some(a), Some(b)) = (levels.first(), levels.last())
+    {
+        ext = Some(ext.map_or((*a, *b), |(lo, hi)| (lo.min(*a), hi.max(*b))));
+    }
+    let (lo, hi) = ext.unwrap_or((0.0, 1.0));
+    let span = hi - lo;
+    if span <= f64::EPSILON * hi.abs().max(1.0) {
+        let pad = hi.abs().max(1.0) * 0.05;
+        return (lo - pad, hi + pad);
+    }
+    (lo - span * PANE_PADDING, hi + span * PANE_PADDING)
 }
 
 /// Bar interval inferred from the data (smallest gap among the last bars).

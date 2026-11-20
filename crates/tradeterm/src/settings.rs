@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tracing::{debug, warn};
-use tt_chart::{ChartType, ScaleMode};
-use tt_core::Timeframe;
+use tt_chart::{ChartType, Indicator, ScaleMode};
+use tt_core::{Study, StudyKind, Timeframe};
 use tt_theme::{ThemeMode, ThemeOverrides};
 
 /// Environment variable that overrides the settings file location.
@@ -31,6 +31,53 @@ pub struct RecentSymbol {
 /// Most recent symbols kept.
 pub const MAX_RECENT: usize = 12;
 
+/// One indicator on a chart.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct IndicatorConfig {
+    pub study: Study,
+    pub visible: bool,
+    /// One `[r, g, b, a]` per output; empty = defaults. (Field-level default:
+    /// the struct default is a Volume indicator with Volume's colors.)
+    #[serde(default)]
+    pub colors: Vec<[u8; 4]>,
+    /// Relative pane height (pane indicators).
+    pub pane_weight: f32,
+}
+
+impl Default for IndicatorConfig {
+    fn default() -> Self {
+        Self::from_indicator(&Indicator::new(StudyKind::Volume.default_study()))
+    }
+}
+
+impl IndicatorConfig {
+    pub fn from_indicator(ind: &Indicator) -> Self {
+        Self {
+            study: ind.study.clone(),
+            visible: ind.visible,
+            colors: ind
+                .colors
+                .iter()
+                .map(|c| c.to_srgba_unmultiplied())
+                .collect(),
+            pane_weight: ind.pane_weight,
+        }
+    }
+
+    pub fn to_indicator(&self) -> Indicator {
+        let mut ind = Indicator::new(self.study.clone());
+        ind.visible = self.visible;
+        for (slot, [r, g, b, a]) in ind.colors.iter_mut().zip(&self.colors) {
+            *slot = Color32::from_rgba_unmultiplied(*r, *g, *b, *a);
+        }
+        if self.pane_weight.is_finite() && self.pane_weight > 0.0 {
+            ind.pane_weight = self.pane_weight.clamp(0.05, 20.0);
+        }
+        ind
+    }
+}
+
 /// One chart tab.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -39,7 +86,14 @@ pub struct TabSettings {
     pub timeframe: Timeframe,
     pub chart_type: ChartType,
     pub scale_mode: ScaleMode,
-    pub show_volume: bool,
+    /// Indicators in draw order. New charts start with Volume, like
+    /// TradingView's default layout.
+    pub indicators: Vec<IndicatorConfig>,
+    /// Price-pane legend collapsed.
+    pub legend_collapsed: bool,
+    /// Pre-indicator volume toggle; only read, to migrate old files.
+    #[serde(skip_serializing)]
+    pub show_volume: Option<bool>,
 }
 
 impl Default for TabSettings {
@@ -49,7 +103,9 @@ impl Default for TabSettings {
             timeframe: Timeframe::M1,
             chart_type: ChartType::Candles,
             scale_mode: ScaleMode::Linear,
-            show_volume: true,
+            indicators: vec![IndicatorConfig::default()],
+            legend_collapsed: false,
+            show_volume: None,
         }
     }
 }
@@ -74,6 +130,8 @@ pub struct AppSettings {
     pub collapsed_timeframe_sections: Vec<String>,
     /// Chart types pinned to the toolbar as quick buttons.
     pub favorite_chart_types: Vec<ChartType>,
+    /// Starred entries of the indicators dialog.
+    pub favorite_indicators: Vec<StudyKind>,
 }
 
 impl Default for AppSettings {
@@ -89,6 +147,7 @@ impl Default for AppSettings {
             custom_timeframes: Vec::new(),
             collapsed_timeframe_sections: Vec::new(),
             favorite_chart_types: Vec::new(),
+            favorite_indicators: Vec::new(),
         }
     }
 }
@@ -100,6 +159,14 @@ impl AppSettings {
             self.tabs.push(TabSettings::default());
         }
         self.active_tab = self.active_tab.min(self.tabs.len() - 1);
+        for tab in &mut self.tabs {
+            // Files from before indicators had a volume on/off switch and no
+            // indicator list (so they got the default Volume indicator).
+            if tab.show_volume.take() == Some(false) {
+                tab.indicators
+                    .retain(|i| i.study.kind() != StudyKind::Volume);
+            }
+        }
         self
     }
 
@@ -246,7 +313,14 @@ mod tests {
                     timeframe: Timeframe::H4,
                     chart_type: ChartType::HeikinAshi,
                     scale_mode: ScaleMode::Logarithmic,
-                    show_volume: false,
+                    indicators: vec![
+                        IndicatorConfig::from_indicator(&Indicator::new(
+                            StudyKind::Rsi.default_study(),
+                        )),
+                        IndicatorConfig::default(),
+                    ],
+                    legend_collapsed: true,
+                    show_volume: None,
                 },
             ],
             active_tab: 1,
@@ -276,6 +350,41 @@ mod tests {
     }
 
     #[test]
+    fn indicators_round_trip_and_volume_migration() {
+        let mut rsi = Indicator::new(StudyKind::Rsi.default_study());
+        rsi.colors[0] = Color32::from_rgb(1, 2, 3);
+        rsi.visible = false;
+        let cfg = IndicatorConfig::from_indicator(&rsi);
+        let back = serde_json::from_str::<IndicatorConfig>(&serde_json::to_string(&cfg).unwrap())
+            .unwrap()
+            .to_indicator();
+        assert_eq!(back.study, rsi.study);
+        assert_eq!(back.colors[0], Color32::from_rgb(1, 2, 3));
+        assert!(!back.visible);
+
+        // Old files: no indicator list. Volume on → Volume indicator; off → none.
+        let old: AppSettings = serde_json::from_str(
+            r#"{"tabs":[{"symbol":"A","show_volume":true},{"symbol":"B","show_volume":false},{"symbol":"C"}]}"#,
+        )
+        .unwrap();
+        let s = old.normalized();
+        let kinds = |t: &TabSettings| {
+            t.indicators
+                .iter()
+                .map(|i| i.study.kind())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(kinds(&s.tabs[0]), [StudyKind::Volume]);
+        assert!(kinds(&s.tabs[1]).is_empty());
+        assert_eq!(kinds(&s.tabs[2]), [StudyKind::Volume]);
+        // The legacy field is never written back.
+        assert!(!serde_json::to_string(&s).unwrap().contains("show_volume"));
+        // An explicitly empty list stays empty.
+        let empty: AppSettings = serde_json::from_str(r#"{"tabs":[{"indicators":[]}]}"#).unwrap();
+        assert!(empty.normalized().tabs[0].indicators.is_empty());
+    }
+
+    #[test]
     fn store_debounces_and_persists() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("nested").join("settings.json");
@@ -289,7 +398,7 @@ mod tests {
         assert!(!path.exists(), "must not save before the debounce elapses");
 
         // Another change restarts the timer.
-        s.tabs[0].show_volume = false;
+        s.tabs[0].legend_collapsed = true;
         store.tick(&s, t0 + Duration::from_millis(500));
         store.tick(&s, t0 + Duration::from_millis(1000));
         assert!(!path.exists());
