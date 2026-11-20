@@ -15,18 +15,29 @@ gpui backend for the tradeterm chart.
 `cargo run -p tt-chart-gpui --release --example bench -- <hover|pan|static|empty> [secs] [noind]`
 
 1M synthetic 1m bars + Volume, EMA 21, BB 20, RSI 14, MACD; 1920×1040,
-Windows 11, 60 Hz. "Our CPU" is time in our paint code; "process CPU" is the
-whole process (gpui scene submission, DirectX, driver) per frame.
+Windows 11, 60 Hz. "Our paint" is time in our paint code; "process CPU" is
+the whole process per frame (gpui frame building, scene submission,
+DirectX, driver).
 
-| Scenario | fps | base repaints | overlay | process CPU / frame |
+| Scenario | fps | base repaints | overlay paint | process CPU / frame |
 |---|---|---|---|---|
-| Empty window (baseline) | 60 | – | – | 2.2 ms |
-| Static chart, redrawn every frame | 60 | 0 | 0.78 ms | 8.9 ms (5.0 ms without indicators) |
-| Hover (crosshair moves) | 60 | 0 | 0.78 ms | 8.5 ms |
-| Pan, zoomed in (300 bars) | 60 | every frame, ~4.7 ms | ~0.9 ms | – |
-| Pan, zoomed out (1M bars) | 49–60 | every frame, 5.5–14.6 ms | ~1.3 ms | – |
+| Empty window (floor) | 60 | – | – | 2.2 ms |
+| Static chart, redrawn every frame | 60 | 0 | 0.56 ms | 5.9 ms |
+| Hover (crosshair moves) | 60 | 0 | 0.83 ms | 6.3 ms |
+| Pan (half the time over all 1M bars) | 58.9 | every frame, 5.2 ms | 0.81 ms | 11.5 ms |
 
-Takeaways: the layer split works (hovering never repaints the base, and our
-per-move work is under 1 ms). What remains on a hover frame is gpui
-re-presenting the cached scene: about 2.8 ms for ~1,300 quads/glyphs and
-3.9 ms for the indicator line/fill paths. That is the next thing to profile.
+## Profiling notes (gpui-kit 0.10 / gpui-pre 0.3.12, Windows)
+
+Measured with timers in a scratch copy of gpui's window and DirectX renderer:
+
+- gpui gives every primitive a draw order by inserting it into a bounds
+  tree, also when a cached view is replayed. With ~3,000 primitives that was
+  4–5 ms per frame. `GpuiCanvas::finish` now paints quads and text inside
+  `paint_layer`s, where primitives share the layer's order and skip the
+  tree: frame building went from 5.8 to ~1.4 ms.
+- Every batch of paths costs a full-window 4× MSAA clear + resolve. Paths
+  are painted between the quad and text layers so they form one batch.
+  That batch still costs ~1.5 ms of renderer CPU; reducing it needs a gpui
+  change (clear/resolve only the paths' bounds) or fewer path pixels.
+- A quad exactly as deep as its dashed border renders nothing; grid lines
+  are 3 px deep quads with only the leading edge dashed.

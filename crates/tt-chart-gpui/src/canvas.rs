@@ -56,6 +56,8 @@ pub struct GpuiCanvas<'a> {
     window: &'a mut Window,
     fonts: &'a CanvasFonts,
     ppp: f32,
+    /// Area of the whole canvas.
+    full: Rect,
     clip: Rect,
     batches: Vec<(Rect, Vec<Item>)>,
     /// Primitives recorded (for performance overlays).
@@ -98,6 +100,7 @@ impl<'a> GpuiCanvas<'a> {
             window,
             fonts,
             ppp,
+            full: clip,
             clip,
             batches: vec![(clip, Vec::new())],
             primitives: 0,
@@ -164,37 +167,73 @@ impl<'a> GpuiCanvas<'a> {
         )
     }
 
-    /// Paints everything recorded, in order.
+    /// Paints everything recorded, in three passes, each clipped like it
+    /// was recorded:
+    ///
+    /// 1. quads, inside one gpui layer: every primitive shares the layer's
+    ///    draw order, so gpui skips its per-primitive bounds-tree insertion
+    ///    (otherwise the bulk of a frame, also when a cached view replays);
+    /// 2. paths (the few indicator lines/fills), each with its own order:
+    ///    gpui composites same-order paths as if disjoint, which would
+    ///    double-blend overlapping translucent fills. Painting them right
+    ///    after the quad layer keeps them in one GPU batch (each path batch
+    ///    costs a full-window MSAA clear + resolve);
+    /// 3. text, inside a second layer, on top of both.
+    ///
+    /// The stacking (quads < lines < text) is the right one for a chart.
     pub fn finish(mut self, cx: &mut App) {
         let batches = std::mem::take(&mut self.batches);
         let window = &mut *self.window;
-        for (clip, items) in batches {
-            if items.is_empty() {
-                continue;
-            }
-            let mask = ContentMask {
-                bounds: bounds(clip),
-            };
-            window.with_content_mask(Some(mask), |window| {
-                for item in items {
-                    match item {
-                        Item::Quad(q) => window.paint_quad(q),
-                        Item::Path(path, bg, _) => window.paint_path(path, bg),
-                        Item::Text(t) => {
-                            let (line, pos, size) = *t;
-                            let _ = line.paint(
-                                pt(pos),
-                                px(size * LINE_HEIGHT),
-                                TextAlign::Left,
-                                None,
-                                window,
-                                cx,
-                            );
+        let full = bounds(self.full);
+        let mut paths = Vec::new();
+        let mut texts = Vec::new();
+        window.paint_layer(full, |window| {
+            for (clip, items) in batches {
+                let mask = ContentMask {
+                    bounds: bounds(clip),
+                };
+                let (mut clip_paths, mut clip_texts) = (Vec::new(), Vec::new());
+                window.with_content_mask(Some(mask), |window| {
+                    for item in items {
+                        match item {
+                            Item::Quad(q) => window.paint_quad(q),
+                            Item::Path(path, bg, _) => clip_paths.push((path, bg)),
+                            Item::Text(t) => clip_texts.push(t),
                         }
                     }
+                });
+                if !clip_paths.is_empty() {
+                    paths.push((mask, clip_paths));
+                }
+                if !clip_texts.is_empty() {
+                    texts.push((mask, clip_texts));
+                }
+            }
+        });
+        for (mask, clip_paths) in paths {
+            window.with_content_mask(Some(mask), |window| {
+                for (path, bg) in clip_paths {
+                    window.paint_path(path, bg);
                 }
             });
         }
+        window.paint_layer(full, |window| {
+            for (mask, clip_texts) in texts {
+                window.with_content_mask(Some(mask), |window| {
+                    for t in clip_texts {
+                        let (line, pos, size) = *t;
+                        let _ = line.paint(
+                            pt(pos),
+                            px(size * LINE_HEIGHT),
+                            TextAlign::Left,
+                            None,
+                            window,
+                            cx,
+                        );
+                    }
+                });
+            }
+        });
     }
 }
 
@@ -296,7 +335,7 @@ impl Canvas for GpuiCanvas<'_> {
                 (
                     Rect::from_min_max(
                         Pos2::new(a.x.min(b.x), a.y - px1 / 2.0),
-                        Pos2::new(a.x.max(b.x), a.y + px1 / 2.0),
+                        Pos2::new(a.x.max(b.x), a.y + 2.5 * px1),
                     ),
                     Edges {
                         top: px(px1),
@@ -307,7 +346,7 @@ impl Canvas for GpuiCanvas<'_> {
                 (
                     Rect::from_min_max(
                         Pos2::new(a.x - px1 / 2.0, a.y.min(b.y)),
-                        Pos2::new(a.x + px1 / 2.0, a.y.max(b.y)),
+                        Pos2::new(a.x + 2.5 * px1, a.y.max(b.y)),
                     ),
                     Edges {
                         left: px(px1),
