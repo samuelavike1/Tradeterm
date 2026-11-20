@@ -152,16 +152,28 @@ impl Canvas for EguiCanvas {
         )));
     }
 
-    fn fill_area(&mut self, points: &[Pos2], baseline_y: f32, top: Color32, bottom: Color32) {
+    fn fill_area(
+        &mut self,
+        points: &[Pos2],
+        baseline_y: f32,
+        gradient_top_y: f32,
+        top: Color32,
+        bottom: Color32,
+    ) {
         if points.len() < 2 {
             return;
         }
         self.flush_mesh();
+        let span = (baseline_y - gradient_top_y).max(1.0);
+        let color_at = |y: f32| {
+            let t = ((y - gradient_top_y) / span).clamp(0.0, 1.0);
+            tt_theme::mix(top, bottom, t)
+        };
         let mut mesh = Mesh::default();
         mesh.reserve_vertices(points.len() * 2);
         mesh.reserve_triangles((points.len() - 1) * 2);
         for p in points {
-            mesh.colored_vertex(*p, top);
+            mesh.colored_vertex(*p, color_at(p.y));
             mesh.colored_vertex(pos2(p.x, baseline_y), bottom);
         }
         for i in 0..(points.len() as u32 - 1) {

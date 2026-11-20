@@ -257,6 +257,7 @@ fn area_fill(c: &mut dyn Canvas, s: &Scene<'_>, pts: &[Pos2]) {
     c.fill_area(
         pts,
         s.vp.plot.bottom,
+        s.vp.plot.top,
         with_alpha(color, alpha),
         with_alpha(color, 0.0),
     );

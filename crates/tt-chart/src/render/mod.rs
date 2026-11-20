@@ -32,8 +32,16 @@ pub trait Canvas {
     fn polyline(&mut self, points: &[Pos2], width: f32, color: Color32);
 
     /// Fills the area between `points` (an x-sorted polyline) and `baseline_y`
-    /// with a vertical gradient from `top` (at the line) to `bottom` (at the baseline).
-    fn fill_area(&mut self, points: &[Pos2], baseline_y: f32, top: Color32, bottom: Color32);
+    /// with a fixed vertical gradient: `top` at `gradient_top_y`, `bottom` at
+    /// `baseline_y` (independent of the line's shape, so there is no banding).
+    fn fill_area(
+        &mut self,
+        points: &[Pos2],
+        baseline_y: f32,
+        gradient_top_y: f32,
+        top: Color32,
+        bottom: Color32,
+    );
 
     /// Draws monospace text; returns its bounding rect.
     fn text(&mut self, pos: Pos2, anchor: Align2, text: &str, size: f32, color: Color32) -> Rect;

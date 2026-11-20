@@ -97,6 +97,22 @@ impl SymbolSearch {
             }
         }
 
+        // Keep ↑/↓ for the result list instead of egui's focus navigation,
+        // which would otherwise move focus out of the box and cancel the search.
+        if edit.has_focus() {
+            ui.memory_mut(|m| {
+                m.set_focus_lock_filter(
+                    edit.id,
+                    egui::EventFilter {
+                        vertical_arrows: true,
+                        horizontal_arrows: true,
+                        tab: false,
+                        escape: false,
+                    },
+                )
+            });
+        }
+
         let fresh = self.results_query == self.input;
         if edit.has_focus() && self.open && fresh && !self.results.is_empty() {
             let (down, up) =

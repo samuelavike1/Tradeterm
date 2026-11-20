@@ -247,13 +247,17 @@ impl Theme {
             (&mut w.active, control_active),
             (&mut w.open, control_hover),
         ] {
-            wv.bg_fill = fill;
+            // weak_bg_fill: buttons; bg_fill: checkbox/radio/slider wells, which
+            // must stand out from menus (panel_alt) too, so use the border tone.
             wv.weak_bg_fill = fill;
+            wv.bg_fill = mix(fill, self.border, 0.5);
             wv.bg_stroke = Stroke::NONE;
             wv.fg_stroke = Stroke::new(1.0, self.text);
             wv.corner_radius = r4;
             wv.expansion = 0.0;
         }
+        w.inactive.bg_fill = self.border;
+        w.inactive.bg_stroke = Stroke::new(1.0, mix(self.border, self.text_muted, 0.4));
         w.hovered.bg_stroke = Stroke::new(1.0, control_active);
         w.active.bg_stroke = Stroke::new(1.0, self.accent);
         v
