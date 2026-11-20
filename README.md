@@ -166,8 +166,8 @@ crates/
      draw.rs       Builds the picture from Canvas primitives only, in two layers:
                    draw_base (everything static) and draw_overlay (crosshair,
                    readout, legends).
-     render/       Canvas trait (the backend boundary), plus EguiCanvas used by the
-                   headless draw benchmark.
+     render/       Canvas trait (the backend boundary). Geometry and colors are
+                   emath / ecolor types; the crate has no UI-toolkit dependency.
      indicators.rs Indicator: a Study + colors/visibility, with cached outputs.
      view.rs       ChartView: render_base / render_overlay, hit testing and input
                    (pan, zoom, axis and divider drags, legend buttons), caches.
@@ -232,8 +232,9 @@ RSI 14 and MACD every frame (Windows 11, 60 Hz):
 | Pan (half the time over all 1M bars) | 58.9 | 5.2 ms per frame | 0.81 ms | 11.5 ms |
 
 Profiling notes are in [crates/tt-chart-gpui/README.md](crates/tt-chart-gpui/README.md).
-`cargo run --release -p tt-chart --example bench_draw` measures the toolkit-free chart
-code headlessly.
+`cargo run --release -p tt-chart --example bench_draw` measures the chart's own CPU cost
+headlessly (both layers into a counting canvas): 0.31 ms per frame with 1,000,000 bars
+visible, under 0.1 ms zoomed in.
 
 ## Setup
 

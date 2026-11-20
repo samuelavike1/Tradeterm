@@ -8,7 +8,7 @@
 
 use crate::app::{TabChart, TradeTerm};
 use crate::search::match_ranges;
-use egui::Color32;
+use ecolor::Color32;
 use gpui_kit::component::button::*;
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState};

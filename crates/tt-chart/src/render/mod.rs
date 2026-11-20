@@ -1,15 +1,12 @@
 //! Drawing backend boundary.
 //!
 //! Chart code draws exclusively through [`Canvas`], a handful of immediate
-//! primitives in screen points. [`EguiCanvas`] implements it on top of
-//! `egui::Painter`; a custom wgpu renderer only has to implement this trait
-//! (geometry types are `emath`/`ecolor`, which carry no egui runtime).
+//! primitives in screen points. `tt-chart-gpui`'s `GpuiCanvas` implements it
+//! on gpui; another backend only has to implement this trait. Geometry and
+//! colors are `emath` / `ecolor` types (plain data, no UI runtime).
 
-mod egui_canvas;
-
-pub use egui_canvas::EguiCanvas;
-
-use egui::{Align2, Color32, Pos2, Rect, Vec2};
+use ecolor::Color32;
+use emath::{Align2, Pos2, Rect, Vec2};
 
 pub trait Canvas {
     /// Physical pixels per logical point, for pixel snapping.

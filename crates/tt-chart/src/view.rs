@@ -3,14 +3,14 @@ use crate::derived::Derived;
 use crate::draw::{self, LegendButton, LegendHit, Pane, Scene};
 use crate::indicators::Indicator;
 use crate::lod::Lod;
-use crate::render::{Canvas, EguiCanvas};
+use crate::render::Canvas;
 use crate::scale::{precision_from_tick_size, price_decimals};
 use crate::viewport::{
     PlotRect, PriceScale, Viewport, fit_price_range, pan_price_range, visible_range_for,
     zoom_price_range,
 };
 use crate::{ChartStyle, ChartType, ScaleMode};
-use egui::{CursorIcon, Pos2, Rect, Response, Sense, Ui, Vec2, pos2};
+use emath::{Pos2, Rect, Vec2, pos2};
 use std::time::{Duration, Instant};
 use tt_core::{CandleSeries, Placement};
 use tt_theme::Theme;
@@ -40,7 +40,7 @@ pub struct ChartStats {
     pub visible_bars: usize,
     pub total_bars: usize,
     /// CPU time to lay out and record the chart's draw commands
-    /// (excludes egui tessellation and GPU work).
+    /// (excludes the backend's own frame work and GPU time).
     pub draw_time: Duration,
 }
 
@@ -86,7 +86,7 @@ pub enum ChartHit {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RenderInput {
     /// Pointer position (crosshair) if over the plot.
-    pub crosshair: Option<egui::Pos2>,
+    pub crosshair: Option<emath::Pos2>,
     /// Legend row under the pointer (indicator id; 0 = collapse button).
     pub legend_hover: Option<u64>,
 }
@@ -94,7 +94,8 @@ pub struct RenderInput {
 /// What [`ChartView::render`] reports to the caller.
 #[derive(Debug, Clone, Copy)]
 pub struct RenderOutput {
-    /// See [`ChartOutput::needs_older_history`].
+    /// The view is within [`BACKFILL_MARGIN_BARS`] of the oldest loaded bar;
+    /// the caller should load older history (and prepend it) if available.
     pub needs_older_history: bool,
 }
 
@@ -138,20 +139,8 @@ struct Frame {
     bar_interval_ms: i64,
 }
 
-/// What happened in [`ChartView::show`].
-pub struct ChartOutput {
-    /// Interaction response of the plot area.
-    pub response: Response,
-    /// The view is within [`BACKFILL_MARGIN_BARS`] of the oldest loaded bar;
-    /// the caller should load older history (and prepend it) if available.
-    pub needs_older_history: bool,
-    /// The settings button (or a double-click) on an indicator's legend row
-    /// was used; the caller shows its settings dialog.
-    pub open_settings: Option<u64>,
-}
-
 /// How close (in bars) to the oldest bar the view may get before
-/// [`ChartOutput::needs_older_history`] is raised.
+/// [`RenderOutput::needs_older_history`] is raised.
 pub const BACKFILL_MARGIN_BARS: usize = 200;
 
 /// Interactive chart widget.
@@ -385,74 +374,6 @@ impl ChartView {
     /// Back to auto-fitting the visible bars vertically.
     pub fn auto_scale(&mut self) {
         self.manual_range = None;
-    }
-
-    /// egui front end: handles input on the widget, then [`Self::render`]s.
-    pub fn show(&mut self, ui: &mut Ui, data: ChartData<'_>, theme: &Theme) -> ChartOutput {
-        let series = data.series;
-        let (full, _) = ui.allocate_exact_size(ui.available_size(), Sense::hover());
-        let mut canvas = EguiCanvas::new(ui.painter_at(full))
-            .with_bold_family(self.style.bold_family.clone())
-            .with_icon_family(self.style.icon_family.clone());
-
-        let precision = precision_for(&data);
-        let (plot, price_axis, time_axis) = self.layout(full, &mut canvas, series, precision);
-        let pane_rects = self.pane_rects(plot);
-        let price_rect = pane_rects[0];
-
-        // ---- interaction --------------------------------------------------
-        let id = ui.make_persistent_id("tt_chart");
-        let plot_resp = ui.interact(plot, id.with("plot"), Sense::click_and_drag());
-        let price_resp = ui.interact(
-            Rect::from_x_y_ranges(price_axis.x_range(), price_rect.y_range()),
-            id.with("price_axis"),
-            Sense::click_and_drag(),
-        );
-        let time_resp = ui.interact(time_axis, id.with("time_axis"), Sense::click_and_drag());
-        // Pane dividers (registered after the plot so they win the drag).
-        for (k, pane) in pane_rects.iter().enumerate().skip(1) {
-            let y = pane.top();
-            let r = Rect::from_x_y_ranges(plot.left()..=price_axis.right(), y - 3.0..=y + 3.0);
-            let resp = ui
-                .interact(r, id.with(("pane_divider", k)), Sense::drag())
-                .on_hover_cursor(CursorIcon::ResizeRow);
-            if resp.dragged() {
-                self.drag_divider(k, resp.drag_delta().y, plot.height());
-            }
-        }
-        let (legend_hover, open_settings) = self.legend_input(ui, id);
-        self.handle_x_input(ui, &plot_resp, &time_resp, plot);
-        // Uses last frame's range and scale (one frame of lag is invisible).
-        self.handle_y_input(&plot_resp, &price_resp, price_rect, self.last_price_scale);
-
-        let crosshair = plot_resp
-            .hover_pos()
-            .filter(|p| plot.contains(*p) && !plot_resp.dragged());
-        let out = self.render(
-            &mut canvas,
-            full,
-            ui.ctx().pixels_per_point(),
-            data,
-            theme,
-            RenderInput {
-                crosshair,
-                legend_hover,
-            },
-        );
-        canvas.finish();
-
-        price_resp.on_hover_cursor(CursorIcon::ResizeVertical);
-        time_resp.on_hover_cursor(CursorIcon::ResizeHorizontal);
-        let response = if plot_resp.dragged() {
-            plot_resp.on_hover_cursor(CursorIcon::Grabbing)
-        } else {
-            plot_resp.on_hover_cursor(CursorIcon::Crosshair)
-        };
-        ChartOutput {
-            response,
-            needs_older_history: out.needs_older_history,
-            open_settings,
-        }
     }
 
     /// Backend-neutral frame: [`Self::render_base`] then
@@ -770,35 +691,6 @@ impl ChartView {
         }
     }
 
-    /// Hit-tests last frame's legend layout: hover, and clicks on the eye /
-    /// settings / remove / collapse buttons. Returns (hovered row id,
-    /// indicator whose settings were requested).
-    fn legend_input(&mut self, ui: &Ui, id: egui::Id) -> (Option<u64>, Option<u64>) {
-        let pointer = ui.input(|i| i.pointer.hover_pos());
-        let mut hover = None;
-        let mut settings = None;
-        let hits = std::mem::take(&mut self.legend_hits);
-        for hit in &hits {
-            if pointer.is_some_and(|p| hit.row.contains(p)) {
-                hover = Some(hit.id);
-            }
-            let row = ui.interact(hit.row, id.with(("legend_row", hit.id)), Sense::click());
-            if hit.id != 0 && row.double_clicked() {
-                settings = Some(hit.id);
-            }
-            for (k, (button, rect)) in hit.buttons.iter().enumerate() {
-                let resp = ui.interact(*rect, id.with(("legend", hit.id, k)), Sense::click());
-                if !resp.clicked() {
-                    continue;
-                }
-                if let Some(id) = self.press_legend(hit.id, *button) {
-                    settings = Some(id);
-                }
-            }
-        }
-        (hover, settings)
-    }
-
     /// Splits the widget into plot, price axis (right) and time axis (bottom).
     fn layout(
         &self,
@@ -823,58 +715,6 @@ impl ChartView {
         );
         let time_axis = Rect::from_min_max(pos2(full.left(), plot_bottom), full.max);
         (plot, price_axis, time_axis)
-    }
-
-    fn handle_x_input(&mut self, ui: &Ui, plot_resp: &Response, time_resp: &Response, plot: Rect) {
-        if plot_resp.double_clicked() {
-            self.reset_view();
-        }
-        if plot_resp.dragged() {
-            // Dragging right reveals older bars.
-            self.right_offset -= plot_resp.drag_delta().x / self.bar_spacing;
-        }
-        if time_resp.dragged() {
-            // Drag right to zoom in, anchored at the right edge like TradingView.
-            let factor = (time_resp.drag_delta().x * 0.01).exp();
-            self.zoom_at(factor, plot.right(), plot.right());
-        }
-        if plot_resp.hovered() || time_resp.hovered() {
-            let (scroll, zoom) = ui.input(|i| (i.smooth_scroll_delta(), i.zoom_delta()));
-            if scroll.x != 0.0 {
-                self.right_offset += scroll.x / self.bar_spacing;
-            }
-            // ~11% per wheel notch (egui reports ~20 points per notch).
-            let factor = zoom * (scroll.y * WHEEL_ZOOM_PER_POINT).exp();
-            if factor != 1.0 {
-                let anchor_x = plot_resp
-                    .hover_pos()
-                    .filter(|p| plot.contains(*p))
-                    .map_or(plot.right(), |p| p.x);
-                self.zoom_at(factor, anchor_x, plot.right());
-            }
-        }
-    }
-
-    fn handle_y_input(
-        &mut self,
-        plot_resp: &Response,
-        price_resp: &Response,
-        plot: Rect,
-        scale: PriceScale,
-    ) {
-        if price_resp.double_clicked() || plot_resp.double_clicked() {
-            self.manual_range = None;
-            return;
-        }
-        if price_resp.dragged() {
-            self.drag_price_axis(price_resp.drag_delta().y);
-        }
-        if let Some((lo, hi)) = self.manual_range
-            && plot_resp.dragged()
-        {
-            let frac = plot_resp.drag_delta().y as f64 / plot.height().max(1.0) as f64;
-            self.manual_range = Some(pan_price_range(lo, hi, scale, frac));
-        }
     }
 
     /// Keeps at least a few bars on screen.
@@ -944,46 +784,46 @@ mod tests {
             1.0
         }
         fn set_clip(&mut self, _: Rect) {}
-        fn fill_rect(&mut self, _: Rect, _: egui::Color32) {}
-        fn fill_rounded_rect(&mut self, _: Rect, _: f32, _: egui::Color32) {}
-        fn stroke_rect(&mut self, _: Rect, _: f32, _: egui::Color32) {}
-        fn line(&mut self, _: egui::Pos2, _: egui::Pos2, _: f32, _: egui::Color32) {}
+        fn fill_rect(&mut self, _: Rect, _: ecolor::Color32) {}
+        fn fill_rounded_rect(&mut self, _: Rect, _: f32, _: ecolor::Color32) {}
+        fn stroke_rect(&mut self, _: Rect, _: f32, _: ecolor::Color32) {}
+        fn line(&mut self, _: emath::Pos2, _: emath::Pos2, _: f32, _: ecolor::Color32) {}
         fn dashed_line(
             &mut self,
-            _: egui::Pos2,
-            _: egui::Pos2,
+            _: emath::Pos2,
+            _: emath::Pos2,
             _: f32,
-            _: egui::Color32,
+            _: ecolor::Color32,
             _: f32,
             _: f32,
         ) {
         }
-        fn polyline(&mut self, _: &[egui::Pos2], _: f32, _: egui::Color32) {}
+        fn polyline(&mut self, _: &[emath::Pos2], _: f32, _: ecolor::Color32) {}
         fn fill_area(
             &mut self,
-            _: &[egui::Pos2],
+            _: &[emath::Pos2],
             _: f32,
             _: f32,
-            _: egui::Color32,
-            _: egui::Color32,
+            _: ecolor::Color32,
+            _: ecolor::Color32,
         ) {
         }
-        fn fill_between(&mut self, _: &[egui::Pos2], _: &[egui::Pos2], _: egui::Color32) {}
-        fn fill_circle(&mut self, _: egui::Pos2, _: f32, _: egui::Color32) {}
+        fn fill_between(&mut self, _: &[emath::Pos2], _: &[emath::Pos2], _: ecolor::Color32) {}
+        fn fill_circle(&mut self, _: emath::Pos2, _: f32, _: ecolor::Color32) {}
         fn text_styled(
             &mut self,
-            pos: egui::Pos2,
-            anchor: egui::Align2,
+            pos: emath::Pos2,
+            anchor: emath::Align2,
             text: &str,
             size: f32,
-            _: egui::Color32,
+            _: ecolor::Color32,
             bold: bool,
         ) -> Rect {
             self.0.push(text.to_owned());
             anchor.anchor_size(pos, self.text_size_styled(text, size, bold))
         }
-        fn text_size_styled(&mut self, text: &str, size: f32, _: bool) -> egui::Vec2 {
-            egui::vec2(text.len() as f32 * size * 0.6, size)
+        fn text_size_styled(&mut self, text: &str, size: f32, _: bool) -> emath::Vec2 {
+            emath::vec2(text.len() as f32 * size * 0.6, size)
         }
     }
 
@@ -1009,7 +849,7 @@ mod tests {
             bar_close_ms: None,
         };
         let theme = Theme::dark();
-        let full = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(900.0, 500.0));
+        let full = Rect::from_min_size(pos2(0.0, 0.0), emath::vec2(900.0, 500.0));
         let mut v = ChartView::default();
 
         // Overlay before any base render: nothing to draw on.
@@ -1073,7 +913,7 @@ mod tests {
             bar_close_ms: None,
         };
         let theme = Theme::dark();
-        let full = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(900.0, 600.0));
+        let full = Rect::from_min_size(pos2(0.0, 0.0), emath::vec2(900.0, 600.0));
         let mut v = ChartView {
             indicators: vec![
                 Indicator::new(tt_core::StudyKind::Volume.default_study()),

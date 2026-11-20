@@ -4,10 +4,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-description = "Candlestick chart widget for tradeterm (egui)."
+description = "Toolkit-independent candlestick chart for tradeterm (draws through a Canvas trait)."
 
 [dependencies]
-egui = "0.37.0"
+ecolor = "0.37.0"
+emath = "0.37.0"
 lucide-icons = "1.77.0"
 serde = { version = "1.0.229", features = ["derive"] }
 tt-core = { version = "0.1.0", path = "../tt-core" }

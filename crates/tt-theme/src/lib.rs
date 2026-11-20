@@ -1,12 +1,10 @@
 //! Semantic color tokens shared by the chart and the application UI.
 //!
-//! Every color drawn by tradeterm comes from a [`Theme`]. The chart reads the
-//! tokens directly; the rest of the UI gets them through egui [`egui::Style`]s
-//! installed by [`install`]. Changing palette therefore restyles everything.
+//! Every color drawn by tradeterm comes from a [`Theme`]: the chart reads the
+//! tokens directly and the app's chrome uses them alongside gpui-component's
+//! theme. Colors are [`ecolor::Color32`] (sRGB, premultiplied alpha).
 
-use egui::{
-    Color32, CornerRadius, FontFamily, FontId, Margin, Stroke, Style, TextStyle, Visuals, vec2,
-};
+pub use ecolor::Color32;
 use serde::{Deserialize, Serialize};
 
 /// Which palette to use. `System` follows the OS light/dark setting.
@@ -26,14 +24,6 @@ impl ThemeMode {
             ThemeMode::System => "System",
             ThemeMode::Dark => "Dark",
             ThemeMode::Light => "Light",
-        }
-    }
-
-    fn preference(self) -> egui::ThemePreference {
-        match self {
-            ThemeMode::System => egui::ThemePreference::System,
-            ThemeMode::Dark => egui::ThemePreference::Dark,
-            ThemeMode::Light => egui::ThemePreference::Light,
         }
     }
 }
@@ -191,112 +181,6 @@ impl Theme {
         }
         self
     }
-
-    /// Writes the tokens into an egui style (visuals, rounding, spacing, fonts).
-    pub fn apply_to_style(&self, style: &mut Style) {
-        style.visuals = self.visuals();
-
-        let sp = &mut style.spacing;
-        sp.item_spacing = vec2(8.0, 6.0);
-        sp.button_padding = vec2(10.0, 4.0);
-        sp.interact_size.y = 24.0;
-        sp.window_margin = Margin::same(10);
-        sp.menu_margin = Margin::same(6);
-
-        use FontFamily::{Monospace, Proportional};
-        style.text_styles = [
-            (TextStyle::Small, FontId::new(11.0, Proportional)),
-            (TextStyle::Body, FontId::new(13.0, Proportional)),
-            (TextStyle::Button, FontId::new(13.0, Proportional)),
-            (TextStyle::Heading, FontId::new(16.0, Proportional)),
-            (TextStyle::Monospace, FontId::new(12.5, Monospace)),
-        ]
-        .into();
-    }
-
-    fn visuals(&self) -> Visuals {
-        let mut v = if self.dark {
-            Visuals::dark()
-        } else {
-            Visuals::light()
-        };
-        let r4 = CornerRadius::same(4);
-        let r6 = CornerRadius::same(6);
-
-        // Control fills are derived from the surface tokens.
-        let control = self.panel_alt;
-        let control_hover = self.border;
-        let control_active = mix(self.border, self.text_muted, 0.35);
-
-        v.override_text_color = None;
-        v.panel_fill = self.panel;
-        v.window_fill = self.panel_alt;
-        v.window_stroke = Stroke::new(1.0, self.border);
-        v.window_corner_radius = r6;
-        v.menu_corner_radius = r6;
-        v.faint_bg_color = self.panel_alt;
-        v.extreme_bg_color = self.bg;
-        v.text_edit_bg_color = Some(self.bg);
-        v.code_bg_color = self.panel_alt;
-        v.hyperlink_color = self.accent;
-        v.warn_fg_color = self.series_palette[1];
-        v.error_fg_color = self.down;
-        v.weak_text_color = Some(self.text_muted);
-
-        v.selection.bg_fill = self.selection;
-        v.selection.stroke = Stroke::new(1.0, self.text);
-
-        let w = &mut v.widgets;
-        w.noninteractive.bg_fill = self.panel;
-        w.noninteractive.weak_bg_fill = self.panel;
-        w.noninteractive.bg_stroke = Stroke::new(1.0, self.border);
-        w.noninteractive.fg_stroke = Stroke::new(1.0, self.text);
-        w.noninteractive.corner_radius = r4;
-
-        for (wv, fill) in [
-            (&mut w.inactive, control),
-            (&mut w.hovered, control_hover),
-            (&mut w.active, control_active),
-            (&mut w.open, control_hover),
-        ] {
-            // weak_bg_fill: buttons; bg_fill: checkbox/radio/slider wells, which
-            // must stand out from menus (panel_alt) too, so use the border tone.
-            wv.weak_bg_fill = fill;
-            wv.bg_fill = mix(fill, self.border, 0.5);
-            wv.bg_stroke = Stroke::NONE;
-            wv.fg_stroke = Stroke::new(1.0, self.text);
-            wv.corner_radius = r4;
-            wv.expansion = 0.0;
-        }
-        w.inactive.bg_fill = self.border;
-        w.inactive.bg_stroke = Stroke::new(1.0, mix(self.border, self.text_muted, 0.4));
-        w.hovered.bg_stroke = Stroke::new(1.0, control_active);
-        w.active.bg_stroke = Stroke::new(1.0, self.accent);
-        v
-    }
-
-    /// Frame for toolbars / status bars.
-    pub fn bar_frame(&self) -> egui::Frame {
-        egui::Frame::new()
-            .fill(self.panel)
-            .inner_margin(Margin::symmetric(10, 6))
-            .stroke(Stroke::new(1.0, self.border))
-    }
-}
-
-/// Installs both palettes into egui and selects one according to `mode`.
-/// Call again whenever the mode or overrides change.
-pub fn install(ctx: &egui::Context, mode: ThemeMode, overrides: ThemeOverrides) {
-    for (egui_theme, dark) in [(egui::Theme::Dark, true), (egui::Theme::Light, false)] {
-        let theme = Theme::for_dark(dark).with_overrides(overrides);
-        ctx.style_mut_of(egui_theme, |s| theme.apply_to_style(s));
-    }
-    ctx.set_theme(mode.preference());
-}
-
-/// The palette currently in effect (resolves `System` via egui).
-pub fn current(ctx: &egui::Context, overrides: ThemeOverrides) -> Theme {
-    Theme::for_dark(ctx.theme() == egui::Theme::Dark).with_overrides(overrides)
 }
 
 #[cfg(test)]

@@ -6,7 +6,7 @@
 //! setting (Windows: Animation effects off), snapping to the end state.
 
 use crate::app::TradeTerm;
-use egui::Color32;
+use ecolor::Color32;
 use gpui_kit::base::{
     Easing, IterationCount, Keyframe, Keyframes, Timing, Transition, animate_keyframes, transition,
 };

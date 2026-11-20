@@ -7,7 +7,7 @@
 
 use crate::app::TradeTerm;
 use crate::ui::{chart_type_icon, lucide};
-use egui::Color32;
+use ecolor::Color32;
 use gpui_kit::base::PopoverState;
 use gpui_kit::component::button::*;
 use gpui_kit::component::input::{InputEvent, InputState, NumberInput};

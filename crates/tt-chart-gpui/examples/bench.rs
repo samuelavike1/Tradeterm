@@ -10,7 +10,7 @@
 
 use tt_session::synthetic;
 
-use egui::pos2;
+use emath::pos2;
 use gpui_kit::*;
 use std::time::{Duration, Instant};
 use tt_chart::{ChartView, Indicator};

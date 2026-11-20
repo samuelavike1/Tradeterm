@@ -1,20 +1,79 @@
-//! Headless chart benchmark: 1,000,000 bars through the real `ChartView`.
+//! Headless chart benchmark: 1,000,000 bars through the real `ChartView`,
+//! without any UI toolkit.
 //!
 //! `cargo run --release -p tt-chart --example bench_draw [-- BARS]`
 //!
-//! Each frame runs a full egui pass (layout, input, chart scene building) via
-//! `Context::run_ui`, then tessellates the output like eframe does before
-//! uploading to the GPU. GPU time is not included. The last bar is updated
-//! every frame, as a live feed would, so incremental cache updates are
-//! measured too. The pointer sits over the plot so the crosshair is drawn.
+//! Each frame runs `ChartView::render_base` and `render_overlay` (layout,
+//! caches, decimation, every draw call) into a canvas that only counts
+//! primitives, so the numbers are the chart's own CPU cost: what any backend
+//! pays before it hands primitives to the GPU. The last bar is updated every
+//! frame, as a live feed would, so incremental cache updates are measured
+//! too. The pointer sits over the plot so the crosshair is drawn.
 
-use egui::{Event, RawInput, Rect, pos2, vec2};
+use ecolor::Color32;
+use emath::{Align2, Pos2, Rect, Vec2, pos2, vec2};
 use std::time::{Duration, Instant};
-use tt_chart::{ChartData, ChartType, ChartView};
+use tt_chart::render::Canvas;
+use tt_chart::{ChartData, ChartType, ChartView, RenderInput};
 use tt_core::{Candle, CandleSeries};
 use tt_theme::Theme;
 
 const FRAMES: usize = 60;
+
+/// Counts primitives; text is measured with a fixed-width estimate.
+#[derive(Default)]
+struct CountingCanvas {
+    prims: usize,
+}
+
+impl Canvas for CountingCanvas {
+    fn pixels_per_point(&self) -> f32 {
+        1.0
+    }
+    fn set_clip(&mut self, _: Rect) {}
+    fn fill_rect(&mut self, _: Rect, _: Color32) {
+        self.prims += 1;
+    }
+    fn fill_rounded_rect(&mut self, _: Rect, _: f32, _: Color32) {
+        self.prims += 1;
+    }
+    fn stroke_rect(&mut self, _: Rect, _: f32, _: Color32) {
+        self.prims += 1;
+    }
+    fn line(&mut self, _: Pos2, _: Pos2, _: f32, _: Color32) {
+        self.prims += 1;
+    }
+    fn dashed_line(&mut self, _: Pos2, _: Pos2, _: f32, _: Color32, _: f32, _: f32) {
+        self.prims += 1;
+    }
+    fn polyline(&mut self, points: &[Pos2], _: f32, _: Color32) {
+        self.prims += points.len().saturating_sub(1);
+    }
+    fn fill_area(&mut self, points: &[Pos2], _: f32, _: f32, _: Color32, _: Color32) {
+        self.prims += points.len();
+    }
+    fn fill_between(&mut self, top: &[Pos2], _: &[Pos2], _: Color32) {
+        self.prims += top.len();
+    }
+    fn fill_circle(&mut self, _: Pos2, _: f32, _: Color32) {
+        self.prims += 1;
+    }
+    fn text_styled(
+        &mut self,
+        pos: Pos2,
+        anchor: Align2,
+        text: &str,
+        size: f32,
+        _: Color32,
+        bold: bool,
+    ) -> Rect {
+        self.prims += 1;
+        anchor.anchor_size(pos, self.text_size_styled(text, size, bold))
+    }
+    fn text_size_styled(&mut self, text: &str, size: f32, _: bool) -> Vec2 {
+        vec2(text.chars().count() as f32 * size * 0.6, size * 1.25)
+    }
+}
 
 fn synthetic(n: usize) -> CandleSeries {
     let mut s = CandleSeries::new();
@@ -42,32 +101,29 @@ fn synthetic(n: usize) -> CandleSeries {
     s
 }
 
-struct Stats {
-    chart: Vec<Duration>,
-    pass: Vec<Duration>,
-    tess: Vec<Duration>,
-}
-
 fn ms(v: &[Duration]) -> (f64, f64) {
     let avg = v.iter().map(Duration::as_secs_f64).sum::<f64>() / v.len() as f64 * 1e3;
     let max = v.iter().map(Duration::as_secs_f64).fold(0.0, f64::max) * 1e3;
     (avg, max)
 }
 
-fn run(series: &mut CandleSeries, chart_type: ChartType, visible: usize, ppp: f32) -> Stats {
-    let ctx = egui::Context::default();
+/// (base times, overlay times, primitives per frame)
+#[allow(clippy::field_reassign_with_default)] // ChartView has private fields
+fn run(
+    series: &mut CandleSeries,
+    chart_type: ChartType,
+    visible: usize,
+) -> (Vec<Duration>, Vec<Duration>, usize) {
     let theme = Theme::dark();
-    tt_theme::install(&ctx, tt_theme::ThemeMode::Dark, Default::default());
     let mut view = ChartView::default();
     view.chart_type = chart_type;
     view.zoom_to_bars(visible);
-    let screen = Rect::from_min_size(pos2(0.0, 0.0), vec2(1600.0, 900.0) / ppp);
-
-    let mut stats = Stats {
-        chart: Vec::new(),
-        pass: Vec::new(),
-        tess: Vec::new(),
+    let full = Rect::from_min_size(pos2(0.0, 0.0), vec2(1600.0, 900.0));
+    let input = RenderInput {
+        crosshair: Some(full.center()),
+        legend_hover: None,
     };
+    let (mut base, mut overlay, mut prims) = (Vec::new(), Vec::new(), 0);
     for frame in 0..(FRAMES + 5) {
         // Live forming-bar update.
         let mut last = series.last().expect("non-empty");
@@ -75,39 +131,28 @@ fn run(series: &mut CandleSeries, chart_type: ChartType, visible: usize, ppp: f3
         last.high = last.high.max(last.close);
         last.low = last.low.min(last.close);
         series.upsert(last);
-
-        let input = RawInput {
-            screen_rect: Some(screen),
-            events: vec![Event::PointerMoved(screen.center())],
-            ..Default::default()
+        let data = ChartData {
+            series,
+            title: "BENCH · 1m",
+            tick_size: Some(0.01),
+            now_ms: None,
+            bar_interval_ms: Some(60_000),
+            bar_close_ms: None,
         };
-        ctx.set_pixels_per_point(ppp);
+        let mut canvas = CountingCanvas::default();
         let t0 = Instant::now();
-        let out = ctx.run_ui(input, |ui| {
-            let data = ChartData {
-                series,
-                title: "BENCH · 1m",
-                tick_size: Some(0.01),
-                now_ms: None,
-                bar_interval_ms: Some(60_000),
-                bar_close_ms: None,
-            };
-            view.show(ui, data, &theme);
-        });
-        let pass = t0.elapsed();
+        view.render_base(&mut canvas, full, 1.0, data, &theme);
         let t1 = Instant::now();
-        let prims = ctx.tessellate(out.shapes, out.pixels_per_point);
-        let tess = t1.elapsed();
-        std::hint::black_box(prims);
-
+        view.render_overlay(&mut canvas, data, &theme, input);
+        let t2 = Instant::now();
         // Frames 0-4: zoom applies, caches build (one-off costs).
         if frame >= 5 {
-            stats.chart.push(view.stats().draw_time);
-            stats.pass.push(pass);
-            stats.tess.push(tess);
+            base.push(t1 - t0);
+            overlay.push(t2 - t1);
+            prims = canvas.prims;
         }
     }
-    stats
+    (base, overlay, prims)
 }
 
 fn main() {
@@ -122,36 +167,30 @@ fn main() {
         t.elapsed().as_secs_f64() * 1e3
     );
     println!(
-        "{:<15} {:>10} {:>4}  {:>17}  {:>17}  {:>17}",
-        "type", "visible", "ppp", "chart avg/max ms", "egui pass avg/max", "tessellate avg/max"
+        "{:<15} {:>10}  {:>17}  {:>19}  {:>8}",
+        "type", "visible", "base avg/max ms", "overlay avg/max ms", "prims"
     );
-    for ppp in [1.0, 1.5] {
-        for (ty, visible) in [
-            (ChartType::Candles, n),
-            (ChartType::Candles, 200_000),
-            (ChartType::Candles, 20_000),
-            (ChartType::Candles, 1_000),
-            (ChartType::Candles, 150),
-            (ChartType::HeikinAshi, n),
-            (ChartType::Area, n),
-            (ChartType::Area, 1_000),
-        ] {
-            let s = run(&mut series, ty, visible, ppp);
-            let (ca, cm) = ms(&s.chart);
-            let (pa, pm) = ms(&s.pass);
-            let (ta, tm) = ms(&s.tess);
-            println!(
-                "{:<15} {:>10} {:>4}  {:>7.3} / {:>7.3}  {:>7.3} / {:>7.3}  {:>7.3} / {:>7.3}",
-                format!("{ty:?}"),
-                visible.min(n),
-                ppp,
-                ca,
-                cm,
-                pa,
-                pm,
-                ta,
-                tm
-            );
-        }
+    for (ty, visible) in [
+        (ChartType::Candles, n),
+        (ChartType::Candles, 200_000),
+        (ChartType::Candles, 20_000),
+        (ChartType::Candles, 1_000),
+        (ChartType::Candles, 150),
+        (ChartType::HeikinAshi, n),
+        (ChartType::Area, n),
+        (ChartType::Area, 1_000),
+    ] {
+        let (base, overlay, prims) = run(&mut series, ty, visible);
+        let ((ba, bm), (oa, om)) = (ms(&base), ms(&overlay));
+        println!(
+            "{:<15} {:>10}  {:>8.2} / {:<6.2}  {:>9.2} / {:<6.2}  {:>8}",
+            format!("{ty:?}"),
+            visible.min(n),
+            ba,
+            bm,
+            oa,
+            om,
+            prims
+        );
     }
 }

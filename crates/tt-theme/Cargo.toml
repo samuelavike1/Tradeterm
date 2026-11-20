@@ -4,8 +4,8 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-description = "Semantic color tokens and egui styling for tradeterm."
+description = "Semantic color tokens for tradeterm."
 
 [dependencies]
-egui = "0.37.0"
+ecolor = "0.37.0"
 serde = { version = "1.0.229", features = ["derive"] }

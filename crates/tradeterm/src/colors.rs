@@ -15,10 +15,10 @@ pub struct ChartColors {
     _subs: Vec<Subscription>,
 }
 
-/// Picked color as an egui color (the chart's color type).
-pub fn color32(c: Hsla) -> egui::Color32 {
+/// Picked color as an `ecolor` color (the chart's color type).
+pub fn color32(c: Hsla) -> ecolor::Color32 {
     let r = Rgba::from(c);
-    egui::Color32::from_rgba_unmultiplied(
+    ecolor::Color32::from_rgba_unmultiplied(
         (r.r * 255.0).round() as u8,
         (r.g * 255.0).round() as u8,
         (r.b * 255.0).round() as u8,

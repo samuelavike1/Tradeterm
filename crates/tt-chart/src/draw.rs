@@ -1,4 +1,4 @@
-//! Chart scene drawing. Uses only the [`Canvas`] trait, never egui directly.
+//! Chart scene drawing. Uses only the [`Canvas`] trait, never a UI toolkit directly.
 
 use crate::bars::{DrawBar, max_volume};
 use crate::indicators::{Indicator, format_value, histogram_down};
@@ -9,7 +9,8 @@ use crate::scale::{
 use crate::time_axis;
 use crate::viewport::Viewport;
 use crate::{ChartStyle, ChartType, ScaleMode};
-use egui::{Align2, Color32, Pos2, Rect, pos2, vec2};
+use ecolor::Color32;
+use emath::{Align2, Pos2, Rect, pos2, vec2};
 use lucide_icons::Icon;
 use std::ops::Range;
 use tt_core::{Candle, CandleSeries, Placement, Plot, Study};
@@ -1329,7 +1330,7 @@ fn readout(c: &mut dyn Canvas, s: &Scene<'_>, bar: Option<usize>) {
 mod tests {
     use super::*;
     use crate::viewport::{PlotRect, PriceScale};
-    use egui::Vec2;
+    use emath::Vec2;
 
     /// Records drawn text; geometry primitives are ignored.
     #[derive(Default)]

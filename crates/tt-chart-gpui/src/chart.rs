@@ -7,7 +7,7 @@
 //!   legends. Moving the mouse repaints only this.
 
 use crate::canvas::{CanvasFonts, GpuiCanvas};
-use egui::{Pos2, Rect, pos2, vec2};
+use emath::{Pos2, Rect, pos2, vec2};
 use gpui_kit::*;
 use std::time::{Duration, Instant};
 use tt_chart::{ChartData, ChartHit, ChartView, RenderInput};

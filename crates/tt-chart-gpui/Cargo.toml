@@ -7,7 +7,8 @@ description = "gpui backend for the tradeterm chart: Canvas on gpui and a layere
 
 [dependencies]
 gpui-kit = "=0.10.0"
-egui = "0.37.0"
+ecolor = "0.37.0"
+emath = "0.37.0"
 lucide-icons = "1.77.0"
 tt-core = { path = "../tt-core" }
 tt-chart = { path = "../tt-chart" }

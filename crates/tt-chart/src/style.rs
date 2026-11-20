@@ -12,10 +12,6 @@ pub struct ChartStyle {
     pub time_label_spacing: f32,
     /// Dotted (1 px on, 3 px off) instead of solid grid lines.
     pub dotted_grid: bool,
-    /// Font family for emphasized labels (major time ticks). `None` = regular.
-    pub bold_family: Option<egui::FontFamily>,
-    /// Font family with icon glyphs (Lucide) for legend buttons.
-    pub icon_family: Option<egui::FontFamily>,
 }
 
 impl Default for ChartStyle {
@@ -26,8 +22,6 @@ impl Default for ChartStyle {
             price_label_spacing: 38.0,
             time_label_spacing: 80.0,
             dotted_grid: true,
-            bold_family: None,
-            icon_family: None,
         }
     }
 }

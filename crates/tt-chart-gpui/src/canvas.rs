@@ -9,7 +9,8 @@
 //! - axis-aligned dotted lines (the grid) → one dashed-border quad each;
 //! - text and icons → `shape_line`.
 
-use egui::{Align2, Color32, Pos2, Rect, Vec2};
+use ecolor::Color32;
+use emath::{Align2, Pos2, Rect, Vec2};
 use gpui_kit::{
     App, Background, BorderStyle, Bounds, ContentMask, Corners, Edges, Font, FontWeight, Hsla,
     PaintQuad, Path, Pixels, Rgba, ShapedLine, SharedString, TextAlign, TextRun, Window, point, px,
@@ -17,8 +18,8 @@ use gpui_kit::{
 };
 use tt_chart::render::Canvas;
 
-/// Line height as a multiple of the font size (close to egui's galley height,
-/// which the chart's anchoring was tuned with).
+/// Line height as a multiple of the font size (the text height the chart's
+/// label anchoring was tuned with).
 const LINE_HEIGHT: f32 = 1.25;
 
 /// Font families used for chart text.

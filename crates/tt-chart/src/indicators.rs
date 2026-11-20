@@ -2,7 +2,7 @@
 //! visibility, and cached outputs that are updated incrementally.
 
 use crate::scale::{format_price, format_volume};
-use egui::Color32;
+use ecolor::Color32;
 use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tt_core::{CandleSeries, Placement, Plot, Study};

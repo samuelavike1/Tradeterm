@@ -3,7 +3,7 @@
 //! `~/Library/Application Support/tradeterm/settings.json`,
 //! `~/.config/tradeterm/settings.json`).
 
-use egui::Color32;
+use ecolor::Color32;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};

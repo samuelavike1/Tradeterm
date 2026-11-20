@@ -5,7 +5,7 @@ use crate::indicators::{IndicatorSettingsPanel, IndicatorsPanel};
 use crate::search::{self, SymbolSearch};
 use crate::source::TabSource;
 use crate::ui::{self, lucide};
-use egui::Color32;
+use ecolor::Color32;
 use futures::StreamExt;
 use futures::channel::mpsc;
 use gpui_kit::component::Selectable as _;
@@ -39,7 +39,7 @@ actions!(
     ]
 );
 
-/// Key bindings, like the egui app's.
+/// Key bindings.
 pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("ctrl-t", NewTab, None),
