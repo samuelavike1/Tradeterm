@@ -216,16 +216,8 @@ impl TradeTermApp {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 chrome::window_controls(ui, &theme);
                 ui.add_space(4.0);
-                let gear = RichText::new("⚙").size(16.0).color(theme.text_muted);
-                ui.scope(|ui| {
-                    // Frameless until hovered, like the caption buttons.
-                    let w = &mut ui.visuals_mut().widgets.inactive;
-                    w.weak_bg_fill = Color32::TRANSPARENT;
-                    w.bg_stroke = Stroke::NONE;
-                    ui.menu_button(gear, |ui| self.settings_menu(ui))
-                        .response
-                        .on_hover_text("Settings");
-                });
+                let gear = chrome::settings_button(ui, &theme).on_hover_text("Settings");
+                egui::Popup::menu(&gear).show(|ui| self.settings_menu(ui));
                 ui.add_space(4.0);
                 // Whatever is left between the tabs and the buttons moves the window.
                 let rest = ui.available_rect_before_wrap();
@@ -369,11 +361,7 @@ impl TradeTermApp {
                     let d = tab.price_precision();
                     let color = if c.is_bullish() { t.up } else { t.down };
                     ui.label(RichText::new("Last").weak());
-                    ui.label(
-                        RichText::new(format!("{:.d$}", c.close))
-                            .monospace()
-                            .color(color),
-                    );
+                    ui.label(RichText::new(format!("{:.d$}", c.close)).color(color));
                 }
                 None => {
                     ui.label(RichText::new("Last —").weak());
@@ -382,7 +370,7 @@ impl TradeTermApp {
 
             ui.separator();
             ui.label(RichText::new("Bars").weak());
-            ui.label(RichText::new(tab.series.len().to_string()).monospace());
+            ui.label(RichText::new(tab.series.len().to_string()));
             if tab.backfill.loading {
                 ui.label(RichText::new("loading older…").weak());
             } else if tab.backfill.exhausted {

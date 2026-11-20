@@ -43,9 +43,9 @@ pub trait Canvas {
         bottom: Color32,
     );
 
-    /// Draws monospace text; returns its bounding rect.
+    /// Draws text in the UI (proportional) font; returns its bounding rect.
     fn text(&mut self, pos: Pos2, anchor: Align2, text: &str, size: f32, color: Color32) -> Rect;
 
-    /// Size of monospace `text` at `size` without drawing it.
+    /// Size of `text` at `size` without drawing it.
     fn text_size(&mut self, text: &str, size: f32) -> Vec2;
 }

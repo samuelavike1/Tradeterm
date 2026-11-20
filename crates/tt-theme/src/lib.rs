@@ -114,8 +114,8 @@ impl Theme {
     /// Neutral dark palette (pure grays, shadcn "neutral" scale) with
     /// TradingView-style up/down colors.
     pub fn dark() -> Self {
-        let up = rgb(0x26a69a);
-        let down = rgb(0xef5350);
+        let up = rgb(0x089981);
+        let down = rgb(0xf23645);
         Self {
             dark: true,
             chrome: rgb(0x141414),
@@ -126,7 +126,7 @@ impl Theme {
             border: rgb(0x262626),
             grid: rgb(0x171717),
             text: rgb(0xfafafa),
-            text_muted: rgb(0xa3a3a3),
+            text_muted: rgb(0xb4b4b4),
             accent: rgb(0xd4d4d4),
             text_on_accent: rgb(0xffffff),
             up,
@@ -136,8 +136,8 @@ impl Theme {
             crosshair: rgb(0x737373),
             crosshair_label_bg: rgb(0x404040),
             selection: rgb(0x2e2e2e),
-            volume_up: with_alpha(up, 0.45),
-            volume_down: with_alpha(down, 0.45),
+            volume_up: with_alpha(up, 0.55),
+            volume_down: with_alpha(down, 0.55),
             series_palette: SERIES_PALETTE,
         }
     }
@@ -156,7 +156,7 @@ impl Theme {
             border: rgb(0xe5e5e5),
             grid: rgb(0xf2f2f2),
             text: rgb(0x0a0a0a),
-            text_muted: rgb(0x737373),
+            text_muted: rgb(0x666666),
             accent: rgb(0x171717),
             text_on_accent: rgb(0xffffff),
             up,
@@ -166,8 +166,8 @@ impl Theme {
             crosshair: rgb(0xa3a3a3),
             crosshair_label_bg: rgb(0x171717),
             selection: rgb(0xe5e5e5),
-            volume_up: with_alpha(up, 0.40),
-            volume_down: with_alpha(down, 0.40),
+            volume_up: with_alpha(up, 0.50),
+            volume_down: with_alpha(down, 0.50),
             series_palette: SERIES_PALETTE,
         }
     }
@@ -178,7 +178,7 @@ impl Theme {
 
     /// Applies up/down overrides; wick and volume tokens follow the new colors.
     pub fn with_overrides(mut self, o: ThemeOverrides) -> Self {
-        let vol_alpha = if self.dark { 0.45 } else { 0.40 };
+        let vol_alpha = if self.dark { 0.55 } else { 0.50 };
         if let Some(up) = o.up {
             self.up = up;
             self.up_wick = up;

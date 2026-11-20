@@ -12,6 +12,9 @@ use tt_chart::{ChartType, ScaleMode};
 use tt_core::Timeframe;
 use tt_theme::{ThemeMode, ThemeOverrides};
 
+/// Environment variable that overrides the settings file location.
+pub const SETTINGS_ENV: &str = "TRADETERM_SETTINGS";
+
 /// Changes are written once settings have been stable for this long.
 pub const SAVE_DEBOUNCE: Duration = Duration::from_millis(750);
 
@@ -101,7 +104,13 @@ pub struct SettingsStore {
 
 impl SettingsStore {
     /// Default location from the `directories` crate.
+    /// `$TRADETERM_SETTINGS` if set (e.g. for a portable install or test
+    /// runs that must not touch the user's settings), otherwise the OS config
+    /// directory from the `directories` crate.
     pub fn default_path() -> Option<PathBuf> {
+        if let Some(p) = std::env::var_os(SETTINGS_ENV).filter(|p| !p.is_empty()) {
+            return Some(PathBuf::from(p));
+        }
         directories::ProjectDirs::from("", "", "tradeterm")
             .map(|d| d.config_dir().join("settings.json"))
     }

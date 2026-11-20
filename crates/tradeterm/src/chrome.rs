@@ -84,6 +84,34 @@ pub fn window_button(ui: &mut Ui, kind: WindowButton, theme: &Theme) -> Response
     resp
 }
 
+/// A painted gear button (the ⚙ character comes from a color-emoji font and
+/// would ignore the theme's text color).
+pub fn settings_button(ui: &mut Ui, theme: &Theme) -> Response {
+    let (rect, resp) = ui.allocate_exact_size(vec2(36.0, TITLE_BAR_HEIGHT), Sense::click());
+    let p = ui.painter();
+    let bg_rect = Rect::from_center_size(rect.center(), vec2(30.0, 28.0));
+    if resp.hovered() || egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp))
+    {
+        p.rect_filled(bg_rect, 5.0, theme.border);
+    }
+    let color = if resp.hovered() {
+        theme.text
+    } else {
+        theme.text_muted
+    };
+    let c = rect.center();
+    let stroke = Stroke::new(1.5, color);
+    // Eight teeth around a ring, with a hole in the middle.
+    for k in 0..8 {
+        let a = k as f32 * std::f32::consts::TAU / 8.0;
+        let dir = vec2(a.cos(), a.sin());
+        p.line_segment([c + dir * 5.0, c + dir * 7.5], Stroke::new(2.4, color));
+    }
+    p.circle_stroke(c, 5.0, stroke);
+    p.circle_stroke(c, 2.0, stroke);
+    resp
+}
+
 /// Minimize / maximize-restore / close, right to left. Call inside a
 /// right-to-left layout.
 pub fn window_controls(ui: &mut Ui, theme: &Theme) {

@@ -48,9 +48,12 @@ with a custom chart widget built to handle a million bars.
   1h, 4h, 1D) with buckets aligned to the UTC clock. It works in batch and
   incrementally.
 - **Themes:** semantic color tokens with neutral Dark and Light palettes (pure grays in
-  the style of shadcn's "neutral" scale, with TradingView-style up/down colors),
+  the style of shadcn's "neutral" scale, with TradingView's current up/down colors
+  #089981 / #f23645),
   and a System mode that follows the OS. Up/down colors can be overridden. The whole
   UI (panels, widgets, rounding, spacing) uses the tokens.
+- **Native fonts:** the UI and chart use the OS UI font (Segoe UI, SF/Helvetica, Noto/DejaVu
+  Sans) instead of egui's thin built-in font, with egui's fonts as fallbacks.
 - **Settings persistence:** theme, colors, and every tab (symbol, timeframe, chart type,
   scale mode, volume) plus the active tab are saved as JSON, 750 ms after the last
   change and again on exit.
@@ -247,7 +250,8 @@ Settings are stored at:
 - macOS: `~/Library/Application Support/tradeterm/settings.json`
 - Linux: `~/.config/tradeterm/settings.json`
 
-Delete the file to reset to defaults.
+Delete the file to reset to defaults. Set `TRADETERM_SETTINGS=/path/to/settings.json` to
+use a different file (portable installs, test runs).
 
 ### Window chrome notes
 

@@ -185,9 +185,9 @@ impl Canvas for EguiCanvas {
     }
 
     fn text(&mut self, pos: Pos2, anchor: Align2, text: &str, size: f32, color: Color32) -> Rect {
-        let galley = self
-            .painter
-            .layout_no_wrap(text.to_owned(), FontId::monospace(size), color);
+        let galley =
+            self.painter
+                .layout_no_wrap(text.to_owned(), FontId::proportional(size), color);
         let rect = anchor.anchor_size(pos, galley.size());
         self.add(Shape::galley(rect.min, galley, color));
         rect
@@ -197,7 +197,7 @@ impl Canvas for EguiCanvas {
         self.painter
             .layout_no_wrap(
                 text.to_owned(),
-                FontId::monospace(size),
+                FontId::proportional(size),
                 Color32::PLACEHOLDER,
             )
             .size()

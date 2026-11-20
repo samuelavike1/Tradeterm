@@ -2,6 +2,7 @@
 
 mod app;
 mod chrome;
+mod fonts;
 mod perf;
 mod runtime;
 mod search;
@@ -40,6 +41,7 @@ fn main() -> eframe::Result {
         "tradeterm",
         options,
         Box::new(move |cc| {
+            fonts::install(&cc.egui_ctx);
             Ok(Box::new(TradeTermApp::new(
                 cc.egui_ctx.clone(),
                 runtime,
