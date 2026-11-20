@@ -101,6 +101,24 @@ impl Default for ChartLayout {
     }
 }
 
+/// Everything the last [`ChartView::render_base`] computed that the overlay
+/// needs again.
+#[derive(Debug, Clone)]
+struct Frame {
+    vp: Viewport,
+    panes: Vec<Pane>,
+    bars: Vec<crate::bars::DrawBar>,
+    range: std::ops::Range<usize>,
+    full: Rect,
+    plot: Rect,
+    volume_rect: Option<Rect>,
+    price_axis: Rect,
+    time_axis: Rect,
+    decimated: bool,
+    precision: usize,
+    bar_interval_ms: i64,
+}
+
 /// What happened in [`ChartView::show`].
 pub struct ChartOutput {
     /// Interaction response of the plot area.
@@ -141,6 +159,8 @@ pub struct ChartView {
     legend_hits: Vec<LegendHit>,
     last_layout: ChartLayout,
     last_price_scale: PriceScale,
+    /// Layout and bars of the last base render, reused by the overlay.
+    frame: Option<Frame>,
     stats: ChartStats,
     bar_spacing: f32,
     right_offset: f32,
@@ -175,6 +195,7 @@ impl ChartView {
             main_weight: MAIN_PANE_WEIGHT,
             legend_hits: Vec::new(),
             last_layout: ChartLayout::default(),
+            frame: None,
             last_price_scale: PriceScale::linear(),
             stats: ChartStats::default(),
             bar_spacing: DEFAULT_SPACING,
@@ -306,10 +327,8 @@ impl ChartView {
         }
     }
 
-    /// Backend-neutral frame: syncs caches, lays out panes and draws the
-    /// chart into `canvas` (covering `full`). Input must already have been
-    /// applied ([`Self::pan`], [`Self::zoom`], …); `input` carries the
-    /// pointer-dependent state.
+    /// Backend-neutral frame: [`Self::render_base`] then
+    /// [`Self::render_overlay`] into the same canvas.
     pub fn render(
         &mut self,
         canvas: &mut dyn Canvas,
@@ -318,6 +337,83 @@ impl ChartView {
         data: ChartData<'_>,
         theme: &Theme,
         input: RenderInput,
+    ) -> RenderOutput {
+        let out = self.render_base(canvas, full, ppp, data, theme);
+        self.render_overlay(canvas, data, theme, input);
+        out
+    }
+
+    /// The pointer layer (crosshair, its axis tags, readout and legends)
+    /// over the layout of the last [`Self::render_base`]. Cheap: backends
+    /// that cache the base layer redraw only this while the mouse moves.
+    pub fn render_overlay(
+        &mut self,
+        canvas: &mut dyn Canvas,
+        data: ChartData<'_>,
+        theme: &Theme,
+        input: RenderInput,
+    ) {
+        if let Some(hits) = self.with_scene(data, theme, input, |s| draw::draw_overlay(canvas, s)) {
+            self.legend_hits = hits;
+        }
+    }
+
+    /// Builds the [`Scene`] for the stored frame and runs `f` on it.
+    fn with_scene<R>(
+        &mut self,
+        data: ChartData<'_>,
+        theme: &Theme,
+        input: RenderInput,
+        f: impl FnOnce(&Scene<'_>) -> R,
+    ) -> Option<R> {
+        let series = data.series;
+        let mut derived = std::mem::take(&mut self.derived);
+        let display: &CandleSeries = derived.sync(self.chart_type, series).unwrap_or(series);
+        let out = self.frame.as_ref().map(|fr| {
+            let scene = Scene {
+                vp: fr.vp,
+                theme,
+                style: &self.style,
+                chart_type: self.chart_type,
+                full: fr.full,
+                plot: fr.plot,
+                volume_rect: fr.volume_rect,
+                indicators: &self.indicators,
+                panes: fr.panes.clone(),
+                range: fr.range.clone(),
+                legend_collapsed: self.legend_collapsed,
+                legend_hover: input.legend_hover,
+                price_axis: fr.price_axis,
+                time_axis: fr.time_axis,
+                display,
+                last_raw: series.last(),
+                bars: &fr.bars,
+                decimated: fr.decimated,
+                crosshair: input.crosshair.filter(|p| fr.plot.contains(*p)),
+                precision: fr.precision,
+                tick_size: data.tick_size,
+                bar_interval_ms: fr.bar_interval_ms,
+                now_ms: data.now_ms,
+                bar_close_ms: data.bar_close_ms,
+                title: data.title,
+            };
+            f(&scene)
+        });
+        self.derived = derived;
+        out
+    }
+
+    /// The static layer: syncs caches, lays out panes and draws everything
+    /// that doesn't follow the pointer into `canvas` (covering `full`).
+    /// Input must already have been applied ([`Self::pan`], [`Self::zoom`],
+    /// …). Redo it when data, viewport, size or settings change.
+    pub fn render_base(
+        &mut self,
+        canvas: &mut dyn Canvas,
+        full: Rect,
+        ppp: f32,
+        data: ChartData<'_>,
+        theme: &Theme,
     ) -> RenderOutput {
         let started = Instant::now();
         let series = data.series;
@@ -452,38 +548,27 @@ impl ChartView {
             })
             .collect();
 
-        let scene = Scene {
+        let frame = Frame {
             vp,
-            theme,
-            style: &self.style,
-            chart_type: self.chart_type,
+            panes,
+            bars,
+            range: range.clone(),
             full,
             plot,
             volume_rect,
-            indicators: &self.indicators,
-            panes,
-            range: range.clone(),
-            legend_collapsed: self.legend_collapsed,
-            legend_hover: input.legend_hover,
             price_axis,
             time_axis,
-            display,
-            last_raw: series.last(),
-            bars: &bars,
             decimated,
-            crosshair: input.crosshair.filter(|p| plot.contains(*p)),
             precision,
-            tick_size: data.tick_size,
             bar_interval_ms: data
                 .bar_interval_ms
                 .unwrap_or_else(|| bar_interval_ms(series)),
-            now_ms: data.now_ms,
-            bar_close_ms: data.bar_close_ms,
-            title: data.title,
         };
-        let hits = draw::draw(canvas, &scene);
-        self.legend_hits = hits;
         self.derived = derived;
+        self.frame = Some(frame);
+        self.with_scene(data, theme, RenderInput::default(), |s| {
+            draw::draw_base(canvas, s)
+        });
         self.last_layout = ChartLayout {
             plot,
             price_axis,
@@ -731,6 +816,121 @@ fn bar_interval_ms(series: &CandleSeries) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Records text only.
+    #[derive(Default)]
+    struct Texts(Vec<String>);
+
+    impl Canvas for Texts {
+        fn pixels_per_point(&self) -> f32 {
+            1.0
+        }
+        fn set_clip(&mut self, _: Rect) {}
+        fn fill_rect(&mut self, _: Rect, _: egui::Color32) {}
+        fn fill_rounded_rect(&mut self, _: Rect, _: f32, _: egui::Color32) {}
+        fn stroke_rect(&mut self, _: Rect, _: f32, _: egui::Color32) {}
+        fn line(&mut self, _: egui::Pos2, _: egui::Pos2, _: f32, _: egui::Color32) {}
+        fn dashed_line(
+            &mut self,
+            _: egui::Pos2,
+            _: egui::Pos2,
+            _: f32,
+            _: egui::Color32,
+            _: f32,
+            _: f32,
+        ) {
+        }
+        fn polyline(&mut self, _: &[egui::Pos2], _: f32, _: egui::Color32) {}
+        fn fill_area(
+            &mut self,
+            _: &[egui::Pos2],
+            _: f32,
+            _: f32,
+            _: egui::Color32,
+            _: egui::Color32,
+        ) {
+        }
+        fn fill_between(&mut self, _: &[egui::Pos2], _: &[egui::Pos2], _: egui::Color32) {}
+        fn fill_circle(&mut self, _: egui::Pos2, _: f32, _: egui::Color32) {}
+        fn text_styled(
+            &mut self,
+            pos: egui::Pos2,
+            anchor: egui::Align2,
+            text: &str,
+            size: f32,
+            _: egui::Color32,
+            bold: bool,
+        ) -> Rect {
+            self.0.push(text.to_owned());
+            anchor.anchor_size(pos, self.text_size_styled(text, size, bold))
+        }
+        fn text_size_styled(&mut self, text: &str, size: f32, _: bool) -> egui::Vec2 {
+            egui::vec2(text.len() as f32 * size * 0.6, size)
+        }
+    }
+
+    #[test]
+    fn base_and_overlay_layers_split_pointer_state() {
+        let mut series = CandleSeries::new();
+        for i in 0..50 {
+            series.upsert(tt_core::Candle {
+                open_time_ms: i * 60_000,
+                open: 100.0,
+                high: 101.0,
+                low: 99.0,
+                close: 100.5,
+                volume: 1.0,
+            });
+        }
+        let data = ChartData {
+            series: &series,
+            title: "T",
+            tick_size: Some(0.01),
+            now_ms: None,
+            bar_interval_ms: Some(60_000),
+            bar_close_ms: None,
+        };
+        let theme = Theme::dark();
+        let full = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(900.0, 500.0));
+        let mut v = ChartView::default();
+
+        // Overlay before any base render: nothing to draw on.
+        let mut c = Texts::default();
+        v.render_overlay(&mut c, data, &theme, RenderInput::default());
+        assert!(c.0.is_empty());
+
+        let mut base = Texts::default();
+        v.render_base(&mut base, full, 1.0, data, &theme);
+        assert!(
+            !base.0.iter().any(|t| t == "O" || t == "T"),
+            "readout belongs to the overlay: {:?}",
+            base.0
+        );
+        assert!(
+            base.0.iter().any(|t| t == "100.50"),
+            "last-price tag stays in the base"
+        );
+
+        // The overlay alone, twice (pointer moves), reusing the stored frame.
+        for x in [300.0, 500.0] {
+            let mut over = Texts::default();
+            v.render_overlay(
+                &mut over,
+                data,
+                &theme,
+                RenderInput {
+                    crosshair: Some(pos2(x, 200.0)),
+                    legend_hover: None,
+                },
+            );
+            assert!(over.0.iter().any(|t| t == "T") && over.0.iter().any(|t| t == "O"));
+            assert!(
+                over.0.iter().any(|t| t.contains(" '")),
+                "crosshair time tag: {:?}",
+                over.0
+            );
+        }
+    }
 
     #[test]
     fn zoom_keeps_anchor_bar_fixed() {

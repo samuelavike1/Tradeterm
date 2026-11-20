@@ -58,6 +58,7 @@ pub(crate) struct Scene<'a> {
 
 /// An indicator pane: the indicator (index into `Scene::indicators`) and
 /// its viewport (same x mapping as the price pane, own value range).
+#[derive(Debug, Clone)]
 pub(crate) struct Pane {
     pub index: usize,
     pub vp: Viewport,
@@ -96,7 +97,18 @@ pub(crate) struct LegendHit {
 }
 
 /// Draws the chart; returns the legend's clickable areas.
+/// Draws the whole chart (base, then overlay); returns the legend's
+/// clickable areas. (Views call the two layers directly.)
+#[cfg(test)]
 pub(crate) fn draw(c: &mut dyn Canvas, s: &Scene<'_>) -> Vec<LegendHit> {
+    draw_base(c, s);
+    draw_overlay(c, s)
+}
+
+/// The static layer: everything that does not depend on the pointer (grid,
+/// bars, indicators, axes, value tags). Backends can cache it and redraw only
+/// the overlay while the mouse moves, like TradingView's paired canvases.
+pub(crate) fn draw_base(c: &mut dyn Canvas, s: &Scene<'_>) {
     let t = s.theme;
     c.set_clip(s.full);
     c.fill_rect(s.full, t.bg);
@@ -109,8 +121,7 @@ pub(crate) fn draw(c: &mut dyn Canvas, s: &Scene<'_>) -> Vec<LegendHit> {
             s.style.font_size + 1.0,
             t.text_muted,
         );
-        readout(c, s, None);
-        return Vec::new();
+        return;
     }
 
     let price_ticks = price_ticks(s);
@@ -179,12 +190,8 @@ pub(crate) fn draw(c: &mut dyn Canvas, s: &Scene<'_>) -> Vec<LegendHit> {
     }
 
     // Axis tags are computed before the tick labels so labels underneath can
-    // be hidden; the crosshair tag is drawn last, on top.
+    // be hidden. (The crosshair's tags are opaque and drawn by the overlay.)
     c.set_clip(s.full);
-    // The crosshair snaps to any slot (also past the last bar); the readout
-    // shows the bar under it, or the last bar over empty space.
-    let hovered_slot = s.crosshair.map(|p| s.vp.slot_at(p.x));
-    let hovered = s.crosshair.and_then(|p| s.vp.bar_at(p.x));
     // Axis tags per pane (0 = price pane), spread so they don't overlap.
     let mut grouped = study_tags(s);
     if let Some(tag) = last_price_tag(c, s) {
@@ -206,21 +213,36 @@ pub(crate) fn draw(c: &mut dyn Canvas, s: &Scene<'_>) -> Vec<LegendHit> {
         spread_tags(&mut group, top, bottom);
         tags.extend(group);
     }
-    let mut time_tag = None;
-    if let Some(p) = s.crosshair {
-        let (price_tag, ttag) = crosshair(c, s, p, hovered_slot);
-        tags.push(price_tag);
-        time_tag = ttag;
-    }
-
     price_labels(c, s, &price_ticks, &tags, (s.plot.top(), s.vp.plot.bottom));
     for (pane, ticks) in s.panes.iter().zip(&pane_ticks) {
         let r = pane.rect();
         price_labels(c, s, ticks, &tags, (r.top(), r.bottom()));
     }
-    time_labels(c, s, &time_ticks, time_tag.as_ref());
-    for tag in tags.iter().chain(time_tag.iter()) {
+    time_labels(c, s, &time_ticks, None);
+    for tag in &tags {
         draw_tag(c, s, tag);
+    }
+}
+
+/// The pointer layer, drawn over [`draw_base`]: crosshair lines and their
+/// axis tags, the OHLC readout and the legends (values follow the hovered
+/// bar). Returns the legend's clickable areas.
+pub(crate) fn draw_overlay(c: &mut dyn Canvas, s: &Scene<'_>) -> Vec<LegendHit> {
+    c.set_clip(s.full);
+    if s.display.is_empty() {
+        readout(c, s, None);
+        return Vec::new();
+    }
+    // The crosshair snaps to any slot (also past the last bar); the readout
+    // shows the bar under it, or the last bar over empty space.
+    let hovered_slot = s.crosshair.map(|p| s.vp.slot_at(p.x));
+    let hovered = s.crosshair.and_then(|p| s.vp.bar_at(p.x));
+    if let Some(p) = s.crosshair {
+        let (price_tag, time_tag) = crosshair(c, s, p, hovered_slot);
+        draw_tag(c, s, &price_tag);
+        if let Some(t) = &time_tag {
+            draw_tag(c, s, t);
+        }
     }
     let bar = hovered.or(s.display.len().checked_sub(1));
     readout(c, s, bar);
