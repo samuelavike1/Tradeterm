@@ -63,6 +63,44 @@ pub struct ChartData<'a> {
     pub bar_close_ms: Option<i64>,
 }
 
+/// Pointer-dependent state for [`ChartView::render`].
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RenderInput {
+    /// Pointer position (crosshair) if over the plot.
+    pub crosshair: Option<egui::Pos2>,
+    /// Legend row under the pointer (indicator id; 0 = collapse button).
+    pub legend_hover: Option<u64>,
+}
+
+/// What [`ChartView::render`] reports to the caller.
+#[derive(Debug, Clone, Copy)]
+pub struct RenderOutput {
+    /// See [`ChartOutput::needs_older_history`].
+    pub needs_older_history: bool,
+}
+
+/// Screen areas of the last frame.
+#[derive(Debug, Clone)]
+pub struct ChartLayout {
+    /// All panes (left of the price axis, above the time axis).
+    pub plot: Rect,
+    pub price_axis: Rect,
+    pub time_axis: Rect,
+    /// Price pane first, then indicator panes.
+    pub panes: Vec<Rect>,
+}
+
+impl Default for ChartLayout {
+    fn default() -> Self {
+        Self {
+            plot: Rect::NOTHING,
+            price_axis: Rect::NOTHING,
+            time_axis: Rect::NOTHING,
+            panes: Vec::new(),
+        }
+    }
+}
+
 /// What happened in [`ChartView::show`].
 pub struct ChartOutput {
     /// Interaction response of the plot area.
@@ -101,6 +139,8 @@ pub struct ChartView {
     main_weight: f32,
     /// Legend buttons laid out last frame.
     legend_hits: Vec<LegendHit>,
+    last_layout: ChartLayout,
+    last_price_scale: PriceScale,
     stats: ChartStats,
     bar_spacing: f32,
     right_offset: f32,
@@ -134,6 +174,8 @@ impl ChartView {
             legend_collapsed: false,
             main_weight: MAIN_PANE_WEIGHT,
             legend_hits: Vec::new(),
+            last_layout: ChartLayout::default(),
+            last_price_scale: PriceScale::linear(),
             stats: ChartStats::default(),
             bar_spacing: DEFAULT_SPACING,
             right_offset: DEFAULT_RIGHT_OFFSET,
@@ -179,30 +221,34 @@ impl ChartView {
         self.manual_range.is_none()
     }
 
-    pub fn show(&mut self, ui: &mut Ui, data: ChartData<'_>, theme: &Theme) -> ChartOutput {
-        let started = Instant::now();
-        let series = data.series;
-        // Some chart types display a derived series (Heikin Ashi, Renko, Line
-        // break) whose bar count can differ from the raw one.
-        let mut derived = std::mem::take(&mut self.derived);
-        let display: &CandleSeries = derived.sync(self.chart_type, series).unwrap_or(series);
-        let n = display.len();
-        if self.scale_mode != self.last_scale_mode {
-            self.manual_range = None;
-            self.last_scale_mode = self.scale_mode;
-        }
+    /// Scrolls by `dx` points (positive = drag right = reveal older bars).
+    pub fn pan(&mut self, dx: f32) {
+        self.right_offset -= dx / self.bar_spacing;
+    }
 
+    /// Zooms by `factor` around screen x `anchor_x` (`plot_right` = the
+    /// plot's right edge); see [`ChartLayout::plot`].
+    pub fn zoom(&mut self, factor: f32, anchor_x: f32, plot_right: f32) {
+        self.zoom_at(factor, anchor_x, plot_right);
+    }
+
+    /// Where things were laid out by the last frame (for hit testing in
+    /// backends that handle input themselves).
+    pub fn last_layout(&self) -> &ChartLayout {
+        &self.last_layout
+    }
+
+    /// egui front end: handles input on the widget, then [`Self::render`]s.
+    pub fn show(&mut self, ui: &mut Ui, data: ChartData<'_>, theme: &Theme) -> ChartOutput {
+        let series = data.series;
         let (full, _) = ui.allocate_exact_size(ui.available_size(), Sense::hover());
         let mut canvas = EguiCanvas::new(ui.painter_at(full))
             .with_bold_family(self.style.bold_family.clone())
             .with_icon_family(self.style.icon_family.clone());
 
-        let precision = match data.tick_size {
-            Some(t) => precision_from_tick_size(t),
-            None => series.last().map_or(2, |c| price_decimals(c.close)),
-        };
+        let precision = precision_for(&data);
         let (plot, price_axis, time_axis) = self.layout(full, &mut canvas, series, precision);
-        let mut pane_rects = self.pane_rects(plot);
+        let pane_rects = self.pane_rects(plot);
         let price_rect = pane_rects[0];
 
         // ---- interaction --------------------------------------------------
@@ -215,18 +261,79 @@ impl ChartView {
         );
         let time_resp = ui.interact(time_axis, id.with("time_axis"), Sense::click_and_drag());
         // Pane dividers (registered after the plot so they win the drag).
-        for k in 1..pane_rects.len() {
-            let y = pane_rects[k].top();
+        for (k, pane) in pane_rects.iter().enumerate().skip(1) {
+            let y = pane.top();
             let r = Rect::from_x_y_ranges(plot.left()..=price_axis.right(), y - 3.0..=y + 3.0);
             let resp = ui
                 .interact(r, id.with(("pane_divider", k)), Sense::drag())
                 .on_hover_cursor(CursorIcon::ResizeRow);
             if resp.dragged() {
                 self.drag_divider(k, resp.drag_delta().y, plot.height());
-                pane_rects = self.pane_rects(plot);
             }
         }
         let (legend_hover, open_settings) = self.legend_input(ui, id);
+        self.handle_x_input(ui, &plot_resp, &time_resp, plot);
+        // Uses last frame's range and scale (one frame of lag is invisible).
+        self.handle_y_input(&plot_resp, &price_resp, price_rect, self.last_price_scale);
+
+        let crosshair = plot_resp
+            .hover_pos()
+            .filter(|p| plot.contains(*p) && !plot_resp.dragged());
+        let out = self.render(
+            &mut canvas,
+            full,
+            ui.ctx().pixels_per_point(),
+            data,
+            theme,
+            RenderInput {
+                crosshair,
+                legend_hover,
+            },
+        );
+        canvas.finish();
+
+        price_resp.on_hover_cursor(CursorIcon::ResizeVertical);
+        time_resp.on_hover_cursor(CursorIcon::ResizeHorizontal);
+        let response = if plot_resp.dragged() {
+            plot_resp.on_hover_cursor(CursorIcon::Grabbing)
+        } else {
+            plot_resp.on_hover_cursor(CursorIcon::Crosshair)
+        };
+        ChartOutput {
+            response,
+            needs_older_history: out.needs_older_history,
+            open_settings,
+        }
+    }
+
+    /// Backend-neutral frame: syncs caches, lays out panes and draws the
+    /// chart into `canvas` (covering `full`). Input must already have been
+    /// applied ([`Self::pan`], [`Self::zoom`], …); `input` carries the
+    /// pointer-dependent state.
+    pub fn render(
+        &mut self,
+        canvas: &mut dyn Canvas,
+        full: Rect,
+        ppp: f32,
+        data: ChartData<'_>,
+        theme: &Theme,
+        input: RenderInput,
+    ) -> RenderOutput {
+        let started = Instant::now();
+        let series = data.series;
+        // Some chart types display a derived series (Heikin Ashi, Renko, Line
+        // break) whose bar count can differ from the raw one.
+        let mut derived = std::mem::take(&mut self.derived);
+        let display: &CandleSeries = derived.sync(self.chart_type, series).unwrap_or(series);
+        let n = display.len();
+        if self.scale_mode != self.last_scale_mode {
+            self.manual_range = None;
+            self.last_scale_mode = self.scale_mode;
+        }
+        let precision = precision_for(&data);
+        let (plot, price_axis, time_axis) = self.layout(full, canvas, series, precision);
+        let pane_rects = self.pane_rects(plot);
+        let price_rect = pane_rects[0];
 
         if let Some(bars) = self.pending_zoom
             && n > 0
@@ -237,7 +344,6 @@ impl ChartView {
             self.right_offset = 0.0;
             self.manual_range = None;
         }
-        self.handle_x_input(ui, &plot_resp, &time_resp, plot);
         self.clamp_offset(plot, n);
 
         // ---- bars to draw ---------------------------------------------------
@@ -247,8 +353,6 @@ impl ChartView {
             }
             _ => None,
         };
-
-        let price_rect = pane_rects[0];
         for ind in &mut self.indicators {
             ind.sync(display);
         }
@@ -287,8 +391,8 @@ impl ChartView {
             bar_count: n,
             scale: PriceScale::new(self.scale_mode, base),
         };
+        self.last_price_scale = vp.scale;
         // Bars narrower than ~2 px are drawn as per-pixel min/max columns.
-        let ppp = ui.ctx().pixels_per_point();
         let decimated = self.bar_spacing * ppp < DECIMATE_BELOW_PX;
         let bars = if decimated {
             if self.lod_kind != lod_kind {
@@ -302,12 +406,15 @@ impl ChartView {
         };
 
         // ---- vertical range -------------------------------------------------
+        // Indicator lines are drawn with about one point per pixel column;
+        // fit to the same samples.
+        let stride = (1.0 / (self.bar_spacing * ppp)).ceil().max(1.0) as usize;
         let close_only = self.chart_type.uses_close_only();
         // Price-pane overlays (moving averages, bands…) take part in auto-fit.
         let mut extent = price_extent(&bars, close_only);
         for ind in self.indicators.iter().filter(|i| i.visible) {
             if ind.placement() == Placement::Overlay
-                && let Some((lo, hi)) = ind.extent(range.clone())
+                && let Some((lo, hi)) = ind.extent_sampled(range.clone(), stride)
             {
                 extent = Some(extent.map_or((lo, hi), |(a, b)| (a.min(lo), b.max(hi))));
             }
@@ -316,12 +423,7 @@ impl ChartView {
             fit_price_range(lo, hi, vp.scale, Y_PADDING)
         });
         self.last_range = self.manual_range.unwrap_or(auto);
-        self.handle_y_input(&plot_resp, &price_resp, price_rect, vp.scale);
-        (vp.price_min, vp.price_max) = self.manual_range.unwrap_or(auto);
-
-        let crosshair = plot_resp
-            .hover_pos()
-            .filter(|p| plot.contains(*p) && !plot_resp.dragged());
+        (vp.price_min, vp.price_max) = self.last_range;
 
         // Indicator panes: same x mapping, own auto-fit value range.
         let panes: Vec<Pane> = self
@@ -331,7 +433,7 @@ impl ChartView {
             .filter(|(_, i)| i.placement() == Placement::Pane)
             .zip(pane_rects.iter().skip(1))
             .map(|((index, ind), rect)| {
-                let (min, max) = pane_range(ind, range.clone());
+                let (min, max) = pane_range(ind, range.clone(), stride);
                 Pane {
                     index,
                     vp: Viewport {
@@ -362,14 +464,14 @@ impl ChartView {
             panes,
             range: range.clone(),
             legend_collapsed: self.legend_collapsed,
-            legend_hover,
+            legend_hover: input.legend_hover,
             price_axis,
             time_axis,
             display,
             last_raw: series.last(),
             bars: &bars,
             decimated,
-            crosshair,
+            crosshair: input.crosshair.filter(|p| plot.contains(*p)),
             precision,
             tick_size: data.tick_size,
             bar_interval_ms: data
@@ -379,26 +481,21 @@ impl ChartView {
             bar_close_ms: data.bar_close_ms,
             title: data.title,
         };
-        let hits = draw::draw(&mut canvas, &scene);
-        canvas.finish();
+        let hits = draw::draw(canvas, &scene);
         self.legend_hits = hits;
         self.derived = derived;
-
+        self.last_layout = ChartLayout {
+            plot,
+            price_axis,
+            time_axis,
+            panes: pane_rects,
+        };
         self.stats = ChartStats {
             visible_bars: range.len(),
             total_bars: n,
             draw_time: started.elapsed(),
         };
-
-        price_resp.on_hover_cursor(CursorIcon::ResizeVertical);
-        time_resp.on_hover_cursor(CursorIcon::ResizeHorizontal);
-        let response = if plot_resp.dragged() {
-            plot_resp.on_hover_cursor(CursorIcon::Grabbing)
-        } else {
-            plot_resp.on_hover_cursor(CursorIcon::Crosshair)
-        };
-        ChartOutput {
-            response,
+        RenderOutput {
             needs_older_history: n > 0
                 && range.start < BACKFILL_MARGIN_BARS
                 // Brick charts compress many bars into few bricks, so the oldest
@@ -406,7 +503,6 @@ impl ChartView {
                 // scrolled back, or every view would page through all history.
                 && (!matches!(self.chart_type, ChartType::Renko | ChartType::LineBreak)
                     || self.right_offset < 0.0),
-            open_settings,
         }
     }
 
@@ -597,8 +693,8 @@ impl ChartView {
 
 /// Value range of an indicator pane: the visible values (plus guide levels
 /// for bounded oscillators) with some padding.
-fn pane_range(ind: &Indicator, range: std::ops::Range<usize>) -> (f64, f64) {
-    let mut ext = ind.extent(range);
+fn pane_range(ind: &Indicator, range: std::ops::Range<usize>, stride: usize) -> (f64, f64) {
+    let mut ext = ind.extent_sampled(range, stride);
     if let Some((_, _, levels)) = ind.study.bounds()
         && let (Some(a), Some(b)) = (levels.first(), levels.last())
     {
@@ -611,6 +707,14 @@ fn pane_range(ind: &Indicator, range: std::ops::Range<usize>) -> (f64, f64) {
         return (lo - pad, hi + pad);
     }
     (lo - span * PANE_PADDING, hi + span * PANE_PADDING)
+}
+
+/// Price label precision: from the tick size, else guessed from the price.
+fn precision_for(data: &ChartData<'_>) -> usize {
+    match data.tick_size {
+        Some(t) => precision_from_tick_size(t),
+        None => data.series.last().map_or(2, |c| price_decimals(c.close)),
+    }
 }
 
 /// Bar interval inferred from the data (smallest gap among the last bars).
