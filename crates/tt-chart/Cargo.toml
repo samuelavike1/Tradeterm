@@ -1,0 +1,11 @@
+[package]
+name = "tt-chart"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+description = "Candlestick chart widget for tradeterm (egui)."
+
+[dependencies]
+egui = "0.37.0"
+tt-core = { version = "0.1.0", path = "../tt-core" }

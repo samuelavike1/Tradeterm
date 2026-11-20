@@ -1,0 +1,10 @@
+[package]
+name = "tt-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+description = "Core market-data types for tradeterm (no UI, no network)."
+
+[dependencies]
+crossbeam-channel = "0.5.17"
