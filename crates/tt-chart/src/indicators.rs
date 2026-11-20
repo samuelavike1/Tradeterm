@@ -59,6 +59,8 @@ pub struct Indicator {
     pub colors: Vec<Color32>,
     /// Relative height of its pane (pane studies; the price pane is 3).
     pub pane_weight: f32,
+    /// Its pane is collapsed to a strip with just the legend.
+    pub pane_collapsed: bool,
     cache: Cache,
 }
 
@@ -70,6 +72,7 @@ impl Indicator {
             study,
             visible: true,
             pane_weight: 1.0,
+            pane_collapsed: false,
             cache: Cache::default(),
         }
     }

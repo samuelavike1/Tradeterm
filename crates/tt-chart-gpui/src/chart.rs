@@ -204,6 +204,9 @@ pub struct Chart<S: ChartSource> {
     animating: bool,
     /// Pointer over the price axis or the corner (shows A / L / %).
     axis_hover: bool,
+    /// Pane under the pointer (index into the layout's panes): shows its
+    /// move / delete / collapse / maximize buttons.
+    hover_pane: Option<usize>,
     last_frame: Option<Instant>,
 }
 
@@ -245,6 +248,7 @@ impl<S: ChartSource> Chart<S> {
             animating: false,
             last_frame: None,
             axis_hover: false,
+            hover_pane: None,
         }
     }
 
@@ -296,6 +300,19 @@ impl<S: ChartSource> Chart<S> {
                 self.set_pointer(Some(p), cx);
             }
             ChartHit::LegendRow(id) if double => cx.emit(ChartEvent::OpenIndicatorSettings(id)),
+            // Ctrl + double-click collapses the pane (TradingView).
+            ChartHit::Plot if double && e.modifiers.control => {
+                let view = self.state.read(cx).source.view();
+                let l = view.last_layout();
+                if let Some(&id) = l
+                    .panes
+                    .iter()
+                    .position(|r| r.y_range().contains(p.y))
+                    .and_then(|k| l.pane_ids.get(k))
+                {
+                    self.edit_panes(cx, |v| v.toggle_pane_collapsed(id));
+                }
+            }
             ChartHit::Plot if double => self.view_mut(cx, |v| v.reset_view()),
             ChartHit::PriceAxis if double => self.view_mut(cx, |v| v.auto_scale()),
             ChartHit::Plot => self.drag = Some((Drag::Plot, p)),
@@ -329,9 +346,13 @@ impl<S: ChartSource> Chart<S> {
         let axis_hover = l.price_axis.x_range().contains(p.x)
             && p.y >= l.price_axis.top()
             && p.y <= l.time_axis.bottom();
-        if cursor != self.cursor || axis_hover != self.axis_hover {
+        let hover_pane = (p.x >= l.plot.left() && p.x <= l.price_axis.right())
+            .then(|| l.panes.iter().position(|r| r.y_range().contains(p.y)))
+            .flatten();
+        if cursor != self.cursor || axis_hover != self.axis_hover || hover_pane != self.hover_pane {
             self.cursor = cursor;
             self.axis_hover = axis_hover;
+            self.hover_pane = hover_pane;
             cx.notify();
         }
         self.set_pointer(Some(p), cx);
@@ -433,8 +454,9 @@ impl<S: ChartSource> Render for Chart<S> {
             .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
                 if !*hovered && this.drag.is_none() {
                     this.set_pointer(None, cx);
-                    if this.axis_hover {
+                    if this.axis_hover || this.hover_pane.is_some() {
                         this.axis_hover = false;
+                        this.hover_pane = None;
                         cx.notify();
                     }
                 }
@@ -466,6 +488,7 @@ impl<S: ChartSource> Render for Chart<S> {
                     .child(self.overlay.clone()),
             )
             .children(self.corner_controls(window, cx))
+            .children(self.pane_controls(window, cx))
     }
 }
 
@@ -722,9 +745,133 @@ impl<S: ChartSource> Chart<S> {
             div()
                 .absolute()
                 .inset_0()
-                .child(buttons)
-                .child(gear)
+                .child(buttons.on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()))
+                .child(gear.on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()))
                 .into_any_element(),
         )
+    }
+
+    /// Changes the pane layout and reports it.
+    fn edit_panes(&self, cx: &mut Context<Self>, f: impl FnOnce(&mut ChartView)) {
+        self.view_mut(cx, f);
+        cx.emit(ChartEvent::Changed);
+        cx.notify();
+    }
+
+    /// TradingView's pane buttons at the top right of the hovered pane:
+    /// move up / down, delete, collapse / restore, maximize / restore.
+    fn pane_controls(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        use lucide_icons::Icon;
+
+        let state = self.state.read(cx);
+        let view = state.source.view();
+        let l = view.last_layout().clone();
+        let n = l.panes.len();
+        let shown = self
+            .hover_pane
+            .filter(|&k| n > 1 && k < n && self.drag.is_none());
+        let target = if shown.is_some() { 1.0f32 } else { 0.0 };
+        let pane = shown.and_then(|k| {
+            let id = *l.pane_ids.get(k)?;
+            Some((
+                k,
+                id,
+                view.is_pane_collapsed(id),
+                view.maximized == Some(id),
+            ))
+        });
+        let bg = crate::hsla(tt_theme::with_alpha(state.theme.bg, 0.9));
+        let (theme_text, theme_hover) = (state.theme.text, state.theme.selection);
+        let opacity = gpui_kit::base::transition(
+            "pane-controls",
+            target,
+            gpui_kit::base::Transition::new(Duration::from_millis(90)),
+            window,
+            cx,
+        );
+        let (k, id, collapsed, maximized) = pane?;
+        let rect = l.panes[k];
+        let origin = l.plot.min;
+
+        let (fg, hover_bg) = (crate::hsla(theme_text), crate::hsla(theme_hover));
+        // Lucide glyph buttons, like the legend's eye / gear / trash.
+        let button = |name: &'static str, icon: Icon, tip: &'static str| {
+            div()
+                .id(name)
+                .size(px(22.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(4.))
+                .cursor_pointer()
+                .text_color(fg)
+                .hover(move |d| d.bg(hover_bg))
+                .child(
+                    div()
+                        .font_family(crate::ICON_FONT)
+                        .text_size(px(15.))
+                        .line_height(px(15.))
+                        .child(char::from(icon).to_string()),
+                )
+                .tooltip(move |window, cx| {
+                    gpui_kit::component::tooltip::Tooltip::new(tip).build(window, cx)
+                })
+        };
+        let mut row = div()
+            .absolute()
+            .top(px(rect.top() - origin.y + 3.0))
+            .right(px(l.price_axis.width() + 6.0))
+            .flex()
+            .gap_0p5()
+            .px_0p5()
+            .rounded(px(4.))
+            .bg(bg)
+            .opacity(opacity)
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
+        if k >= 2 {
+            row = row.child(button("pane-up", Icon::ArrowUp, "Move pane up").on_click(
+                cx.listener(move |this, _, _, cx| {
+                    this.edit_panes(cx, |v| {
+                        v.move_pane(id, true);
+                    })
+                }),
+            ));
+        }
+        if k >= 1 && k + 1 < n {
+            row = row.child(
+                button("pane-down", Icon::ArrowDown, "Move pane down").on_click(cx.listener(
+                    move |this, _, _, cx| {
+                        this.edit_panes(cx, |v| {
+                            v.move_pane(id, false);
+                        })
+                    },
+                )),
+            );
+        }
+        if k >= 1 {
+            row = row.child(button("pane-delete", Icon::Trash2, "Delete pane").on_click(
+                cx.listener(move |this, _, _, cx| {
+                    this.hover_pane = None;
+                    this.edit_panes(cx, |v| v.remove_indicator(id))
+                }),
+            ));
+        }
+        let (icon, tip) = if collapsed {
+            (Icon::ChevronsUpDown, "Restore pane")
+        } else {
+            (Icon::ChevronsDownUp, "Collapse pane")
+        };
+        row = row.child(button("pane-collapse", icon, tip).on_click(
+            cx.listener(move |this, _, _, cx| this.edit_panes(cx, |v| v.toggle_pane_collapsed(id))),
+        ));
+        let (icon, tip) = if maximized {
+            (Icon::Minimize2, "Restore pane")
+        } else {
+            (Icon::Maximize2, "Maximize pane")
+        };
+        row = row.child(button("pane-maximize", icon, tip).on_click(
+            cx.listener(move |this, _, _, cx| this.edit_panes(cx, |v| v.toggle_pane_maximized(id))),
+        ));
+        Some(row.into_any_element())
     }
 }

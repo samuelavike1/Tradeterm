@@ -30,6 +30,8 @@ const VOLUME_OVERLAY_FRACTION: f32 = 0.25;
 const MAIN_PANE_WEIGHT: f32 = 3.0;
 /// Panes can't be dragged smaller than this.
 const MIN_PANE_HEIGHT: f32 = 40.0;
+/// Height of a collapsed pane beyond the legend's font size.
+const COLLAPSED_PANE_EXTRA: f32 = 14.0;
 /// Padding above and below the values of an indicator pane.
 const PANE_PADDING: f64 = 0.1;
 
@@ -107,6 +109,11 @@ pub struct ChartLayout {
     pub time_axis: Rect,
     /// Price pane first, then indicator panes.
     pub panes: Vec<Rect>,
+    /// Per pane: its id for the pane actions (0 = price pane, otherwise the
+    /// indicator id).
+    pub pane_ids: Vec<u64>,
+    /// Per pane: collapsed to a strip.
+    pub collapsed: Vec<bool>,
 }
 
 impl Default for ChartLayout {
@@ -116,6 +123,8 @@ impl Default for ChartLayout {
             price_axis: Rect::NOTHING,
             time_axis: Rect::NOTHING,
             panes: Vec::new(),
+            pane_ids: Vec::new(),
+            collapsed: Vec::new(),
         }
     }
 }
@@ -125,6 +134,7 @@ impl Default for ChartLayout {
 #[derive(Debug, Clone)]
 struct Frame {
     vp: Viewport,
+    main_collapsed: bool,
     panes: Vec<Pane>,
     bars: Vec<crate::bars::DrawBar>,
     range: std::ops::Range<usize>,
@@ -162,6 +172,11 @@ pub struct ChartView {
     pub indicators: Vec<Indicator>,
     /// Price-pane legend collapsed to a "⌄ N" button.
     pub legend_collapsed: bool,
+    /// Price pane collapsed to a strip.
+    pub main_collapsed: bool,
+    /// Pane filling the chart, the others collapsed (0 = price pane,
+    /// otherwise an indicator id). Not saved.
+    pub maximized: Option<u64>,
     /// Relative height of the price pane vs. indicator panes.
     main_weight: f32,
     /// Legend buttons laid out last frame.
@@ -202,6 +217,8 @@ impl ChartView {
             invert_scale: false,
             indicators: Vec::new(),
             legend_collapsed: false,
+            main_collapsed: false,
+            maximized: None,
             main_weight: MAIN_PANE_WEIGHT,
             legend_hits: Vec::new(),
             last_layout: ChartLayout::default(),
@@ -285,7 +302,11 @@ impl ChartView {
         }
         let l = &self.last_layout;
         for (k, pane) in l.panes.iter().enumerate().skip(1) {
-            if (p.y - pane.top()).abs() <= 3.0
+            // Dividers next to a collapsed pane don't resize.
+            let fixed = |i: usize| l.collapsed.get(i).copied().unwrap_or(false);
+            if !fixed(k - 1)
+                && !fixed(k)
+                && (p.y - pane.top()).abs() <= 3.0
                 && p.x >= l.plot.left()
                 && p.x <= l.price_axis.right()
             {
@@ -307,6 +328,100 @@ impl ChartView {
         ChartHit::None
     }
 
+    /// Ids of the panes top to bottom: 0 for the price pane, then the
+    /// indicator ids of the indicator panes.
+    pub fn pane_ids(&self) -> Vec<u64> {
+        std::iter::once(0)
+            .chain(
+                self.indicators
+                    .iter()
+                    .filter(|i| i.placement() == Placement::Pane)
+                    .map(|i| i.id),
+            )
+            .collect()
+    }
+
+    /// Whether pane `id` (see [`Self::pane_ids`]) is drawn as a strip.
+    pub fn is_pane_collapsed(&self, id: u64) -> bool {
+        if let Some(m) = self.maximized
+            && self.pane_ids().contains(&m)
+        {
+            return m != id;
+        }
+        if id == 0 {
+            self.main_collapsed
+        } else {
+            self.indicators
+                .iter()
+                .any(|i| i.id == id && i.pane_collapsed)
+        }
+    }
+
+    /// Collapses pane `id` to a strip, or restores it. Restoring from a
+    /// maximized layout un-maximizes. The last open pane can't collapse.
+    pub fn toggle_pane_collapsed(&mut self, id: u64) {
+        if self.maximized.take().is_some() {
+            return;
+        }
+        let ids = self.pane_ids();
+        let open = ids.iter().filter(|&&p| !self.is_pane_collapsed(p)).count();
+        let collapsing = !self.is_pane_collapsed(id);
+        if collapsing && open <= 1 {
+            return;
+        }
+        if id == 0 {
+            self.main_collapsed = collapsing;
+        } else if let Some(i) = self.indicator_mut(id) {
+            i.pane_collapsed = collapsing;
+        }
+    }
+
+    /// Lets pane `id` fill the chart (the others collapse), or restores.
+    /// A collapsed pane that is maximized opens again.
+    pub fn toggle_pane_maximized(&mut self, id: u64) {
+        if self.maximized == Some(id) {
+            self.maximized = None;
+            return;
+        }
+        self.maximized = Some(id);
+        if id == 0 {
+            self.main_collapsed = false;
+        } else if let Some(i) = self.indicator_mut(id) {
+            i.pane_collapsed = false;
+        }
+    }
+
+    /// Moves indicator pane `id` one pane up or down. The price pane stays
+    /// on top. Returns whether it moved.
+    pub fn move_pane(&mut self, id: u64, up: bool) -> bool {
+        let slots: Vec<usize> = self
+            .indicators
+            .iter()
+            .enumerate()
+            .filter(|(_, i)| i.placement() == Placement::Pane)
+            .map(|(k, _)| k)
+            .collect();
+        let Some(j) = slots.iter().position(|&k| self.indicators[k].id == id) else {
+            return false;
+        };
+        let other = if up { j.checked_sub(1) } else { Some(j + 1) };
+        match other.and_then(|o| slots.get(o)) {
+            Some(&o) => {
+                self.indicators.swap(slots[j], o);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Removes an indicator (and its pane).
+    pub fn remove_indicator(&mut self, id: u64) {
+        self.indicators.retain(|i| i.id != id);
+        if self.maximized == Some(id) {
+            self.maximized = None;
+        }
+    }
+
     /// Clicks a legend button; returns the indicator whose settings should
     /// open (the gear).
     pub fn press_legend(&mut self, id: u64, button: LegendButton) -> Option<u64> {
@@ -318,7 +433,7 @@ impl ChartView {
                 }
             }
             LegendButton::Settings => return Some(id),
-            LegendButton::Remove => self.indicators.retain(|i| i.id != id),
+            LegendButton::Remove => self.remove_indicator(id),
         }
         None
     }
@@ -438,6 +553,7 @@ impl ChartView {
                 panes: fr.panes.clone(),
                 range: fr.range.clone(),
                 legend_collapsed: self.legend_collapsed,
+                main_collapsed: fr.main_collapsed,
                 legend_hover: input.legend_hover,
                 price_axis: fr.price_axis,
                 time_axis: fr.time_axis,
@@ -509,6 +625,7 @@ impl ChartView {
             ind.sync(display);
         }
         // Volume overlays share the bottom of the price pane.
+        let main_collapsed = self.is_pane_collapsed(0);
         let volume_rect = self
             .indicators
             .iter()
@@ -595,6 +712,7 @@ impl ChartView {
                 let (min, max) = pane_range(ind, range.clone(), stride);
                 Pane {
                     index,
+                    collapsed: self.is_pane_collapsed(ind.id),
                     vp: Viewport {
                         price_min: min,
                         price_max: max,
@@ -613,6 +731,7 @@ impl ChartView {
 
         let frame = Frame {
             vp,
+            main_collapsed,
             panes,
             bars,
             range: range.clone(),
@@ -637,6 +756,12 @@ impl ChartView {
             price_axis,
             time_axis,
             panes: pane_rects,
+            pane_ids: self.pane_ids(),
+            collapsed: self
+                .pane_ids()
+                .iter()
+                .map(|&id| self.is_pane_collapsed(id))
+                .collect(),
         };
         self.stats = ChartStats {
             visible_bars: range.len(),
@@ -654,7 +779,26 @@ impl ChartView {
         }
     }
 
-    /// Price pane first, then one rect per indicator pane, split by weight.
+    /// Height of a collapsed pane strip.
+    fn collapsed_height(&self) -> f32 {
+        self.style.font_size + COLLAPSED_PANE_EXTRA
+    }
+
+    /// Per pane: collapsed; plus the strip height and the height left for
+    /// the open panes.
+    fn pane_split(&self, plot_h: f32) -> (Vec<bool>, f32, f32) {
+        let ids = self.pane_ids();
+        let mut collapsed: Vec<bool> = ids.iter().map(|&id| self.is_pane_collapsed(id)).collect();
+        if collapsed.iter().all(|&c| c) {
+            collapsed[0] = false;
+        }
+        let strip = self.collapsed_height().min(plot_h / ids.len() as f32);
+        let n = collapsed.iter().filter(|&&c| c).count() as f32;
+        (collapsed, strip, (plot_h - strip * n).max(0.0))
+    }
+
+    /// Price pane first, then one rect per indicator pane: collapsed panes
+    /// get a strip, the open ones split the rest by weight.
     fn pane_rects(&self, plot: Rect) -> Vec<Rect> {
         let weights: Vec<f32> = std::iter::once(self.main_weight)
             .chain(
@@ -664,16 +808,27 @@ impl ChartView {
                     .map(|i| i.pane_weight),
             )
             .collect();
-        let total: f32 = weights.iter().sum();
+        let (collapsed, strip, free) = self.pane_split(plot.height());
+        let total: f32 = weights
+            .iter()
+            .zip(&collapsed)
+            .filter(|(_, c)| !**c)
+            .map(|(w, _)| w)
+            .sum();
         let mut top = plot.top();
         weights
             .iter()
             .enumerate()
             .map(|(k, w)| {
+                let h = if collapsed[k] {
+                    strip
+                } else {
+                    free * w / total
+                };
                 let bottom = if k + 1 == weights.len() {
                     plot.bottom()
                 } else {
-                    (top + plot.height() * w / total).round()
+                    (top + h).round()
                 };
                 let r = Rect::from_x_y_ranges(plot.x_range(), top..=bottom);
                 top = bottom;
@@ -684,6 +839,7 @@ impl ChartView {
 
     /// Moves divider `k` (above pane `k`; 0 is the price pane) by `dy` points.
     fn drag_divider(&mut self, k: usize, dy: f32, plot_h: f32) {
+        let (collapsed, _, free) = self.pane_split(plot_h);
         let mut weights: Vec<&mut f32> = std::iter::once(&mut self.main_weight)
             .chain(
                 self.indicators
@@ -692,10 +848,17 @@ impl ChartView {
                     .map(|i| &mut i.pane_weight),
             )
             .collect();
-        if k == 0 || k >= weights.len() || plot_h <= 0.0 {
+        if k == 0 || k >= weights.len() || free <= 0.0 || collapsed[k - 1] || collapsed[k] {
             return;
         }
-        let total: f32 = weights.iter().map(|w| **w).sum();
+        // Weights of the open panes share the height the strips leave.
+        let total: f32 = weights
+            .iter()
+            .zip(&collapsed)
+            .filter(|(_, c)| !**c)
+            .map(|(w, _)| **w)
+            .sum();
+        let plot_h = free;
         let min = total * MIN_PANE_HEIGHT / plot_h;
         let (above, below) = (*weights[k - 1], *weights[k]);
         let dw = (dy / plot_h * total).clamp(min - above, below - min);
@@ -1001,6 +1164,98 @@ mod tests {
         assert!(!v.is_auto_scale());
         v.auto_scale();
         assert!(v.is_auto_scale());
+    }
+
+    #[test]
+    fn pane_collapse_maximize_and_move() {
+        let mut series = CandleSeries::new();
+        for i in 0..100 {
+            let c = 100.0 + (i as f64 * 0.3).sin();
+            series.upsert(tt_core::Candle {
+                open_time_ms: i * 60_000,
+                open: c,
+                high: c + 1.0,
+                low: c - 1.0,
+                close: c,
+                volume: 1.0,
+            });
+        }
+        let data = ChartData {
+            series: &series,
+            title: "T",
+            tick_size: Some(0.01),
+            now_ms: None,
+            bar_interval_ms: Some(60_000),
+            bar_close_ms: None,
+        };
+        let theme = Theme::dark();
+        let full = Rect::from_min_size(pos2(0.0, 0.0), emath::vec2(900.0, 600.0));
+        let mut v = ChartView {
+            indicators: vec![
+                Indicator::new(tt_core::StudyKind::Rsi.default_study()),
+                Indicator::new(tt_core::StudyKind::Macd.default_study()),
+            ],
+            ..Default::default()
+        };
+        let (rsi, macd) = (v.indicators[0].id, v.indicators[1].id);
+        let draw = |v: &mut ChartView| {
+            v.render(
+                &mut Texts::default(),
+                full,
+                1.0,
+                data,
+                &theme,
+                RenderInput::default(),
+            );
+            v.last_layout().clone()
+        };
+        let l = draw(&mut v);
+        assert_eq!(l.pane_ids, vec![0, rsi, macd]);
+        let strip = v.style.font_size + COLLAPSED_PANE_EXTRA;
+
+        // Collapse RSI: a strip; its divider no longer resizes.
+        v.toggle_pane_collapsed(rsi);
+        let l = draw(&mut v);
+        assert!((l.panes[1].height() - strip).abs() < 1.0);
+        assert_ne!(
+            v.hit_test(pos2(l.plot.center().x, l.panes[1].top())),
+            ChartHit::PaneDivider(1)
+        );
+        assert_eq!(
+            v.hit_test(pos2(l.plot.center().x, l.panes[2].top())),
+            ChartHit::Plot
+        );
+        v.toggle_pane_collapsed(rsi);
+        assert!(!v.is_pane_collapsed(rsi));
+
+        // The last open pane can't collapse.
+        v.toggle_pane_collapsed(0);
+        v.toggle_pane_collapsed(rsi);
+        v.toggle_pane_collapsed(macd);
+        assert!(!v.is_pane_collapsed(macd));
+        v.toggle_pane_collapsed(0);
+        v.toggle_pane_collapsed(rsi);
+
+        // Maximize MACD: the others become strips; again restores.
+        v.toggle_pane_maximized(macd);
+        let l = draw(&mut v);
+        assert_eq!(l.collapsed, vec![true, true, false]);
+        assert!(l.panes[2].height() > 400.0);
+        v.toggle_pane_maximized(macd);
+        assert_eq!(draw(&mut v).collapsed, vec![false, false, false]);
+        // Maximizing a collapsed pane opens it for good.
+        v.toggle_pane_collapsed(rsi);
+        v.toggle_pane_maximized(rsi);
+        v.toggle_pane_maximized(rsi);
+        assert!(!v.is_pane_collapsed(rsi));
+
+        // Move MACD up; RSI can't move above the price pane.
+        assert!(v.move_pane(macd, true));
+        assert_eq!(v.pane_ids(), vec![0, macd, rsi]);
+        assert!(!v.move_pane(macd, true));
+        assert!(!v.move_pane(rsi, false));
+        v.remove_indicator(macd);
+        assert_eq!(v.pane_ids(), vec![0, rsi]);
     }
 
     #[test]

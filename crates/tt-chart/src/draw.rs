@@ -35,6 +35,9 @@ pub(crate) struct Scene<'a> {
     /// Indices of the visible bars (`display` indices).
     pub range: Range<usize>,
     pub legend_collapsed: bool,
+    /// The price pane is collapsed to a strip (another pane is maximized or
+    /// it was collapsed): only the readout is drawn.
+    pub main_collapsed: bool,
     /// Legend row under the pointer (indicator id; 0 = collapse button).
     pub legend_hover: Option<u64>,
     pub price_axis: Rect,
@@ -63,6 +66,8 @@ pub(crate) struct Scene<'a> {
 pub(crate) struct Pane {
     pub index: usize,
     pub vp: Viewport,
+    /// Collapsed to a strip: only the legend is drawn.
+    pub collapsed: bool,
 }
 
 impl Pane {
@@ -135,11 +140,14 @@ pub(crate) fn draw_base(c: &mut dyn Canvas, s: &Scene<'_>) {
     let ppp = c.pixels_per_point();
     if s.style.grid_horizontal {
         c.set_clip(s.vp_rect());
-        for (y, _) in &price_ticks {
+        for (y, _) in price_ticks.iter().filter(|_| !s.main_collapsed) {
             let y = crisp(*y, ppp);
             grid_line(c, s, false, pos2(s.plot.left(), y), pos2(s.plot.right(), y));
         }
         for (pane, ticks) in s.panes.iter().zip(&pane_ticks) {
+            if pane.collapsed {
+                continue;
+            }
             c.set_clip(pane.rect());
             for (y, _) in ticks {
                 let y = crisp(*y, ppp);
@@ -160,7 +168,7 @@ pub(crate) fn draw_base(c: &mut dyn Canvas, s: &Scene<'_>) {
         }
     }
 
-    if let Some(vr) = s.volume_rect {
+    if let Some(vr) = s.volume_rect.filter(|_| !s.main_collapsed) {
         c.set_clip(vr);
         for ind in s.indicators.iter().filter(|i| i.visible) {
             if ind.placement() == Placement::VolumeOverlay {
@@ -168,18 +176,20 @@ pub(crate) fn draw_base(c: &mut dyn Canvas, s: &Scene<'_>) {
             }
         }
     }
-    c.set_clip(s.vp_rect());
-    series(c, s);
-    for ind in s.indicators.iter().filter(|i| i.visible) {
-        if ind.placement() == Placement::Overlay {
-            study_plots(c, s, &s.vp, ind);
+    if !s.main_collapsed {
+        c.set_clip(s.vp_rect());
+        series(c, s);
+        for ind in s.indicators.iter().filter(|i| i.visible) {
+            if ind.placement() == Placement::Overlay {
+                study_plots(c, s, &s.vp, ind);
+            }
         }
+        last_price_line(c, s);
     }
-    last_price_line(c, s);
     for pane in &s.panes {
         c.set_clip(pane.rect());
         let ind = &s.indicators[pane.index];
-        if ind.visible {
+        if ind.visible && !pane.collapsed {
             pane_guides(c, s, pane, ind);
             study_plots(c, s, &pane.vp, ind);
         }
@@ -208,6 +218,11 @@ pub(crate) fn draw_base(c: &mut dyn Canvas, s: &Scene<'_>) {
     if let Some(tag) = last_price_tag(c, s) {
         grouped.push((0, tag));
     }
+    // Collapsed panes show no tags.
+    grouped.retain(|(pane, _)| match pane {
+        0 => !s.main_collapsed,
+        k => !s.panes[k - 1].collapsed,
+    });
     let mut tags: Vec<Tag> = Vec::new();
     for pane in 0..=s.panes.len() {
         let (top, bottom) = if pane == 0 {
@@ -226,8 +241,13 @@ pub(crate) fn draw_base(c: &mut dyn Canvas, s: &Scene<'_>) {
         }
         tags.extend(group);
     }
-    price_labels(c, s, &price_ticks, &tags, (s.plot.top(), s.vp.plot.bottom));
+    if !s.main_collapsed {
+        price_labels(c, s, &price_ticks, &tags, (s.plot.top(), s.vp.plot.bottom));
+    }
     for (pane, ticks) in s.panes.iter().zip(&pane_ticks) {
+        if pane.collapsed {
+            continue;
+        }
         let r = pane.rect();
         price_labels(c, s, ticks, &tags, (r.top(), r.bottom()));
     }
@@ -908,7 +928,7 @@ fn legends(c: &mut dyn Canvas, s: &Scene<'_>, bar: Option<usize>) -> Vec<LegendH
         .iter()
         .filter(|i| i.placement() != Placement::Pane)
         .collect();
-    if !main.is_empty() {
+    if !main.is_empty() && !s.main_collapsed {
         if !s.legend_collapsed {
             for ind in &main {
                 hits.push(legend_row(c, s, pos, ind, bar));
@@ -1464,6 +1484,7 @@ mod tests {
             panes: Vec::new(),
             range: 0..series.len(),
             legend_collapsed: false,
+            main_collapsed: false,
             legend_hover: None,
             price_axis: Rect::from_min_max(pos2(800.0, 0.0), pos2(880.0, 500.0)),
             time_axis: Rect::from_min_max(pos2(0.0, 500.0), pos2(800.0, 528.0)),
@@ -1546,6 +1567,7 @@ mod tests {
                 scale: PriceScale::linear(),
                 ..scene.vp
             },
+            collapsed: false,
         }];
         scene.legend_hover = Some(inds[1].id);
         let mut c = Recorder::default();

@@ -66,7 +66,10 @@ with a custom chart widget built to handle a million bars.
   Volume MA.
 - **Indicator panes** each have their own auto-fit scale, grid and labels.
   Oscillators get guide levels (RSI 30/50/70, Stochastic 20/50/80). Drag a pane
-  divider to resize.
+  divider to resize. Hovering a pane shows TradingView's pane buttons at its top
+  right: **move up / down**, **delete**, **collapse** (to a strip with just the
+  legend; also Ctrl + double-click) and **maximize** (the other panes collapse).
+  Collapsed panes are saved with the tab.
 - **Legend:** one row per indicator with its inputs and values at the crosshair.
   Price-pane rows sit under the OHLC readout and collapse to a "⌄ N" button; each
   pane's row is at its top left. Hovering a row shows **eye** (hide), **gear**

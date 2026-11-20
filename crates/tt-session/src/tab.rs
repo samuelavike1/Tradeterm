@@ -102,6 +102,7 @@ impl ChartTab {
         chart.chart_type = s.chart_type;
         chart.scale_mode = s.scale_mode;
         chart.invert_scale = s.invert_scale;
+        chart.main_collapsed = s.main_collapsed;
         chart.indicators = s.indicators.iter().map(|i| i.to_indicator()).collect();
         chart.legend_collapsed = s.legend_collapsed;
         let (_, rx) = crossbeam_channel::unbounded();
@@ -141,6 +142,7 @@ impl ChartTab {
                 .collect(),
             legend_collapsed: self.chart.legend_collapsed,
             invert_scale: self.chart.invert_scale,
+            main_collapsed: self.chart.main_collapsed,
             show_volume: None,
         }
     }

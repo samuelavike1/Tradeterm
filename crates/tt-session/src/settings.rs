@@ -43,6 +43,8 @@ pub struct IndicatorConfig {
     pub colors: Vec<[u8; 4]>,
     /// Relative pane height (pane indicators).
     pub pane_weight: f32,
+    /// Pane collapsed to a strip.
+    pub pane_collapsed: bool,
 }
 
 impl Default for IndicatorConfig {
@@ -62,12 +64,14 @@ impl IndicatorConfig {
                 .map(|c| c.to_srgba_unmultiplied())
                 .collect(),
             pane_weight: ind.pane_weight,
+            pane_collapsed: ind.pane_collapsed,
         }
     }
 
     pub fn to_indicator(&self) -> Indicator {
         let mut ind = Indicator::new(self.study.clone());
         ind.visible = self.visible;
+        ind.pane_collapsed = self.pane_collapsed;
         for (slot, [r, g, b, a]) in ind.colors.iter_mut().zip(&self.colors) {
             *slot = Color32::from_rgba_unmultiplied(*r, *g, *b, *a);
         }
@@ -93,6 +97,8 @@ pub struct TabSettings {
     pub legend_collapsed: bool,
     /// "Invert scale" of the price axis.
     pub invert_scale: bool,
+    /// Price pane collapsed to a strip.
+    pub main_collapsed: bool,
     /// Pre-indicator volume toggle; only read, to migrate old files.
     #[serde(skip_serializing)]
     pub show_volume: Option<bool>,
@@ -108,6 +114,7 @@ impl Default for TabSettings {
             indicators: vec![IndicatorConfig::default()],
             legend_collapsed: false,
             invert_scale: false,
+            main_collapsed: false,
             show_volume: None,
         }
     }
@@ -327,6 +334,7 @@ mod tests {
                     ],
                     legend_collapsed: true,
                     invert_scale: false,
+                    main_collapsed: false,
                     show_volume: None,
                 },
             ],
