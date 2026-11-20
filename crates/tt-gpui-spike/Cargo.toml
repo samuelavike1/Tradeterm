@@ -1,0 +1,20 @@
+[package]
+name = "tt-gpui-spike"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Spike: the tradeterm chart on gpui (gpui-kit) to compare with egui."
+
+[dependencies]
+gpui-kit = "=0.10.0"
+egui = "0.37.0"
+lucide-icons = "1.77.0"
+eframe = "0.37.0"
+tracing = "0.1"
+tt-core = { path = "../tt-core" }
+tt-chart = { path = "../tt-chart" }
+tt-theme = { path = "../tt-theme" }
+
+[dev-dependencies]
+tempfile = "3.27.0"
