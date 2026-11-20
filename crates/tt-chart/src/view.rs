@@ -1,7 +1,7 @@
-use crate::ChartStyle;
 use crate::paint::{self, FrameData};
 use crate::scale::price_decimals;
 use crate::viewport::{PlotRect, Viewport, padded_price_range, visible_range};
+use crate::{ChartStyle, ChartType, ScaleMode};
 use egui::{CursorIcon, Rect, Response, Sense, Ui, pos2};
 use tt_core::CandleSeries;
 use tt_theme::Theme;
@@ -23,6 +23,9 @@ const Y_PADDING: f64 = 0.08;
 #[derive(Debug, Clone)]
 pub struct ChartView {
     pub style: ChartStyle,
+    pub chart_type: ChartType,
+    pub scale_mode: ScaleMode,
+    pub show_volume: bool,
     bar_spacing: f32,
     right_offset: f32,
 }
@@ -37,6 +40,9 @@ impl ChartView {
     pub fn new(style: ChartStyle) -> Self {
         Self {
             style,
+            chart_type: ChartType::default(),
+            scale_mode: ScaleMode::default(),
+            show_volume: true,
             bar_spacing: DEFAULT_SPACING,
             right_offset: DEFAULT_RIGHT_OFFSET,
         }

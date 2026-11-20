@@ -19,3 +19,6 @@ tt-brokers = { version = "0.1.0", path = "../tt-brokers" }
 tt-chart = { version = "0.1.0", path = "../tt-chart" }
 tt-core = { version = "0.1.0", path = "../tt-core" }
 tt-theme = { version = "0.1.0", path = "../tt-theme" }
+
+[dev-dependencies]
+tempfile = "3.27.0"

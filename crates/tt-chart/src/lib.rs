@@ -8,11 +8,13 @@
 //!   while consuming the same [`viewport::Viewport`].
 //! - [`ChartView`]: input handling (pan/zoom/crosshair) and per-frame layout.
 
+mod kind;
 mod paint;
 pub mod scale;
 mod style;
 mod view;
 pub mod viewport;
 
+pub use kind::{ChartType, ScaleMode};
 pub use style::ChartStyle;
 pub use view::ChartView;

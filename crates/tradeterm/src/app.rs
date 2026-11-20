@@ -1,9 +1,11 @@
 use crate::runtime::BackgroundRuntime;
+use crate::settings::{AppSettings, SettingsStore};
 use crossbeam_channel::Receiver;
 use egui::{
     Align, Color32, Key, KeyboardShortcut, Layout, Modifiers, RichText, Sense, TextEdit, vec2,
 };
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::task::JoinHandle;
 use tracing::{error, info};
 use tt_brokers::{BinanceSource, MarketDataSource};
@@ -11,7 +13,6 @@ use tt_chart::ChartView;
 use tt_core::{CandleSeries, ConnectionStatus, EventSink, MarketEvent, Symbol, Timeframe};
 use tt_theme::{Theme, ThemeMode, ThemeOverrides};
 
-const DEFAULT_SYMBOL: &str = "BTCUSDT";
 const TOGGLE_THEME: KeyboardShortcut =
     KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::T);
 
@@ -35,15 +36,29 @@ pub struct TradeTermApp {
     /// Resolved palette for the current frame.
     theme: Theme,
 
+    settings_store: SettingsStore,
     runtime: BackgroundRuntime,
 }
 
 impl TradeTermApp {
-    pub fn new(ctx: egui::Context, runtime: BackgroundRuntime) -> anyhow::Result<Self> {
+    pub fn new(
+        ctx: egui::Context,
+        runtime: BackgroundRuntime,
+        settings: AppSettings,
+        settings_store: SettingsStore,
+    ) -> anyhow::Result<Self> {
         let source = Arc::new(BinanceSource::new()?);
         let (_, rx) = crossbeam_channel::unbounded();
-        let theme_mode = ThemeMode::System;
-        let overrides = ThemeOverrides::default();
+        let theme_mode = settings.theme_mode;
+        let overrides = settings.overrides();
+        let mut symbol = Symbol::new(&settings.last_symbol);
+        if !symbol.is_valid() {
+            symbol = Symbol::new(AppSettings::default().last_symbol);
+        }
+        let mut chart = ChartView::default();
+        chart.chart_type = settings.chart_type;
+        chart.scale_mode = settings.scale_mode;
+        chart.show_volume = settings.show_volume;
         tt_theme::install(&ctx, theme_mode, overrides);
         let theme = tt_theme::current(&ctx, overrides);
         let mut app = Self {
@@ -51,15 +66,16 @@ impl TradeTermApp {
             stream: None,
             source,
             rx,
-            symbol: Symbol::new(DEFAULT_SYMBOL),
-            symbol_input: DEFAULT_SYMBOL.to_owned(),
-            timeframe: Timeframe::M1,
+            symbol_input: symbol.to_string(),
+            symbol,
+            timeframe: settings.last_timeframe,
             series: CandleSeries::new(),
             status: ConnectionStatus::Connecting,
-            chart: ChartView::default(),
+            chart,
             theme_mode,
             overrides,
             theme,
+            settings_store,
             runtime,
         };
         app.restart_stream();
@@ -104,6 +120,21 @@ impl TradeTermApp {
                 MarketEvent::Status(s) => self.status = s,
             }
         }
+    }
+
+    /// Current persisted state, derived from the live app state.
+    fn settings_snapshot(&self) -> AppSettings {
+        let mut s = AppSettings {
+            theme_mode: self.theme_mode,
+            last_symbol: self.symbol.to_string(),
+            last_timeframe: self.timeframe,
+            chart_type: self.chart.chart_type,
+            scale_mode: self.chart.scale_mode,
+            show_volume: self.chart.show_volume,
+            ..AppSettings::default()
+        };
+        s.set_overrides(self.overrides);
+        s
     }
 
     fn set_theme(&mut self, mode: ThemeMode, overrides: ThemeOverrides) {
@@ -264,10 +295,20 @@ fn color_row(ui: &mut egui::Ui, label: &str, value: &mut Option<Color32>, curren
 }
 
 impl eframe::App for TradeTermApp {
+    fn on_exit(&mut self) {
+        let snapshot = self.settings_snapshot();
+        self.settings_store.flush(&snapshot);
+    }
+
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.handle_hotkeys(ctx);
         self.drain_events();
         self.theme = tt_theme::current(ctx, self.overrides);
+
+        let snapshot = self.settings_snapshot();
+        if let Some(wait) = self.settings_store.tick(&snapshot, Instant::now()) {
+            ctx.request_repaint_after(wait);
+        }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -297,6 +338,8 @@ impl eframe::App for TradeTermApp {
 
 impl Drop for TradeTermApp {
     fn drop(&mut self) {
+        let snapshot = self.settings_snapshot();
+        self.settings_store.flush(&snapshot);
         if let Some(task) = self.stream.take() {
             task.abort();
         }

@@ -2,9 +2,11 @@
 
 mod app;
 mod runtime;
+mod settings;
 
 use app::TradeTermApp;
 use runtime::BackgroundRuntime;
+use settings::SettingsStore;
 
 fn main() -> eframe::Result {
     tracing_subscriber::fmt()
@@ -15,6 +17,7 @@ fn main() -> eframe::Result {
         .init();
 
     let runtime = BackgroundRuntime::start().expect("failed to start tokio runtime");
+    let (settings, store) = SettingsStore::load(SettingsStore::default_path());
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -27,6 +30,13 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "tradeterm",
         options,
-        Box::new(move |cc| Ok(Box::new(TradeTermApp::new(cc.egui_ctx.clone(), runtime)?))),
+        Box::new(move |cc| {
+            Ok(Box::new(TradeTermApp::new(
+                cc.egui_ctx.clone(),
+                runtime,
+                settings,
+                store,
+            )?))
+        }),
     )
 }
