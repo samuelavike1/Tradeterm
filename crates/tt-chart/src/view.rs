@@ -1,6 +1,6 @@
 use crate::draw::{self, Scene};
 use crate::render::{Canvas, EguiCanvas};
-use crate::scale::price_decimals;
+use crate::scale::{precision_from_tick_size, price_decimals};
 use crate::viewport::{
     PlotRect, PriceScale, Viewport, fit_price_range, pan_price_range, visible_range_for,
     zoom_price_range,
@@ -34,8 +34,9 @@ pub struct ChartData<'a> {
     pub series: &'a CandleSeries,
     /// Shown top-left before the OHLC readout.
     pub title: &'a str,
-    /// Decimals for price labels (from the symbol's tick size); guessed if `None`.
-    pub price_precision: Option<usize>,
+    /// Minimum price increment; drives label precision and the finest grid step.
+    /// Precision is guessed from the price magnitude if `None`.
+    pub tick_size: Option<f64>,
 }
 
 /// What happened in [`ChartView::show`].
@@ -119,9 +120,10 @@ impl ChartView {
         let (full, _) = ui.allocate_exact_size(ui.available_size(), Sense::hover());
         let mut canvas = EguiCanvas::new(ui.painter_at(full));
 
-        let precision = data
-            .price_precision
-            .unwrap_or_else(|| series.last().map_or(2, |c| price_decimals(c.close)));
+        let precision = match data.tick_size {
+            Some(t) => precision_from_tick_size(t),
+            None => series.last().map_or(2, |c| price_decimals(c.close)),
+        };
         let (plot, price_axis, time_axis) = self.layout(full, &mut canvas, series, precision);
 
         // ---- interaction --------------------------------------------------
@@ -180,6 +182,7 @@ impl ChartView {
             series,
             crosshair,
             precision,
+            tick_size: data.tick_size,
             bar_interval_ms: bar_interval_ms(series),
             title: data.title,
         };

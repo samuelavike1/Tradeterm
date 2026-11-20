@@ -3,9 +3,8 @@
 use crate::ChartStyle;
 use crate::ScaleMode;
 use crate::render::Canvas;
-use crate::scale::{
-    format_axis_time, format_full_time, format_price, format_volume, nice_step, time_label_step,
-};
+use crate::scale::{self, format_full_time, format_percent, format_price, format_volume};
+use crate::time_axis;
 use crate::viewport::Viewport;
 use egui::{Align2, Color32, Pos2, Rect, pos2, vec2};
 use tt_core::CandleSeries;
@@ -24,6 +23,7 @@ pub(crate) struct Scene<'a> {
     pub series: &'a CandleSeries,
     pub crosshair: Option<Pos2>,
     pub precision: usize,
+    pub tick_size: Option<f64>,
     pub bar_interval_ms: i64,
     pub title: &'a str,
 }
@@ -98,46 +98,31 @@ fn crisp(v: f32, ppp: f32) -> f32 {
 /// Grid/label positions on the price axis: (y, label).
 fn price_ticks(s: &Scene<'_>) -> Vec<(f32, String)> {
     let vp = &s.vp;
-    let sc = vp.scale;
-    let lo = sc.to_scaled(vp.price_min);
-    let hi = sc.to_scaled(vp.price_max);
-    let target = (s.plot.height() / 56.0).max(2.0) as f64;
-    let step = nice_step(hi - lo, target);
-    let first = (lo / step).ceil() as i64;
-    let last = (hi / step).floor() as i64;
-    (first..=last)
-        .map(|k| {
-            let v = k as f64 * step;
-            let price = sc.from_scaled(v);
-            let label = match sc.mode {
-                ScaleMode::Percent => format!("{v:+.2}%"),
-                _ => format_price(price, s.precision),
-            };
-            (vp.y_of(price), label)
-        })
+    scale::price_ticks(vp, 56.0, s.tick_size)
+        .into_iter()
+        .map(|p| (vp.y_of(p), axis_value_label(s, p)))
         .collect()
 }
 
 /// Time-axis tick positions: (x, label).
 fn time_ticks(c: &mut dyn Canvas, s: &Scene<'_>) -> Vec<(f32, String)> {
     let ppp = c.pixels_per_point();
-    let step = time_label_step(s.bar_interval_ms, s.vp.bar_spacing, 90.0);
-    let times = s.series.open_times();
-    let mut out = Vec::new();
-    let mut last_x = f32::NEG_INFINITY;
-    for i in s.vp.visible_range() {
-        let t = times[i];
-        if t.rem_euclid(step) != 0 {
-            continue;
-        }
-        let x = crisp(s.vp.x_of(i as f32), ppp);
-        if x - last_x < 60.0 {
-            continue;
-        }
-        last_x = x;
-        out.push((x, format_axis_time(t, step)));
-    }
-    out
+    let vp = s.vp;
+    // Examine at most one candidate bar per ~3 points.
+    let stride = (3.0 / vp.bar_spacing).ceil().max(1.0) as usize;
+    let size = s.style.font_size;
+    time_axis::time_ticks(
+        s.series.open_times(),
+        vp.visible_range(),
+        (s.plot.left(), s.plot.right()),
+        stride,
+        18.0,
+        |i| crisp(vp.x_of(i as f32), ppp),
+        |text| c.text_size(text, size).x,
+    )
+    .into_iter()
+    .map(|t| (t.x, t.label))
+    .collect()
 }
 
 fn candles(c: &mut dyn Canvas, s: &Scene<'_>) {
@@ -226,7 +211,7 @@ fn time_labels(c: &mut dyn Canvas, s: &Scene<'_>, ticks: &[(f32, String)]) {
 /// Label as shown on the price axis for a price (percent in percent mode).
 fn axis_value_label(s: &Scene<'_>, price: f64) -> String {
     match s.vp.scale.mode {
-        ScaleMode::Percent => format!("{:+.2}%", s.vp.scale.to_scaled(price)),
+        ScaleMode::Percent => format_percent(s.vp.scale.to_scaled(price)),
         _ => format_price(price, s.precision),
     }
 }

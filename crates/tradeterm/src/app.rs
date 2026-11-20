@@ -401,7 +401,7 @@ impl eframe::App for TradeTermApp {
             let data = ChartData {
                 series: &self.series,
                 title: &title,
-                price_precision: None,
+                tick_size: None,
             };
             self.chart.show(ui, data, &theme);
         });
