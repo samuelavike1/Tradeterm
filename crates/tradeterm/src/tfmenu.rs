@@ -498,7 +498,7 @@ enum RowAction {
 }
 
 /// A solid five-pointed star (Lucide's star is outline-only).
-fn filled_star(p: &egui::Painter, c: Pos2, r: f32, color: Color32) {
+pub fn filled_star(p: &egui::Painter, c: Pos2, r: f32, color: Color32) {
     let mut mesh = Mesh::default();
     mesh.colored_vertex(c, color);
     for k in 0..10 {

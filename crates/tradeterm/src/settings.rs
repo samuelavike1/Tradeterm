@@ -72,6 +72,8 @@ pub struct AppSettings {
     pub custom_timeframes: Vec<Timeframe>,
     /// Collapsed sections of the interval menu ("seconds", "minutes", …).
     pub collapsed_timeframe_sections: Vec<String>,
+    /// Chart types pinned to the toolbar as quick buttons.
+    pub favorite_chart_types: Vec<ChartType>,
 }
 
 impl Default for AppSettings {
@@ -86,6 +88,7 @@ impl Default for AppSettings {
             favorite_timeframes: Timeframe::ALL.to_vec(),
             custom_timeframes: Vec::new(),
             collapsed_timeframe_sections: Vec::new(),
+            favorite_chart_types: Vec::new(),
         }
     }
 }

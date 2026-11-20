@@ -45,6 +45,8 @@ pub struct TradeTermApp {
     perf: PerfStats,
     search: SymbolSearch,
     tf_menu: TimeframeMenu,
+    /// Chart types pinned to the toolbar (persisted).
+    chart_favorites: Vec<tt_chart::ChartType>,
     /// Recently opened symbols, most recent first (persisted).
     recent: Vec<RecentSymbol>,
     /// Owns the tokio thread; dropped last (after the tabs).
@@ -101,6 +103,7 @@ impl TradeTermApp {
             settings_store,
             perf: PerfStats::default(),
             search: SymbolSearch::default(),
+            chart_favorites: settings.favorite_chart_types.clone(),
             tf_menu: TimeframeMenu::new(
                 settings.favorite_timeframes.clone(),
                 settings.custom_timeframes.clone(),
@@ -144,6 +147,7 @@ impl TradeTermApp {
             favorite_timeframes: self.tf_menu.favorites.clone(),
             custom_timeframes: self.tf_menu.custom.clone(),
             collapsed_timeframe_sections: self.tf_menu.collapsed_keys(),
+            favorite_chart_types: self.chart_favorites.clone(),
             ..AppSettings::default()
         };
         s.set_overrides(self.overrides);
@@ -315,6 +319,7 @@ impl TradeTermApp {
         let theme = self.theme.clone();
         let tab = &mut self.tabs[self.active];
         let tf_menu = &mut self.tf_menu;
+        let chart_favorites = &mut self.chart_favorites;
         let mut open_search: Option<String> = None;
         toolbar::apply_style(ui, &theme);
         ui.horizontal(|ui| {
@@ -334,7 +339,7 @@ impl TradeTermApp {
             }
 
             toolbar::divider(ui, &theme);
-            toolbar::chart_type_picker(ui, &mut tab.chart.chart_type, &theme);
+            toolbar::chart_type_picker(ui, &mut tab.chart.chart_type, chart_favorites, &theme);
             toolbar::divider(ui, &theme);
 
             // Display options on the right, like TradingView's chart settings.

@@ -192,9 +192,156 @@ fn series(c: &mut dyn Canvas, s: &Scene<'_>) {
     match s.chart_type {
         ChartType::Candles | ChartType::HeikinAshi => candles(c, s, &g, false),
         ChartType::HollowCandles => candles(c, s, &g, true),
+        ChartType::VolumeCandles => volume_candles(c, s, &g),
         ChartType::Bars => ohlc_bars(c, s, &g),
         ChartType::Line => line(c, s, false),
+        ChartType::LineWithMarkers => {
+            line(c, s, false);
+            markers(c, s);
+        }
+        ChartType::StepLine => step_line(c, s),
         ChartType::Area => line(c, s, true),
+        ChartType::HlcArea => hlc_area(c, s),
+        ChartType::Baseline => baseline(c, s),
+        ChartType::Columns => columns(c, s, &g),
+        ChartType::HighLow => high_low(c, s, &g),
+        ChartType::Renko | ChartType::LineBreak => bricks(c, s),
+    }
+}
+
+/// Candles whose body width is proportional to volume (vs. the visible max).
+fn volume_candles(c: &mut dyn Canvas, s: &Scene<'_>, g: &BarGeom) {
+    let vp = &s.vp;
+    let max = max_volume(s.bars).max(f64::MIN_POSITIVE);
+    // Allow wider bodies than regular candles: the busiest bar fills its slot.
+    let full_px = (s.vp.bar_spacing * g.ppp * 0.92).floor().max(1.0);
+    for b in s.bars {
+        let (body, wick) = s.colors(b.close >= b.open);
+        let cx = g.center_px(b.x);
+        let mut w = (full_px * (b.volume / max) as f32).round().max(1.0);
+        if w as i32 % 2 == 0 {
+            w -= 1.0;
+        }
+        let w = w.max(1.0);
+        c.fill_rect(
+            g.column(cx, g.wick_px.min(w), vp.y_of(b.high), vp.y_of(b.low)),
+            wick,
+        );
+        let (y0, y1) = g.span(vp.y_of(b.open), vp.y_of(b.close));
+        c.fill_rect(g.column(cx, w, y0, y1), body);
+    }
+}
+
+/// A dot on each close (when bars are far enough apart to see them).
+fn markers(c: &mut dyn Canvas, s: &Scene<'_>) {
+    if s.vp.bar_spacing < 6.0 {
+        return;
+    }
+    let color = line_color(s);
+    let r = (s.vp.bar_spacing * 0.18).clamp(2.0, 3.5);
+    for b in s.bars {
+        c.fill_circle(pos2(b.x, s.vp.y_of(b.close)), r, color);
+    }
+}
+
+fn step_line(c: &mut dyn Canvas, s: &Scene<'_>) {
+    let half = s.vp.bar_spacing / 2.0;
+    let mut pts = Vec::with_capacity(s.bars.len() * 2);
+    for b in s.bars {
+        let y = s.vp.y_of(b.close);
+        pts.push(pos2(b.x - half, y));
+        pts.push(pos2(b.x + half, y));
+    }
+    c.polyline(&pts, 1.5, line_color(s));
+}
+
+/// High (up color), low (down color) and close lines with bands between.
+fn hlc_area(c: &mut dyn Canvas, s: &Scene<'_>) {
+    let vp = &s.vp;
+    let pts = |f: fn(&DrawBar) -> f64| -> Vec<Pos2> {
+        s.bars.iter().map(|b| pos2(b.x, vp.y_of(f(b)))).collect()
+    };
+    let (high, low, close) = (pts(|b| b.high), pts(|b| b.low), pts(|b| b.close));
+    let alpha = if s.theme.dark { 0.22 } else { 0.18 };
+    c.fill_between(&high, &close, with_alpha(s.theme.up, alpha));
+    c.fill_between(&close, &low, with_alpha(s.theme.down, alpha));
+    c.polyline(&high, 1.0, s.theme.up);
+    c.polyline(&low, 1.0, s.theme.down);
+    c.polyline(&close, 1.5, line_color(s));
+}
+
+/// Closes against a baseline at the middle of the visible price range
+/// (TradingView's default 50%): green above, red below.
+fn baseline(c: &mut dyn Canvas, s: &Scene<'_>) {
+    let vp = &s.vp;
+    let base = vp.price_min + (vp.price_max - vp.price_min) * 0.5;
+    let yb = vp.y_of(base);
+    // Close points, with exact crossing points inserted so fills split cleanly.
+    let mut pts: Vec<Pos2> = Vec::with_capacity(s.bars.len() + 8);
+    for b in s.bars {
+        let p = pos2(b.x, vp.y_of(b.close));
+        if let Some(prev) = pts.last().copied()
+            && (prev.y - yb) * (p.y - yb) < 0.0
+        {
+            let t = (yb - prev.y) / (p.y - prev.y);
+            pts.push(pos2(prev.x + (p.x - prev.x) * t, yb));
+        }
+        pts.push(p);
+    }
+    let alpha = if s.theme.dark { 0.25 } else { 0.2 };
+    let above: Vec<Pos2> = pts.iter().map(|p| pos2(p.x, p.y.min(yb))).collect();
+    let below: Vec<Pos2> = pts.iter().map(|p| pos2(p.x, p.y.max(yb))).collect();
+    let flat: Vec<Pos2> = pts.iter().map(|p| pos2(p.x, yb)).collect();
+    c.fill_between(&above, &flat, with_alpha(s.theme.up, alpha));
+    c.fill_between(&flat, &below, with_alpha(s.theme.down, alpha));
+    let rect = s.vp_rect();
+    c.dashed_line(
+        pos2(rect.left(), yb),
+        pos2(rect.right(), yb),
+        1.0,
+        s.theme.text_muted,
+        3.0,
+        3.0,
+    );
+    // The line itself: up color above the baseline, down color below.
+    c.set_clip(Rect::from_min_max(rect.min, pos2(rect.right(), yb)));
+    c.polyline(&pts, 1.5, s.theme.up);
+    c.set_clip(Rect::from_min_max(pos2(rect.left(), yb), rect.max));
+    c.polyline(&pts, 1.5, s.theme.down);
+    c.set_clip(rect);
+}
+
+/// Columns from the bottom of the price area up to each close.
+fn columns(c: &mut dyn Canvas, s: &Scene<'_>, g: &BarGeom) {
+    let bottom = s.vp.plot.bottom;
+    for b in s.bars {
+        let (color, _) = s.colors(b.close >= b.prev_close);
+        let col = g.column(g.center_px(b.x), g.body_px, s.vp.y_of(b.close), bottom);
+        c.fill_rect(col, with_alpha(color, 0.85));
+    }
+}
+
+/// Bars spanning each high-low range.
+fn high_low(c: &mut dyn Canvas, s: &Scene<'_>, g: &BarGeom) {
+    let color = line_color(s);
+    for b in s.bars {
+        let (y0, y1) = g.span(s.vp.y_of(b.high), s.vp.y_of(b.low));
+        c.fill_rect(g.column(g.center_px(b.x), g.body_px, y0, y1), color);
+    }
+}
+
+/// Renko / Line break bricks: adjacent bodies without wicks.
+fn bricks(c: &mut dyn Canvas, s: &Scene<'_>) {
+    let ppp = c.pixels_per_point();
+    let w = (s.vp.bar_spacing * ppp * 0.9).floor().max(1.0) / ppp;
+    for b in s.bars {
+        let (color, _) = s.colors(b.close >= b.open);
+        let (y0, y1) = (s.vp.y_of(b.open), s.vp.y_of(b.close));
+        let rect = Rect::from_min_max(
+            pos2(b.x - w / 2.0, y0.min(y1)),
+            pos2(b.x + w / 2.0, y0.max(y1).max(y0.min(y1) + 1.0 / ppp)),
+        );
+        c.fill_rect(rect, color);
     }
 }
 
@@ -288,10 +435,10 @@ fn line(c: &mut dyn Canvas, s: &Scene<'_>, area: bool) {
 fn decimated(c: &mut dyn Canvas, s: &Scene<'_>, g: &BarGeom) {
     let vp = &s.vp;
     match s.chart_type {
-        ChartType::Line | ChartType::Area => {
+        t if t.is_line_like() => {
             let color = line_color(s);
             let pts: Vec<Pos2> = s.bars.iter().map(|b| pos2(b.x, vp.y_of(b.close))).collect();
-            if s.chart_type == ChartType::Area {
+            if matches!(s.chart_type, ChartType::Area | ChartType::Baseline) {
                 area_fill(c, s, &pts);
             }
             // Min/max envelope per column keeps spikes visible; then the close path.
@@ -636,6 +783,8 @@ mod tests {
         fn dashed_line(&mut self, _: Pos2, _: Pos2, _: f32, _: Color32, _: f32, _: f32) {}
         fn polyline(&mut self, _: &[Pos2], _: f32, _: Color32) {}
         fn fill_area(&mut self, _: &[Pos2], _: f32, _: f32, _: Color32, _: Color32) {}
+        fn fill_between(&mut self, _: &[Pos2], _: &[Pos2], _: Color32) {}
+        fn fill_circle(&mut self, _: Pos2, _: f32, _: Color32) {}
         fn text_styled(
             &mut self,
             pos: Pos2,

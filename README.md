@@ -17,8 +17,13 @@ with a custom chart widget built to handle a million bars.
 - **Tabs:** each tab is an independent chart with its own live stream, so background
   tabs stay current. Open tabs, their order and the active tab are restored on the
   next launch.
-- **Chart types:** Candles, Hollow candles, OHLC bars, Line, Area and Heikin Ashi.
-  Heikin Ashi bars are computed in `tt-core` and updated incrementally.
+- **Chart types (TradingView's menu):** Bars, Candles, Hollow candles, Volume candles ·
+  Line, Line with markers, Step line · Area, HLC area, Baseline · Columns, High-low ·
+  Heikin Ashi, Renko (ATR 14 box), Line break (3 lines). The grouped menu shows icons and
+  hover descriptions; star a type to pin it to the toolbar as a quick button. Heikin Ashi,
+  Renko and Line break are computed in `tt-core`, with tests. Footprint, TPO, session
+  volume profile and range bars need tick data and aren't included; Kagi and
+  Point & figure aren't implemented yet.
 - **Price scales:** linear, logarithmic, and percent (relative to the first visible
   close). The price axis auto-fits the visible bars with 8% padding. Drag the axis to
   scale it manually; double-click it to return to auto-fit.

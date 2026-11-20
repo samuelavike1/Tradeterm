@@ -50,6 +50,12 @@ pub trait Canvas {
         bottom: Color32,
     );
 
+    /// Fills the band between two polylines sampled at the same x positions
+    /// (`top[i].x == bottom[i].x`).
+    fn fill_between(&mut self, top: &[Pos2], bottom: &[Pos2], color: Color32);
+
+    fn fill_circle(&mut self, center: Pos2, radius: f32, color: Color32);
+
     /// Draws text in the UI font (`bold` uses the semibold face when the
     /// backend has one); returns its bounding rect.
     fn text_styled(

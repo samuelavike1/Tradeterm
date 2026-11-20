@@ -191,6 +191,33 @@ impl Canvas for EguiCanvas {
         )));
     }
 
+    fn fill_between(&mut self, top: &[Pos2], bottom: &[Pos2], color: Color32) {
+        let n = top.len().min(bottom.len());
+        if n < 2 || color.a() == 0 {
+            return;
+        }
+        self.flush_mesh();
+        let mut mesh = Mesh::default();
+        mesh.reserve_vertices(n * 2);
+        mesh.reserve_triangles((n - 1) * 2);
+        for i in 0..n {
+            mesh.colored_vertex(top[i], color);
+            mesh.colored_vertex(bottom[i], color);
+        }
+        for i in 0..(n as u32 - 1) {
+            let (a, b, c, d) = (2 * i, 2 * i + 1, 2 * i + 2, 2 * i + 3);
+            mesh.add_triangle(a, b, c);
+            mesh.add_triangle(c, b, d);
+        }
+        self.push_shape(Shape::mesh(mesh));
+    }
+
+    fn fill_circle(&mut self, center: Pos2, radius: f32, color: Color32) {
+        if self.clip.expand(radius).contains(center) {
+            self.add(Shape::circle_filled(center, radius, color));
+        }
+    }
+
     fn dotted_line(&mut self, a: Pos2, b: Pos2, color: Color32) {
         let ppp = self.ppp;
         let px = 1.0 / ppp;

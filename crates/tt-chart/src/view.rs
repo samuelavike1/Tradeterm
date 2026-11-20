@@ -1,4 +1,5 @@
 use crate::bars::{collect_bars, price_extent};
+use crate::derived::Derived;
 use crate::draw::{self, Scene};
 use crate::lod::Lod;
 use crate::render::{Canvas, EguiCanvas};
@@ -10,7 +11,7 @@ use crate::viewport::{
 use crate::{ChartStyle, ChartType, ScaleMode};
 use egui::{CursorIcon, Rect, Response, Sense, Ui, pos2};
 use std::time::{Duration, Instant};
-use tt_core::{CandleSeries, HeikinAshi};
+use tt_core::CandleSeries;
 use tt_theme::Theme;
 
 const DEFAULT_SPACING: f32 = 8.0;
@@ -90,11 +91,11 @@ pub struct ChartView {
     /// Price range used last frame (for switching auto → manual seamlessly).
     last_range: (f64, f64),
     last_scale_mode: ScaleMode,
-    /// Heikin Ashi cache, kept in sync incrementally.
-    ha: HeikinAshi,
+    /// Derived series (Heikin Ashi, Renko, Line break) for the chart type.
+    derived: Derived,
     /// Min/max pyramid for decimated drawing, and whether it was built from HA bars.
     lod: Lod,
-    lod_is_ha: bool,
+    lod_kind: Option<ChartType>,
     /// Requested zoom (number of bars to fit), applied on the next frame.
     pending_zoom: Option<usize>,
 }
@@ -118,9 +119,9 @@ impl ChartView {
             manual_range: None,
             last_range: (0.0, 1.0),
             last_scale_mode: ScaleMode::default(),
-            ha: HeikinAshi::new(),
+            derived: Derived::default(),
             lod: Lod::new(),
-            lod_is_ha: false,
+            lod_kind: None,
             pending_zoom: None,
         }
     }
@@ -155,7 +156,11 @@ impl ChartView {
     pub fn show(&mut self, ui: &mut Ui, data: ChartData<'_>, theme: &Theme) -> ChartOutput {
         let started = Instant::now();
         let series = data.series;
-        let n = series.len();
+        // Some chart types display a derived series (Heikin Ashi, Renko, Line
+        // break) whose bar count can differ from the raw one.
+        let mut derived = std::mem::take(&mut self.derived);
+        let display: &CandleSeries = derived.sync(self.chart_type, series).unwrap_or(series);
+        let n = display.len();
         if self.scale_mode != self.last_scale_mode {
             self.manual_range = None;
             self.last_scale_mode = self.scale_mode;
@@ -190,12 +195,12 @@ impl ChartView {
         self.clamp_offset(plot, n);
 
         // ---- bars to draw ---------------------------------------------------
-        let mut ha = std::mem::take(&mut self.ha);
-        let is_ha = self.chart_type == ChartType::HeikinAshi;
-        if is_ha {
-            ha.sync(series);
-        }
-        let display: &CandleSeries = if is_ha { ha.series() } else { series };
+        let lod_kind = match self.chart_type {
+            ChartType::HeikinAshi | ChartType::Renko | ChartType::LineBreak => {
+                Some(self.chart_type)
+            }
+            _ => None,
+        };
 
         // The volume pane takes the bottom of the plot; prices get the rest.
         let volume_rect = self.show_volume.then(|| {
@@ -236,9 +241,9 @@ impl ChartView {
         let ppp = ui.ctx().pixels_per_point();
         let decimated = self.bar_spacing * ppp < DECIMATE_BELOW_PX;
         let bars = if decimated {
-            if self.lod_is_ha != is_ha {
+            if self.lod_kind != lod_kind {
                 self.lod = Lod::new();
-                self.lod_is_ha = is_ha;
+                self.lod_kind = lod_kind;
             }
             self.lod.sync(display);
             self.lod.columns(display, range.clone(), &vp, ppp)
@@ -247,7 +252,7 @@ impl ChartView {
         };
 
         // ---- vertical range -------------------------------------------------
-        let close_only = matches!(self.chart_type, ChartType::Line | ChartType::Area);
+        let close_only = self.chart_type.uses_close_only();
         let auto = price_extent(&bars, close_only).map_or((0.0, 1.0), |(lo, hi)| {
             fit_price_range(lo, hi, vp.scale, Y_PADDING)
         });
@@ -285,7 +290,7 @@ impl ChartView {
         };
         draw::draw(&mut canvas, &scene);
         canvas.finish();
-        self.ha = ha;
+        self.derived = derived;
 
         self.stats = ChartStats {
             visible_bars: range.len(),
@@ -302,7 +307,13 @@ impl ChartView {
         };
         ChartOutput {
             response,
-            needs_older_history: n > 0 && range.start < BACKFILL_MARGIN_BARS,
+            needs_older_history: n > 0
+                && range.start < BACKFILL_MARGIN_BARS
+                // Brick charts compress many bars into few bricks, so the oldest
+                // brick is usually on screen; only load more once the user has
+                // scrolled back, or every view would page through all history.
+                && (!matches!(self.chart_type, ChartType::Renko | ChartType::LineBreak)
+                    || self.right_offset < 0.0),
         }
     }
 

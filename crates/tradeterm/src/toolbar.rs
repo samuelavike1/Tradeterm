@@ -185,12 +185,151 @@ pub fn chart_type_icon(p: &Painter, rect: Rect, ty: ChartType, color: Color32) {
             }
             p.add(Shape::line(pts, stroke));
         }
+        ChartType::VolumeCandles => {
+            // A thin and a wide candle.
+            for (dx, half_w, top, bot) in [(-4.5, 1.5, -6.0, 3.0), (3.0, 3.5, -2.0, 6.0)] {
+                let x = c.x + dx;
+                p.vline(x, (c.y + top - 2.5)..=(c.y + bot + 2.5), stroke);
+                p.rect_filled(
+                    Rect::from_min_max(pos2(x - half_w, c.y + top), pos2(x + half_w, c.y + bot)),
+                    0.5,
+                    color,
+                );
+            }
+        }
+        ChartType::LineWithMarkers => {
+            let pts = [
+                c + vec2(-8.0, 4.0),
+                c + vec2(-3.0, -2.0),
+                c + vec2(2.0, 2.0),
+                c + vec2(8.0, -5.0),
+            ];
+            p.add(Shape::line(pts.to_vec(), stroke));
+            for q in pts {
+                p.circle_filled(q, 1.8, color);
+            }
+        }
+        ChartType::StepLine => {
+            let pts = vec![
+                c + vec2(-9.0, 5.0),
+                c + vec2(-4.0, 5.0),
+                c + vec2(-4.0, -1.0),
+                c + vec2(2.0, -1.0),
+                c + vec2(2.0, -6.0),
+                c + vec2(9.0, -6.0),
+            ];
+            p.add(Shape::line(pts, stroke));
+        }
+        ChartType::HlcArea => {
+            let hi = vec![
+                c + vec2(-9.0, -3.0),
+                c + vec2(-2.0, -7.0),
+                c + vec2(9.0, -4.0),
+            ];
+            let lo = vec![c + vec2(-9.0, 5.0), c + vec2(-2.0, 2.0), c + vec2(9.0, 6.0)];
+            let mid = vec![
+                c + vec2(-9.0, 1.0),
+                c + vec2(-2.0, -2.5),
+                c + vec2(9.0, 1.0),
+            ];
+            p.add(Shape::line(hi, Stroke::new(1.1, color)));
+            p.add(Shape::line(lo, Stroke::new(1.1, color)));
+            p.add(Shape::line(mid, Stroke::new(1.0, with_alpha(color, 0.6))));
+        }
+        ChartType::Baseline => {
+            p.add(Shape::dashed_line(
+                &[c + vec2(-9.0, 0.0), c + vec2(9.0, 0.0)],
+                Stroke::new(1.0, with_alpha(color, 0.6)),
+                2.0,
+                2.0,
+            ));
+            let pts = vec![
+                c + vec2(-9.0, 5.0),
+                c + vec2(-3.0, 3.0),
+                c + vec2(2.0, -4.0),
+                c + vec2(9.0, -6.0),
+            ];
+            p.add(Shape::line(pts, stroke));
+        }
+        ChartType::Columns => {
+            for (dx, h) in [(-6.0, 6.0), (0.0, 11.0), (6.0, 8.0)] {
+                p.rect_filled(
+                    Rect::from_min_max(
+                        pos2(c.x + dx - 2.0, c.y + 7.0 - h),
+                        pos2(c.x + dx + 2.0, c.y + 7.0),
+                    ),
+                    0.5,
+                    color,
+                );
+            }
+        }
+        ChartType::HighLow => {
+            for (dx, top, bot) in [(-4.0, -7.0, 3.0), (4.0, -3.0, 7.0)] {
+                p.rect_stroke(
+                    Rect::from_min_max(
+                        pos2(c.x + dx - 2.5, c.y + top),
+                        pos2(c.x + dx + 2.5, c.y + bot),
+                    ),
+                    0.5,
+                    stroke,
+                    StrokeKind::Inside,
+                );
+            }
+        }
+        ChartType::Renko => {
+            // A staircase of equal bricks.
+            for k in 0..3 {
+                let x = c.x - 8.0 + k as f32 * 5.5;
+                let y = c.y + 3.0 - k as f32 * 4.5;
+                p.rect_stroke(
+                    Rect::from_min_size(pos2(x, y), vec2(5.0, 4.5)),
+                    0.0,
+                    stroke,
+                    StrokeKind::Inside,
+                );
+            }
+        }
+        ChartType::LineBreak => {
+            for (k, (top, bot)) in [(-1.0, 6.0), (-7.0, -1.0), (-4.0, 3.0)].iter().enumerate() {
+                let x = c.x - 8.0 + k as f32 * 5.5;
+                let r = Rect::from_min_max(pos2(x, c.y + top), pos2(x + 5.0, c.y + bot));
+                if k == 2 {
+                    p.rect_filled(r, 0.0, color);
+                } else {
+                    p.rect_stroke(r, 0.0, stroke, StrokeKind::Inside);
+                }
+            }
+        }
     }
 }
 
-/// Icon button showing the current chart type plus a chevron; opens a menu
-/// with every type.
-pub fn chart_type_picker(ui: &mut Ui, current: &mut ChartType, theme: &Theme) {
+/// Chart types like TradingView: one quick icon button per favorite type,
+/// then a button showing the current type that opens the grouped menu. In the
+/// menu a star toggles favorites; hovering a row explains the type.
+pub fn chart_type_picker(
+    ui: &mut Ui,
+    current: &mut ChartType,
+    favorites: &mut Vec<ChartType>,
+    theme: &Theme,
+) {
+    for fav in favorites.clone() {
+        if fav == *current {
+            continue;
+        }
+        let r = icon_button(ui, 32.0, false, theme, |p, rect, fg| {
+            chart_type_icon(
+                p,
+                Rect::from_center_size(rect.center(), vec2(20.0, 20.0)),
+                fav,
+                fg,
+            );
+        })
+        .on_hover_text(fav.label());
+        if r.clicked() {
+            *current = fav;
+        }
+    }
+
     let ty = *current;
     let resp = icon_button(ui, 44.0, false, theme, |p, rect, fg| {
         let icon = Rect::from_center_size(rect.center() - vec2(7.0, 0.0), vec2(20.0, 20.0));
@@ -199,34 +338,104 @@ pub fn chart_type_picker(ui: &mut Ui, current: &mut ChartType, theme: &Theme) {
     })
     .on_hover_text(format!("Chart type: {}", ty.label()));
 
-    egui::Popup::menu(&resp).show(|ui| {
-        ui.set_min_width(170.0);
-        for t in ChartType::ALL {
-            let (rect, row) = ui.allocate_exact_size(vec2(170.0, 28.0), Sense::click());
-            let selected = t == *current;
-            let bg = if selected {
-                theme.selection
-            } else if row.hovered() {
-                theme.border
-            } else {
-                Color32::TRANSPARENT
-            };
-            let p = ui.painter();
-            p.rect_filled(rect, 4.0, bg);
-            let icon =
-                Rect::from_center_size(pos2(rect.left() + 16.0, rect.center().y), vec2(20.0, 20.0));
-            chart_type_icon(p, icon, t, theme.text);
-            p.text(
-                pos2(rect.left() + 34.0, rect.center().y),
-                egui::Align2::LEFT_CENTER,
-                t.label(),
-                egui::FontId::proportional(13.0),
-                theme.text,
-            );
-            if row.clicked() {
-                *current = t;
-                ui.close();
+    egui::Popup::menu(&resp)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .show(|ui| {
+            const W: f32 = 230.0;
+            ui.set_width(W);
+            ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
+            for (g, group) in ChartType::GROUPS.iter().enumerate() {
+                if g > 0 {
+                    ui.add_space(4.0);
+                    let y = ui.cursor().top();
+                    ui.painter()
+                        .hline(ui.max_rect().x_range(), y, Stroke::new(1.0, theme.border));
+                    ui.add_space(4.0);
+                }
+                for &t in group.iter() {
+                    match chart_type_row(ui, t, t == *current, favorites.contains(&t), theme, W) {
+                        RowClick::Select => {
+                            *current = t;
+                            ui.close();
+                        }
+                        RowClick::Star => {
+                            if let Some(i) = favorites.iter().position(|f| *f == t) {
+                                favorites.remove(i);
+                            } else {
+                                favorites.push(t);
+                                // Keep TradingView's menu order on the toolbar.
+                                favorites
+                                    .sort_by_key(|f| ChartType::ALL.iter().position(|a| a == f));
+                            }
+                        }
+                        RowClick::None => {}
+                    }
+                }
             }
-        }
-    });
+        });
+}
+
+enum RowClick {
+    None,
+    Select,
+    Star,
+}
+
+fn chart_type_row(
+    ui: &mut Ui,
+    t: ChartType,
+    selected: bool,
+    favorite: bool,
+    theme: &Theme,
+    w: f32,
+) -> RowClick {
+    let (rect, resp) = ui.allocate_exact_size(vec2(w, 32.0), Sense::click());
+    let resp = resp.on_hover_text(t.description());
+    let star_rect =
+        Rect::from_center_size(pos2(rect.right() - 18.0, rect.center().y), vec2(22.0, 22.0));
+    let star = ui.interact(
+        star_rect,
+        ui.make_persistent_id(("ct_star", t.label())),
+        Sense::click(),
+    );
+    let hovered = resp.hovered() || star.hovered();
+    let (bg, fg) = if selected {
+        (theme.text, theme.bg)
+    } else if hovered {
+        (theme.selection, theme.text)
+    } else {
+        (Color32::TRANSPARENT, theme.text)
+    };
+    let p = ui.painter();
+    p.rect_filled(rect.shrink2(vec2(4.0, 1.0)), 5.0, bg);
+    chart_type_icon(
+        p,
+        Rect::from_center_size(pos2(rect.left() + 22.0, rect.center().y), vec2(20.0, 20.0)),
+        t,
+        fg,
+    );
+    p.text(
+        pos2(rect.left() + 42.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        t.label(),
+        egui::FontId::proportional(13.5),
+        fg,
+    );
+    if favorite {
+        crate::tfmenu::filled_star(p, star_rect.center(), 6.5, fg);
+    } else if hovered {
+        let c = if star.hovered() {
+            fg
+        } else {
+            with_alpha(fg, 0.6)
+        };
+        icons::paint(p, star_rect.center(), Icon::Star, 14.0, c);
+    }
+    if star.clicked() {
+        RowClick::Star
+    } else if resp.clicked() {
+        RowClick::Select
+    } else {
+        RowClick::None
+    }
 }

@@ -13,6 +13,7 @@
 //! - [`ChartView`]: input handling (pan/zoom/axis drags/crosshair) and layout.
 
 pub mod bars;
+mod derived;
 mod draw;
 mod kind;
 pub mod lod;
