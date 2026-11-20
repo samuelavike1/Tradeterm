@@ -6,7 +6,7 @@ use crate::lod::Lod;
 use crate::render::Canvas;
 use crate::scale::{precision_from_tick_size, price_decimals};
 use crate::viewport::{
-    PlotRect, PriceScale, Viewport, fit_price_range, pan_price_range, visible_range_for,
+    PlotRect, PriceScale, Viewport, fit_price_range_margins, pan_price_range, visible_range_for,
     zoom_price_range,
 };
 use crate::{ChartStyle, ChartType, ScaleMode};
@@ -19,8 +19,6 @@ const DEFAULT_SPACING: f32 = 8.0;
 const DEFAULT_RIGHT_OFFSET: f32 = 5.0;
 const MIN_SPACING: f32 = 0.0005;
 const MAX_SPACING: f32 = 80.0;
-/// Fraction of the visible price span added above and below when auto-fitting.
-const Y_PADDING: f64 = 0.08;
 /// Below this bar width (physical pixels) bars are drawn decimated.
 const DECIMATE_BELOW_PX: f32 = 2.0;
 /// Zoom sensitivity: scale factor exponent per scrolled point (~20 points
@@ -157,6 +155,8 @@ pub struct ChartView {
     pub style: ChartStyle,
     pub chart_type: ChartType,
     pub scale_mode: ScaleMode,
+    /// Higher prices lower on screen ("Invert scale").
+    pub invert_scale: bool,
     /// Indicators in draw order. Overlays draw on the price pane, Volume at
     /// its bottom, others each in their own pane below.
     pub indicators: Vec<Indicator>,
@@ -199,6 +199,7 @@ impl ChartView {
             style,
             chart_type: ChartType::default(),
             scale_mode: ScaleMode::default(),
+            invert_scale: false,
             indicators: Vec::new(),
             legend_collapsed: false,
             main_weight: MAIN_PANE_WEIGHT,
@@ -227,7 +228,7 @@ impl ChartView {
     /// Default zoom, scrolled to the latest bar, auto-fit price axis.
     pub fn reset_view(&mut self) {
         self.bar_spacing = DEFAULT_SPACING;
-        self.right_offset = DEFAULT_RIGHT_OFFSET;
+        self.right_offset = self.style.margin_right;
         self.manual_range = None;
     }
 
@@ -375,6 +376,11 @@ impl ChartView {
     /// Back to auto-fitting the visible bars vertically.
     pub fn auto_scale(&mut self) {
         self.manual_range = None;
+    }
+
+    /// Stops auto-fitting: keeps the current price range ("A" off).
+    pub fn freeze_scale(&mut self) {
+        self.manual_range = Some(self.last_range);
     }
 
     /// Backend-neutral frame: [`Self::render_base`] then
@@ -535,7 +541,10 @@ impl ChartView {
                 bottom: price_rect.bottom(),
             },
             bar_count: n,
-            scale: PriceScale::new(self.scale_mode, base),
+            scale: PriceScale {
+                inverted: self.invert_scale,
+                ..PriceScale::new(self.scale_mode, base)
+            },
         };
         self.last_price_scale = vp.scale;
         // Bars narrower than ~2 px are drawn as per-pixel min/max columns.
@@ -565,8 +574,12 @@ impl ChartView {
                 extent = Some(extent.map_or((lo, hi), |(a, b)| (a.min(lo), b.max(hi))));
             }
         }
+        let (top, bottom) = (
+            (self.style.margin_top as f64 / 100.0).clamp(0.0, 0.45),
+            (self.style.margin_bottom as f64 / 100.0).clamp(0.0, 0.45),
+        );
         let auto = extent.map_or((0.0, 1.0), |(lo, hi)| {
-            fit_price_range(lo, hi, vp.scale, Y_PADDING)
+            fit_price_range_margins(lo, hi, vp.scale, top, bottom)
         });
         self.last_range = self.manual_range.unwrap_or(auto);
         (vp.price_min, vp.price_max) = self.last_range;
@@ -704,6 +717,7 @@ impl ChartView {
         let sample_price = series.highs().last().copied().unwrap_or(1.0).abs() * 10.0;
         let sample = match self.scale_mode {
             ScaleMode::Percent => "+1000.00%".to_owned(),
+            ScaleMode::IndexedTo100 => "10000.00".to_owned(),
             _ => crate::scale::format_price(sample_price, precision),
         };
         let axis_w = (canvas.text_size(&sample, self.style.font_size).x + 22.0).max(64.0);

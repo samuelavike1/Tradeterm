@@ -17,7 +17,7 @@ use gpui_kit::*;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tt_brokers::BinanceSource;
-use tt_chart::{ChartType, ScaleMode};
+use tt_chart::ChartType;
 use tt_chart_gpui::{Chart, ChartEvent, ChartState, hsla};
 use tt_core::{ConnectionStatus, Symbol, Timeframe};
 use tt_session::runtime::BackgroundRuntime;
@@ -78,6 +78,8 @@ pub struct TradeTerm {
     overrides: ThemeOverrides,
     /// Chart palette for the current appearance.
     theme: Theme,
+    /// Chart settings shared by all charts (TradingView's Settings dialog).
+    chart_style: tt_chart::ChartStyle,
     store: SettingsStore,
     recent: Vec<RecentSymbol>,
     pub(crate) favorite_timeframes: Vec<Timeframe>,
@@ -104,6 +106,11 @@ impl TradeTerm {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        // Chart settings; older up/down color overrides move into them.
+        let mut style = settings.chart_style.clone();
+        let old = settings.overrides();
+        style.colors.up_body = style.colors.up_body.or(old.up);
+        style.colors.down_body = style.colors.down_body.or(old.down);
         let (tx, mut rx) = mpsc::unbounded::<Wake>();
         let tx_after = tx.clone();
         let source = Arc::new(BinanceSource::new().expect("HTTP client"));
@@ -116,7 +123,7 @@ impl TradeTerm {
             }),
             handle: runtime.handle().clone(),
             source,
-            chart_style: tt_chart::ChartStyle::default(),
+            chart_style: style.clone(),
         };
 
         // Background data → UI: drain all pending wake-ups, then apply events
@@ -180,8 +187,9 @@ impl TradeTerm {
             active: settings.active_tab,
             next_tab_id: 0,
             theme_mode: settings.theme_mode,
-            overrides: settings.overrides(),
-            theme: Theme::for_dark(dark).with_overrides(settings.overrides()),
+            overrides: style_overrides(&style),
+            theme: Theme::for_dark(dark).with_overrides(style_overrides(&style)),
+            chart_style: style.clone(),
             store,
             recent: settings.recent_symbols.clone(),
             favorite_timeframes: settings.favorite_timeframes.clone(),
@@ -238,6 +246,8 @@ impl TradeTerm {
                     app.open_indicator_settings(chart.clone(), *id, window, cx)
                 }
                 ChartEvent::Changed => app.persist(cx),
+                ChartEvent::StyleChanged(style) => app.set_chart_style(style.clone(), true, cx),
+                ChartEvent::OpenSettings => app.open_chart_settings(window, cx),
             },
         );
         self._subscriptions.push(sub);
@@ -309,7 +319,9 @@ impl TradeTerm {
             favorite_indicators: self.favorite_indicators.clone(),
             ..AppSettings::default()
         };
-        s.set_overrides(self.overrides);
+        // Up/down colors live in the chart settings now.
+        s.set_overrides(ThemeOverrides::default());
+        s.chart_style = self.chart_style.clone();
         s
     }
 
@@ -589,25 +601,43 @@ impl TradeTerm {
         )
     }
 
-    pub fn edit_overrides(&mut self, f: impl FnOnce(&mut ThemeOverrides), cx: &mut Context<Self>) {
-        f(&mut self.overrides);
+    /// Applies chart settings to every chart (and new tabs); saves them if
+    /// `persist` (the dialog previews without saving).
+    pub fn set_chart_style(
+        &mut self,
+        style: tt_chart::ChartStyle,
+        persist: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.overrides = style_overrides(&style);
         self.theme = Theme::for_dark(self.theme.dark).with_overrides(self.overrides);
+        self.shared.chart_style = style.clone();
+        self.chart_style = style.clone();
         for chart in &self.tabs {
-            let theme = self.theme.clone();
-            chart.update(cx, |chart, cx| chart.update_state(cx, |s| s.theme = theme));
+            let (style, theme) = (style.clone(), self.theme.clone());
+            chart.update(cx, |chart, cx| {
+                chart.update_state(cx, |s| {
+                    s.theme = theme;
+                    s.source.tab.chart.style = style;
+                })
+            });
         }
-        self.persist(cx);
+        if persist {
+            self.persist(cx);
+        }
         cx.notify();
     }
 
-    pub fn open_chart_colors(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// TradingView's chart "Settings" dialog.
+    pub fn open_chart_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let app = cx.entity().downgrade();
-        let theme = self.theme.clone();
-        let panel = cx.new(|cx| crate::colors::ChartColors::new(app, &theme, window, cx));
+        let (style, base) = (self.chart_style.clone(), Theme::for_dark(self.theme.dark));
+        let panel = cx
+            .new(|cx| crate::chart_settings::ChartSettingsPanel::new(app, style, base, window, cx));
         window.open_dialog(cx, move |dialog, _, _| {
             dialog
-                .title("Chart colors")
-                .w(px(420.))
+                .title("Settings")
+                .w(px(780.))
                 .entrance(DialogEntrance::FadeSlide)
                 .child(panel.clone())
         });
@@ -783,11 +813,11 @@ impl TradeTerm {
                                         .item(item("Light", ThemeMode::Light))
                                         .item(item("System", ThemeMode::System))
                                         .separator()
-                                        .item(PopupMenuItem::new("Chart colors…").on_click(
+                                        .item(PopupMenuItem::new("Chart settings…").on_click(
                                             move |_, window, cx| {
                                                 colors
                                                     .update(cx, |app, cx| {
-                                                        app.open_chart_colors(window, cx)
+                                                        app.open_chart_settings(window, cx)
                                                     })
                                                     .ok();
                                             },
@@ -822,12 +852,7 @@ impl TradeTerm {
         };
         let state = chart.read(cx).state.read(cx);
         let tab = &state.source.tab;
-        let (symbol, tf, chart_type, scale) = (
-            tab.display_symbol(),
-            tab.timeframe,
-            tab.chart.chart_type,
-            tab.chart.scale_mode,
-        );
+        let (symbol, tf, chart_type) = (tab.display_symbol(), tab.timeframe, tab.chart.chart_type);
 
         let mut tfs = h_flex().gap_0p5();
         let mut favorites = self.favorite_timeframes.clone();
@@ -862,24 +887,6 @@ impl TradeTerm {
             );
         }
         let ct_menu = chart_types.child(crate::menus::chart_type_menu(chart_type, cx));
-
-        let mut scales = h_flex().gap_0p5();
-        for (mode, label) in [
-            (ScaleMode::Linear, "Linear"),
-            (ScaleMode::Logarithmic, "Log"),
-            (ScaleMode::Percent, "%"),
-        ] {
-            scales = scales.child(
-                Button::new(label)
-                    .ghost()
-                    .small()
-                    .label(label)
-                    .selected(scale == mode)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.with_tab(cx, |s, _| s.tab.chart.scale_mode = mode)
-                    })),
-            );
-        }
 
         h_flex()
             .h(px(40.))
@@ -917,7 +924,6 @@ impl TradeTerm {
                     .on_click(cx.listener(|this, _, window, cx| this.open_indicators(window, cx))),
             )
             .child(div().flex_1())
-            .child(scales)
     }
 
     fn status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1069,5 +1075,14 @@ impl TradeTerm {
     #[allow(dead_code)]
     pub fn shared(&self) -> &Shared {
         &self.shared
+    }
+}
+
+/// Theme up/down overrides that follow the chart's candle body colors, so
+/// the tab strip and status bar match the chart.
+fn style_overrides(style: &tt_chart::ChartStyle) -> ThemeOverrides {
+    ThemeOverrides {
+        up: style.colors.up_body,
+        down: style.colors.down_body,
     }
 }

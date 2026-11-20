@@ -30,7 +30,7 @@ pub mod viewport;
 pub use draw::LegendButton;
 pub use indicators::Indicator;
 pub use kind::{ChartType, ScaleMode};
-pub use style::ChartStyle;
+pub use style::{ChartColors, ChartStyle, ScaleButtons};
 pub use view::{
     BACKFILL_MARGIN_BARS, ChartData, ChartHit, ChartLayout, ChartStats, ChartView, RenderInput,
     RenderOutput, WHEEL_ZOOM_PER_POINT,

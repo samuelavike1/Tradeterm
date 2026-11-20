@@ -7,9 +7,12 @@ license.workspace = true
 description = "Toolkit-independent candlestick chart for tradeterm (draws through a Canvas trait)."
 
 [dependencies]
-ecolor = "0.37.0"
+ecolor = { version = "0.37.0", features = ["serde"] }
 emath = "0.37.0"
 lucide-icons = "1.77.0"
 serde = { version = "1.0.229", features = ["derive"] }
 tt-core = { version = "0.1.0", path = "../tt-core" }
 tt-theme = { version = "0.1.0", path = "../tt-theme" }
+
+[dev-dependencies]
+serde_json = "1.0.154"

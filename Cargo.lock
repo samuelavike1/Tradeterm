@@ -1402,6 +1402,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "31bcbef0d4263a63eb32c4834e5d711613035ce1333468e107d928923e21e6e2"
 dependencies = [
  "emath",
+ "serde",
 ]
 
 [[package]]
@@ -6932,6 +6933,7 @@ dependencies = [
  "emath",
  "lucide-icons",
  "serde",
+ "serde_json",
  "tt-core",
  "tt-theme",
 ]

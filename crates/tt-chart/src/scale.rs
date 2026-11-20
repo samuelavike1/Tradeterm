@@ -114,7 +114,7 @@ pub fn price_ticks(vp: &Viewport, min_gap_px: f32, tick_size: Option<f64>) -> Ve
 
     match sc.mode {
         ScaleMode::Linear => linear_ticks(lo, hi, target, tick_size),
-        ScaleMode::Percent => {
+        ScaleMode::Percent | ScaleMode::IndexedTo100 => {
             let (a, b) = (sc.to_scaled(lo), sc.to_scaled(hi));
             ticks(a, b, nice_step(b - a, target))
                 .map(|p| sc.from_scaled(p))

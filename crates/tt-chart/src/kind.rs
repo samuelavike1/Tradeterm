@@ -136,13 +136,16 @@ pub enum ScaleMode {
     Logarithmic,
     /// Percent change relative to the first visible close.
     Percent,
+    /// The first visible close = 100.
+    IndexedTo100,
 }
 
 impl ScaleMode {
-    pub const ALL: [ScaleMode; 3] = [
+    pub const ALL: [ScaleMode; 4] = [
         ScaleMode::Linear,
-        ScaleMode::Logarithmic,
         ScaleMode::Percent,
+        ScaleMode::IndexedTo100,
+        ScaleMode::Logarithmic,
     ];
 
     pub fn label(self) -> &'static str {
@@ -150,6 +153,17 @@ impl ScaleMode {
             ScaleMode::Linear => "Linear",
             ScaleMode::Logarithmic => "Log",
             ScaleMode::Percent => "%",
+            ScaleMode::IndexedTo100 => "100",
+        }
+    }
+
+    /// Name in TradingView's price scale menu.
+    pub fn menu_label(self) -> &'static str {
+        match self {
+            ScaleMode::Linear => "Regular",
+            ScaleMode::Logarithmic => "Logarithmic",
+            ScaleMode::Percent => "Percent",
+            ScaleMode::IndexedTo100 => "Indexed to 100",
         }
     }
 }

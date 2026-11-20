@@ -9,9 +9,11 @@
 use crate::canvas::{CanvasFonts, GpuiCanvas};
 use crate::motion::{DragVelocity, ViewMotion};
 use emath::{Pos2, Rect, pos2, vec2};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
-use tt_chart::{ChartData, ChartHit, ChartView, RenderInput};
+use tt_chart::{ChartData, ChartHit, ChartView, RenderInput, ScaleMode};
 use tt_core::CandleSeries;
 use tt_theme::Theme;
 
@@ -106,16 +108,17 @@ impl<S: ChartSource> ChartState<S> {
         );
         let ppp = window.scale_factor();
         let (view, data) = self.source.parts();
+        let theme = view.style.theme(&self.theme);
         let mut canvas = GpuiCanvas::new(window, &self.fonts, full);
         let out = if overlay {
             let input = RenderInput {
                 crosshair: self.pointer,
                 legend_hover: self.legend_hover,
             };
-            view.render_overlay(&mut canvas, data, &self.theme, input);
+            view.render_overlay(&mut canvas, data, &theme, input);
             None
         } else {
-            Some(view.render_base(&mut canvas, full, ppp, data, &self.theme))
+            Some(view.render_base(&mut canvas, full, ppp, data, &theme))
         };
         let primitives = canvas.primitives;
         canvas.finish(cx);
@@ -167,8 +170,13 @@ pub enum ChartEvent {
     /// The gear (or a double-click) on an indicator's legend row.
     OpenIndicatorSettings(u64),
     /// Persisted chart state changed (indicators shown/removed, legend
-    /// collapsed, pane sizes).
+    /// collapsed, pane sizes, scale mode).
     Changed,
+    /// The price-scale menu changed an app-wide chart option; apply it to
+    /// every chart and save it.
+    StyleChanged(tt_chart::ChartStyle),
+    /// "More settings…" in the price-scale menu.
+    OpenSettings,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -194,6 +202,8 @@ pub struct Chart<S: ChartSource> {
     drag_velocity: DragVelocity,
     /// A next-frame callback is driving `motion`.
     animating: bool,
+    /// Pointer over the price axis or the corner (shows A / L / %).
+    axis_hover: bool,
     last_frame: Option<Instant>,
 }
 
@@ -234,6 +244,7 @@ impl<S: ChartSource> Chart<S> {
             drag_velocity: DragVelocity::default(),
             animating: false,
             last_frame: None,
+            axis_hover: false,
         }
     }
 
@@ -312,9 +323,15 @@ impl<S: ChartSource> Chart<S> {
             }
             return;
         }
-        let cursor = cursor_for(self.state.read(cx).source.view().hit_test(p));
-        if cursor != self.cursor {
+        let view = self.state.read(cx).source.view();
+        let cursor = cursor_for(view.hit_test(p));
+        let l = view.last_layout();
+        let axis_hover = l.price_axis.x_range().contains(p.x)
+            && p.y >= l.price_axis.top()
+            && p.y <= l.time_axis.bottom();
+        if cursor != self.cursor || axis_hover != self.axis_hover {
             self.cursor = cursor;
+            self.axis_hover = axis_hover;
             cx.notify();
         }
         self.set_pointer(Some(p), cx);
@@ -406,7 +423,7 @@ fn tt_chart_wheel_zoom_per_point() -> f32 {
 }
 
 impl<S: ChartSource> Render for Chart<S> {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .id("tt-chart")
             .relative()
@@ -416,6 +433,10 @@ impl<S: ChartSource> Render for Chart<S> {
             .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
                 if !*hovered && this.drag.is_none() {
                     this.set_pointer(None, cx);
+                    if this.axis_hover {
+                        this.axis_hover = false;
+                        cx.notify();
+                    }
                 }
             }))
             .on_mouse_down(
@@ -444,5 +465,266 @@ impl<S: ChartSource> Render for Chart<S> {
                     .size_full()
                     .child(self.overlay.clone()),
             )
+            .children(self.corner_controls(window, cx))
+    }
+}
+
+/// A price-scale menu action on the chart.
+type MenuAction<S> = Rc<dyn Fn(&mut Chart<S>, &mut Context<Chart<S>>)>;
+
+impl<S: ChartSource> Chart<S> {
+    /// Changes an app-wide style option and reports it.
+    fn edit_style(&self, cx: &mut Context<Self>, f: impl FnOnce(&mut tt_chart::ChartStyle)) {
+        let style = self.view_mut(cx, |v| {
+            f(&mut v.style);
+            v.style.clone()
+        });
+        cx.emit(ChartEvent::StyleChanged(style));
+    }
+
+    /// Changes this chart's scale and reports it.
+    fn edit_scale(&self, cx: &mut Context<Self>, f: impl FnOnce(&mut ChartView)) {
+        self.view_mut(cx, f);
+        cx.emit(ChartEvent::Changed);
+    }
+
+    /// Bottom-right corner, like TradingView: A / L / % at the bottom of the
+    /// price axis (on hover by default) and the gear with the price-scale
+    /// menu.
+    fn corner_controls(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        use gpui_kit::component::button::*;
+        use gpui_kit::component::menu::*;
+        use gpui_kit::component::{IconName, Sizable};
+
+        let state = self.state.read(cx);
+        let view = state.source.view();
+        let l = view.last_layout().clone();
+        if l.plot.width() <= 0.0 {
+            return None;
+        }
+        let theme = view.style.theme(&state.theme);
+        let (mode, auto, inverted) = (view.scale_mode, view.is_auto_scale(), view.invert_scale);
+        let style = view.style.clone();
+        let origin = l.plot.min;
+        let rel = |x: f32, y: f32| (px(x - origin.x), px(y - origin.y));
+
+        // A / L / %: fade in quickly while the pointer is over the axis.
+        let shown = match style.scale_buttons {
+            tt_chart::ScaleButtons::Always => true,
+            tt_chart::ScaleButtons::OnHover => self.axis_hover,
+            tt_chart::ScaleButtons::Hidden => false,
+        };
+        let opacity = gpui_kit::base::transition(
+            "scale-buttons",
+            if shown { 1.0f32 } else { 0.0 },
+            gpui_kit::base::Transition::new(Duration::from_millis(90)),
+            window,
+            cx,
+        );
+        let this = cx.entity().downgrade();
+        let letter = |id: &'static str, text: &'static str, active: bool, tip: &'static str| {
+            let (bg, fg) = if active {
+                (theme.text, theme.bg)
+            } else {
+                (theme.selection, theme.text)
+            };
+            div()
+                .id(id)
+                .size(px(20.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(4.))
+                .cursor_pointer()
+                .text_size(px(11.5))
+                .bg(crate::hsla(bg))
+                .text_color(crate::hsla(fg))
+                .hover(|d| d.opacity(0.85))
+                .child(text)
+                .tooltip(move |window, cx| {
+                    gpui_kit::component::tooltip::Tooltip::new(tip).build(window, cx)
+                })
+        };
+        let (x0, y0) = rel(l.price_axis.left(), l.time_axis.top() - 26.0);
+        let buttons = div()
+            .absolute()
+            .left(x0)
+            .top(y0)
+            .w(px(l.price_axis.width()))
+            .h(px(22.))
+            .flex()
+            .justify_center()
+            .gap_1()
+            .items_center()
+            .bg(crate::hsla(theme.bg))
+            .opacity(opacity)
+            .when(opacity < 0.01, |d| d.invisible())
+            .child(
+                letter("scale-auto", "A", auto, "Toggle auto scale").on_click(cx.listener(
+                    |this, _, _, cx| {
+                        this.edit_scale(cx, |v| {
+                            if v.is_auto_scale() {
+                                v.freeze_scale()
+                            } else {
+                                v.auto_scale()
+                            }
+                        })
+                    },
+                )),
+            )
+            .child(
+                letter(
+                    "scale-log",
+                    "L",
+                    mode == ScaleMode::Logarithmic,
+                    "Toggle log scale",
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.edit_scale(cx, |v| {
+                        v.scale_mode = if v.scale_mode == ScaleMode::Logarithmic {
+                            ScaleMode::Linear
+                        } else {
+                            ScaleMode::Logarithmic
+                        }
+                    })
+                })),
+            )
+            .child(
+                letter(
+                    "scale-pct",
+                    "%",
+                    mode == ScaleMode::Percent,
+                    "Toggle percent scale",
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.edit_scale(cx, |v| {
+                        v.scale_mode = if v.scale_mode == ScaleMode::Percent {
+                            ScaleMode::Linear
+                        } else {
+                            ScaleMode::Percent
+                        }
+                    })
+                })),
+            );
+
+        // The gear: TradingView's price-scale menu, opening upwards.
+        let (gx, gy) = rel(l.price_axis.left(), l.time_axis.top());
+        let menu_this = this.clone();
+        let gear = div()
+            .absolute()
+            .left(gx)
+            .top(gy)
+            .w(px(l.price_axis.width()))
+            .h(px(l.time_axis.height()))
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(
+                Button::new("scale-settings")
+                    .ghost()
+                    .xsmall()
+                    .icon(IconName::Settings)
+                    .tooltip("Price scale settings")
+                    .dropdown_menu_with_anchor(gpui_kit::Anchor::BottomRight, move |menu, _, _| {
+                        let t = menu_this.clone();
+                        let item = |label: &'static str, checked: bool, f: MenuAction<S>| {
+                            let t = t.clone();
+                            PopupMenuItem::new(label)
+                                .checked(checked)
+                                .on_click(move |_, _, cx| {
+                                    let f = f.clone();
+                                    t.update(cx, |c, cx| f(c, cx)).ok();
+                                })
+                        };
+                        let mut menu = menu
+                            .min_w(px(260.))
+                            .item(item(
+                                "Reset price scale",
+                                false,
+                                Rc::new(|c, cx| c.edit_scale(cx, |v| v.auto_scale())),
+                            ))
+                            .separator()
+                            .item(item(
+                                "Auto (fits data to screen)",
+                                auto,
+                                Rc::new(|c, cx| {
+                                    c.edit_scale(cx, |v| {
+                                        if v.is_auto_scale() {
+                                            v.freeze_scale()
+                                        } else {
+                                            v.auto_scale()
+                                        }
+                                    })
+                                }),
+                            ))
+                            .item(item(
+                                "Invert scale",
+                                inverted,
+                                Rc::new(|c, cx| {
+                                    c.edit_scale(cx, |v| v.invert_scale = !v.invert_scale)
+                                }),
+                            ))
+                            .separator();
+                        for m in ScaleMode::ALL {
+                            menu = menu.item(item(
+                                m.menu_label(),
+                                m == mode,
+                                Rc::new(move |c, cx| c.edit_scale(cx, |v| v.scale_mode = m)),
+                            ));
+                        }
+                        type Toggle = fn(&mut tt_chart::ChartStyle) -> &mut bool;
+                        let toggles: [(&'static str, bool, Toggle); 5] = [
+                            ("Symbol last price label", style.last_price_label, |s| {
+                                &mut s.last_price_label
+                            }),
+                            ("Countdown to bar close", style.countdown, |s| {
+                                &mut s.countdown
+                            }),
+                            (
+                                "Indicator value labels",
+                                style.indicator_value_labels,
+                                |s| &mut s.indicator_value_labels,
+                            ),
+                            ("No overlapping labels", style.no_overlapping_labels, |s| {
+                                &mut s.no_overlapping_labels
+                            }),
+                            ("Price line", style.last_price_line, |s| {
+                                &mut s.last_price_line
+                            }),
+                        ];
+                        menu = menu.separator().label("Labels and lines");
+                        for (label, on, field) in toggles {
+                            menu = menu.item(item(
+                                label,
+                                on,
+                                Rc::new(move |c, cx| {
+                                    c.edit_style(cx, |s| {
+                                        let b = field(s);
+                                        *b = !*b;
+                                    })
+                                }),
+                            ));
+                        }
+                        menu.separator().item(
+                            PopupMenuItem::new("More settings…")
+                                .icon(IconName::Settings)
+                                .on_click({
+                                    let t = t.clone();
+                                    move |_, _, cx| {
+                                        t.update(cx, |_, cx| cx.emit(ChartEvent::OpenSettings))
+                                            .ok();
+                                    }
+                                }),
+                        )
+                    }),
+            );
+        Some(
+            div()
+                .absolute()
+                .inset_0()
+                .child(buttons)
+                .child(gear)
+                .into_any_element(),
+        )
     }
 }

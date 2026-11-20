@@ -32,8 +32,11 @@ impl PlotRect {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PriceScale {
     pub mode: ScaleMode,
-    /// Reference price for [`ScaleMode::Percent`] (first visible close).
+    /// Reference price for [`ScaleMode::Percent`] / [`ScaleMode::IndexedTo100`]
+    /// (first visible close).
     pub base: f64,
+    /// Higher prices lower on screen ("Invert scale").
+    pub inverted: bool,
 }
 
 impl PriceScale {
@@ -43,7 +46,11 @@ impl PriceScale {
         } else {
             1.0
         };
-        Self { mode, base }
+        Self {
+            mode,
+            base,
+            inverted: false,
+        }
     }
 
     pub fn linear() -> Self {
@@ -56,6 +63,7 @@ impl PriceScale {
             ScaleMode::Linear => price,
             ScaleMode::Logarithmic => price.max(MIN_LOG_PRICE).ln(),
             ScaleMode::Percent => (price / self.base - 1.0) * 100.0,
+            ScaleMode::IndexedTo100 => price / self.base * 100.0,
         }
     }
 
@@ -65,8 +73,30 @@ impl PriceScale {
             ScaleMode::Linear => s,
             ScaleMode::Logarithmic => s.exp(),
             ScaleMode::Percent => self.base * (1.0 + s / 100.0),
+            ScaleMode::IndexedTo100 => self.base * s / 100.0,
         }
     }
+}
+
+/// Auto-fit range for prices `lo..hi` with `top` / `bottom` margins as
+/// fractions of the pane (TradingView's "Margins").
+pub fn fit_price_range_margins(
+    lo: f64,
+    hi: f64,
+    scale: PriceScale,
+    top: f64,
+    bottom: f64,
+) -> (f64, f64) {
+    let (s0, s1) = (scale.to_scaled(lo), scale.to_scaled(hi));
+    let span = s1 - s0;
+    if span.abs() <= f64::EPSILON * s1.abs().max(1.0) {
+        return fit_price_range(lo, hi, scale, top.max(bottom));
+    }
+    let total = span / (1.0 - top - bottom).max(0.1);
+    (
+        scale.from_scaled(s0 - total * bottom),
+        scale.from_scaled(s1 + total * top),
+    )
 }
 
 /// Everything needed to map data to the screen for one frame.
@@ -104,11 +134,14 @@ pub fn price_to_y(vp: &Viewport, price: f64) -> f32 {
     let lo = s.to_scaled(vp.price_min);
     let hi = s.to_scaled(vp.price_max);
     let span = hi - lo;
-    let t = if span.abs() > f64::EPSILON {
+    let mut t = if span.abs() > f64::EPSILON {
         (s.to_scaled(price) - lo) / span
     } else {
         0.5
     };
+    if s.inverted {
+        t = 1.0 - t;
+    }
     vp.plot.bottom - (t as f32) * vp.plot.height()
 }
 
@@ -116,7 +149,10 @@ pub fn y_to_price(vp: &Viewport, y: f32) -> f64 {
     let s = vp.scale;
     let lo = s.to_scaled(vp.price_min);
     let hi = s.to_scaled(vp.price_max);
-    let t = ((vp.plot.bottom - y) / vp.plot.height()) as f64;
+    let mut t = ((vp.plot.bottom - y) / vp.plot.height()) as f64;
+    if s.inverted {
+        t = 1.0 - t;
+    }
     s.from_scaled(lo + t * (hi - lo))
 }
 
@@ -229,9 +265,36 @@ pub fn pan_price_range(min: f64, max: f64, scale: PriceScale, frac: f64) -> (f64
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn inverted_scale_flips_and_round_trips() {
+        let mut vp = Viewport {
+            bar_spacing: 10.0,
+            right_offset_bars: 0.0,
+            price_min: 100.0,
+            price_max: 200.0,
+            plot: PlotRect {
+                left: 0.0,
+                top: 0.0,
+                right: 100.0,
+                bottom: 100.0,
+            },
+            bar_count: 10,
+            scale: PriceScale::linear(),
+        };
+        assert!(vp.y_of(190.0) < vp.y_of(110.0), "normal: higher is up");
+        vp.scale.inverted = true;
+        assert!(vp.y_of(190.0) > vp.y_of(110.0), "inverted: higher is down");
+        assert!((vp.price_at(vp.y_of(137.5)) - 137.5).abs() < 1e-9);
+        // Margins: 10% top / 20% bottom of the pane around 100..200.
+        let (lo, hi) = fit_price_range_margins(100.0, 200.0, PriceScale::linear(), 0.1, 0.2);
+        assert!((hi - lo - 100.0 / 0.7).abs() < 1e-9);
+        assert!(((200.0 - lo) / (hi - lo) - 0.9).abs() < 1e-9);
+    }
+
     use super::*;
 
-    const MODES: [ScaleMode; 3] = ScaleMode::ALL;
+    const MODES: [ScaleMode; 4] = ScaleMode::ALL;
 
     fn vp(n: usize, spacing: f32, off: f32, mode: ScaleMode) -> Viewport {
         Viewport {

@@ -25,9 +25,20 @@ with a custom chart widget built to handle a million bars.
   Renko and Line break are computed in `tt-core`, with tests. Footprint, TPO, session
   volume profile and range bars need tick data and aren't included; Kagi and
   Point & figure aren't implemented yet.
-- **Price scales:** linear, logarithmic, and percent (relative to the first visible
-  close). The price axis auto-fits the visible bars with 8% padding. Drag the axis to
-  scale it manually; double-click it to return to auto-fit.
+- **Price scales:** regular, percent and indexed-to-100 (both relative to the first
+  visible close), and logarithmic, optionally inverted. The price axis auto-fits the
+  visible bars with the top/bottom margins from the chart settings (8% by default).
+  Drag the axis to scale it manually; double-click it to return to auto-fit.
+- **Price-scale corner (like TradingView):** hovering the price axis shows **A**
+  (auto scale), **L** (log) and **%** (percent) buttons above the **⚙** in the chart's
+  bottom-right corner. The ⚙ opens the price-scale menu: reset, auto, invert, scale
+  mode, last-price label and line, countdown, indicator value labels, no overlapping
+  labels, and **More settings…**.
+- **Chart settings:** a dialog with Symbol (previous-close coloring, body / borders /
+  wick toggles and colors), Status line (title, OHLC values, change, volume, indicator
+  titles / inputs / values), Scales and lines (scale buttons, labels, lines, day of
+  week, font size) and Canvas (background, grid, crosshair and scale colors, margins)
+  pages. Changes preview live; Cancel reverts.
 - **Navigation:** drag the plot to pan (it also pans vertically when the scale is
   manual). Mouse wheel or pinch zooms around the cursor. Drag the time axis to zoom
   horizontally. Double-click the plot to reset the view.
@@ -97,7 +108,7 @@ with a custom chart widget built to handle a million bars.
 - **Themes:** semantic color tokens with neutral Dark and Light palettes (pure grays in
   the style of shadcn's "neutral" scale, with TradingView's current up/down colors
   #089981 / #f23645),
-  and a System mode that follows the OS. Up/down colors can be overridden. The whole
+  and a System mode that follows the OS. Chart colors can be overridden in the chart settings. The whole
   UI (panels, widgets, rounding, spacing) uses the tokens.
 - **Icons:** [Lucide](https://lucide.dev) (ISC): gpui-component's icon set plus the
   `lucide-icons` font for chart-type and toolbar glyphs, in theme colors.
@@ -140,7 +151,7 @@ with a custom chart widget built to handle a million bars.
 | Double-click the plot | Reset the view |
 
 The **⚙** menu in the title bar has the theme selector (Dark / Light / System),
-**Chart colors…** (rising/falling bar colors, applied live) and the synthetic-data
+**Chart settings…** (the same dialog as the price-scale menu's More settings…) and the synthetic-data
 command. You can also start with synthetic data
 from the command line: `tradeterm --synthetic [N]`.
 
@@ -178,7 +189,7 @@ crates/
                  backfill, settings persistence, the background runtime, synthetic
                  data.
   tradeterm/     The gpui app: title bar and tabs, toolbar, menus (intervals, chart
-                 types), symbol search, indicator dialogs, chart colors, status bar,
+                 types), symbol search, indicator dialogs, chart settings, status bar,
                  performance overlay, hotkeys.
 ```
 

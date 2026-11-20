@@ -1,7 +1,7 @@
 //! tradeterm — native desktop charting on gpui.
 
 mod app;
-mod colors;
+mod chart_settings;
 mod indicators;
 mod menus;
 mod search;

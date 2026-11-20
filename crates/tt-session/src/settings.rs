@@ -91,6 +91,8 @@ pub struct TabSettings {
     pub indicators: Vec<IndicatorConfig>,
     /// Price-pane legend collapsed.
     pub legend_collapsed: bool,
+    /// "Invert scale" of the price axis.
+    pub invert_scale: bool,
     /// Pre-indicator volume toggle; only read, to migrate old files.
     #[serde(skip_serializing)]
     pub show_volume: Option<bool>,
@@ -105,6 +107,7 @@ impl Default for TabSettings {
             scale_mode: ScaleMode::Linear,
             indicators: vec![IndicatorConfig::default()],
             legend_collapsed: false,
+            invert_scale: false,
             show_volume: None,
         }
     }
@@ -132,6 +135,8 @@ pub struct AppSettings {
     pub favorite_chart_types: Vec<ChartType>,
     /// Starred entries of the indicators dialog.
     pub favorite_indicators: Vec<StudyKind>,
+    /// Chart settings (TradingView's Settings dialog), shared by all charts.
+    pub chart_style: tt_chart::ChartStyle,
 }
 
 impl Default for AppSettings {
@@ -148,6 +153,7 @@ impl Default for AppSettings {
             collapsed_timeframe_sections: Vec::new(),
             favorite_chart_types: Vec::new(),
             favorite_indicators: Vec::new(),
+            chart_style: tt_chart::ChartStyle::default(),
         }
     }
 }
@@ -320,6 +326,7 @@ mod tests {
                         IndicatorConfig::default(),
                     ],
                     legend_collapsed: true,
+                    invert_scale: false,
                     show_volume: None,
                 },
             ],

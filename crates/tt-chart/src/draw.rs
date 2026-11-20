@@ -133,26 +133,31 @@ pub(crate) fn draw_base(c: &mut dyn Canvas, s: &Scene<'_>) {
 
     // Grid: one line per price label and per time label, like TradingView.
     let ppp = c.pixels_per_point();
-    c.set_clip(s.vp_rect());
-    for (y, _) in &price_ticks {
-        let y = crisp(*y, ppp);
-        grid_line(c, s, pos2(s.plot.left(), y), pos2(s.plot.right(), y));
-    }
-    for (pane, ticks) in s.panes.iter().zip(&pane_ticks) {
-        c.set_clip(pane.rect());
-        for (y, _) in ticks {
+    if s.style.grid_horizontal {
+        c.set_clip(s.vp_rect());
+        for (y, _) in &price_ticks {
             let y = crisp(*y, ppp);
-            grid_line(c, s, pos2(s.plot.left(), y), pos2(s.plot.right(), y));
+            grid_line(c, s, false, pos2(s.plot.left(), y), pos2(s.plot.right(), y));
+        }
+        for (pane, ticks) in s.panes.iter().zip(&pane_ticks) {
+            c.set_clip(pane.rect());
+            for (y, _) in ticks {
+                let y = crisp(*y, ppp);
+                grid_line(c, s, false, pos2(s.plot.left(), y), pos2(s.plot.right(), y));
+            }
         }
     }
     c.set_clip(s.plot);
-    for tick in &time_ticks {
-        grid_line(
-            c,
-            s,
-            pos2(tick.x, s.plot.top()),
-            pos2(tick.x, s.plot.bottom()),
-        );
+    if s.style.grid_vertical {
+        for tick in &time_ticks {
+            grid_line(
+                c,
+                s,
+                true,
+                pos2(tick.x, s.plot.top()),
+                pos2(tick.x, s.plot.bottom()),
+            );
+        }
     }
 
     if let Some(vr) = s.volume_rect {
@@ -195,7 +200,11 @@ pub(crate) fn draw_base(c: &mut dyn Canvas, s: &Scene<'_>) {
     // be hidden. (The crosshair's tags are opaque and drawn by the overlay.)
     c.set_clip(s.full);
     // Axis tags per pane (0 = price pane), spread so they don't overlap.
-    let mut grouped = study_tags(s);
+    let mut grouped = if s.style.indicator_value_labels {
+        study_tags(s)
+    } else {
+        Vec::new()
+    };
     if let Some(tag) = last_price_tag(c, s) {
         grouped.push((0, tag));
     }
@@ -212,7 +221,9 @@ pub(crate) fn draw_base(c: &mut dyn Canvas, s: &Scene<'_>) {
             .filter(|(p, _)| *p == pane)
             .map(|(_, t)| t.clone())
             .collect();
-        spread_tags(&mut group, top, bottom);
+        if s.style.no_overlapping_labels {
+            spread_tags(&mut group, top, bottom);
+        }
         tags.extend(group);
     }
     price_labels(c, s, &price_ticks, &tags, (s.plot.top(), s.vp.plot.bottom));
@@ -254,6 +265,15 @@ pub(crate) fn draw_overlay(c: &mut dyn Canvas, s: &Scene<'_>) -> Vec<LegendHit> 
 impl Scene<'_> {
     fn vp_rect(&self) -> Rect {
         vp_rect(&self.vp)
+    }
+
+    /// Whether a bar counts as rising ("Color bars based on previous close").
+    fn rising(&self, b: &DrawBar) -> bool {
+        if self.style.color_by_prev_close {
+            b.close >= b.prev_close
+        } else {
+            b.close >= b.open
+        }
     }
 
     fn colors(&self, up: bool) -> (Color32, Color32) {
@@ -479,14 +499,16 @@ fn bricks(c: &mut dyn Canvas, s: &Scene<'_>) {
 
 fn candles(c: &mut dyn Canvas, s: &Scene<'_>, g: &BarGeom, hollow: bool) {
     let vp = &s.vp;
+    let st = s.style;
     for b in s.bars {
         let rising = b.close >= b.open;
         // Hollow candles: color by close vs previous close, hollow when rising.
-        let (body, wick) = if hollow {
-            s.colors(b.close >= b.prev_close)
+        let up = if hollow {
+            b.close >= b.prev_close
         } else {
-            s.colors(rising)
+            s.rising(b)
         };
+        let (body, wick) = s.colors(up);
         let cx = g.center_px(b.x);
         let (yh, yl) = (vp.y_of(b.high), vp.y_of(b.low));
         let (y0, y1) = g.span(vp.y_of(b.open), vp.y_of(b.close));
@@ -497,12 +519,24 @@ fn candles(c: &mut dyn Canvas, s: &Scene<'_>, g: &BarGeom, hollow: bool) {
         }
         if hollow && rising {
             // Wick above and below the body only, then an outlined body.
-            c.fill_rect(g.column(cx, g.wick_px, yh, y0), wick);
-            c.fill_rect(g.column(cx, g.wick_px, y1, yl), wick);
+            if st.wick {
+                c.fill_rect(g.column(cx, g.wick_px, yh, y0), wick);
+                c.fill_rect(g.column(cx, g.wick_px, y1, yl), wick);
+            }
             c.stroke_rect(g.column(cx, g.body_px, y0, y1), g.wick_px / g.ppp, body);
         } else {
-            c.fill_rect(g.column(cx, g.wick_px, yh, yl), wick);
-            c.fill_rect(g.column(cx, g.body_px, y0, y1), body);
+            if st.wick {
+                c.fill_rect(g.column(cx, g.wick_px, yh, yl), wick);
+            }
+            let rect = g.column(cx, g.body_px, y0, y1);
+            if st.body {
+                c.fill_rect(rect, body);
+            }
+            // Borders only cost a primitive when they differ from the body.
+            let border = st.border_color(s.theme, up);
+            if st.borders && (!st.body || border != body) {
+                c.stroke_rect(rect, 1.0 / g.ppp, border);
+            }
         }
     }
 }
@@ -512,7 +546,7 @@ fn ohlc_bars(c: &mut dyn Canvas, s: &Scene<'_>, g: &BarGeom) {
     let tick_px = ((g.body_px - g.wick_px) / 2.0).floor().max(1.0);
     let w = g.wick_px / g.ppp;
     for b in s.bars {
-        let (color, _) = s.colors(b.close >= b.open);
+        let (color, _) = s.colors(s.rising(b));
         let cx = g.center_px(b.x);
         c.fill_rect(
             g.column(cx, g.wick_px, vp.y_of(b.high), vp.y_of(b.low)),
@@ -948,7 +982,12 @@ fn legend_row(
     let t = s.theme;
     let size = s.style.font_size;
     let hovered = s.legend_hover == Some(ind.id);
-    let title = ind.study.legend_title();
+    let full = ind.study.legend_title();
+    let title = match (s.style.legend_titles, s.style.legend_inputs) {
+        (false, _) => String::new(),
+        (true, true) => full,
+        (true, false) => full.split_whitespace().next().unwrap_or("").to_owned(),
+    };
     let name = Rect::from_min_size(pos, c.text_size(&title, size));
     let name_color = if ind.visible {
         t.text
@@ -989,6 +1028,7 @@ fn legend_row(
         x += 6.0;
     }
     if ind.visible
+        && s.style.legend_values
         && let Some(i) = bar
     {
         let outs = ind.outputs();
@@ -1025,11 +1065,12 @@ fn legend_row(
 }
 
 /// One grid line: dotted (1 px on, 3 px off) or solid, per the style.
-fn grid_line(c: &mut dyn Canvas, s: &Scene<'_>, a: Pos2, b: Pos2) {
+fn grid_line(c: &mut dyn Canvas, s: &Scene<'_>, vertical: bool, a: Pos2, b: Pos2) {
+    let color = s.style.grid_color(s.theme, vertical);
     if s.style.dotted_grid {
-        c.dotted_line(a, b, s.theme.grid);
+        c.dotted_line(a, b, color);
     } else {
-        c.line(a, b, 1.0, s.theme.grid);
+        c.line(a, b, 1.0, color);
     }
 }
 
@@ -1188,12 +1229,16 @@ fn time_labels(
 fn axis_value_label(s: &Scene<'_>, price: f64) -> String {
     match s.vp.scale.mode {
         ScaleMode::Percent => format_percent(s.vp.scale.to_scaled(price)),
+        ScaleMode::IndexedTo100 => format!("{:.2}", s.vp.scale.to_scaled(price)),
         _ => format_price(price, s.precision),
     }
 }
 
 /// Dotted last-price line across the plot in the last candle's color.
 fn last_price_line(c: &mut dyn Canvas, s: &Scene<'_>) {
+    if !s.style.last_price_line {
+        return;
+    }
     let Some(last) = s.last_raw else { return };
     let (color, _) = s.colors(last.is_bullish());
     let ppp = c.pixels_per_point();
@@ -1214,6 +1259,9 @@ fn last_price_line(c: &mut dyn Canvas, s: &Scene<'_>) {
 
 /// Last-price tag: price plus the time left until the bar closes.
 fn last_price_tag(c: &mut dyn Canvas, s: &Scene<'_>) -> Option<Tag> {
+    if !s.style.last_price_label {
+        return None;
+    }
     let last = s.last_raw?;
     let (color, _) = s.colors(last.is_bullish());
     let y = crisp(s.vp.y_of(last.close), c.pixels_per_point());
@@ -1221,7 +1269,7 @@ fn last_price_tag(c: &mut dyn Canvas, s: &Scene<'_>) -> Option<Tag> {
         return None;
     }
     let mut lines = vec![axis_value_label(s, last.close)];
-    if let (Some(now), Some(close)) = (s.now_ms, s.bar_close_ms) {
+    if let (true, Some(now), Some(close)) = (s.style.countdown, s.now_ms, s.bar_close_ms) {
         // Hidden once the bar should have closed (e.g. market closed / stale).
         let remaining = close - now;
         if remaining > 0 && close - last.open_time_ms >= remaining {
@@ -1270,7 +1318,12 @@ fn crosshair(c: &mut dyn Canvas, s: &Scene<'_>, p: Pos2, slot: Option<i64>) -> (
 
     let slots = time_axis::SlotTimes::new(s.display.open_times(), s.bar_interval_ms);
     let time_tag = slot.and_then(|i| slots.time_at(i)).map(|t| {
-        let text = format_full_time(t, s.bar_interval_ms);
+        let mut text = format_full_time(t, s.bar_interval_ms);
+        if !s.style.day_of_week
+            && let Some((_, rest)) = text.split_once(' ')
+        {
+            text = rest.to_owned();
+        }
         let size = c.text_size(&text, s.style.font_size) + vec2(16.0, 8.0);
         let mut rect = Align2::CENTER_CENTER.anchor_size(pos2(x, s.time_axis.center().y), size);
         // Keep it inside the time axis.
@@ -1297,7 +1350,8 @@ fn readout(c: &mut dyn Canvas, s: &Scene<'_>, bar: Option<usize>) {
         pos.x = r.right() + gap;
     };
 
-    if !s.title.is_empty() {
+    let st = s.style;
+    if st.status_title && !s.title.is_empty() {
         put(c, s.title, t.text, 14.0);
     }
     let Some(i) = bar else { return };
@@ -1309,21 +1363,29 @@ fn readout(c: &mut dyn Canvas, s: &Scene<'_>, bar: Option<usize>) {
     let change = k.close - prev_close;
     let (color, _) = s.colors(change >= 0.0);
     let d = s.precision;
-    for (name, v) in [("O", k.open), ("H", k.high), ("L", k.low), ("C", k.close)] {
-        put(c, name, t.text_muted, 3.0);
-        put(c, &format_price(v, d), color, 10.0);
+    if st.status_values {
+        for (name, v) in [("O", k.open), ("H", k.high), ("L", k.low), ("C", k.close)] {
+            put(c, name, t.text_muted, 3.0);
+            put(c, &format_price(v, d), color, 10.0);
+        }
     }
-    let pct = if prev_close != 0.0 {
-        change / prev_close * 100.0
-    } else {
-        0.0
-    };
-    put(
-        c,
-        &format!("{} ({pct:+.2}%)", format_signed_price(change, d)),
-        color,
-        14.0,
-    );
+    if st.status_change {
+        let pct = if prev_close != 0.0 {
+            change / prev_close * 100.0
+        } else {
+            0.0
+        };
+        put(
+            c,
+            &format!("{} ({pct:+.2}%)", format_signed_price(change, d)),
+            color,
+            14.0,
+        );
+    }
+    if st.status_volume {
+        put(c, "Vol", t.text_muted, 3.0);
+        put(c, &scale::format_volume(k.volume), color, 10.0);
+    }
 }
 
 #[cfg(test)]
