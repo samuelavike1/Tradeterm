@@ -8,9 +8,7 @@
 //!
 //! Prints, per second: frames, and per layer paints and average CPU ms.
 
-#[allow(dead_code)]
-#[path = "../../tradeterm/src/synthetic.rs"]
-mod synthetic;
+use tt_session::synthetic;
 
 use egui::pos2;
 use gpui_kit::*;

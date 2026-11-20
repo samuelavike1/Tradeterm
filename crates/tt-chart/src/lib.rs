@@ -25,10 +25,11 @@ pub mod time_axis;
 mod view;
 pub mod viewport;
 
+pub use draw::LegendButton;
 pub use indicators::Indicator;
 pub use kind::{ChartType, ScaleMode};
 pub use style::ChartStyle;
 pub use view::{
-    BACKFILL_MARGIN_BARS, ChartData, ChartLayout, ChartOutput, ChartStats, ChartView, RenderInput,
-    RenderOutput,
+    BACKFILL_MARGIN_BARS, ChartData, ChartHit, ChartLayout, ChartOutput, ChartStats, ChartView,
+    RenderInput, RenderOutput,
 };

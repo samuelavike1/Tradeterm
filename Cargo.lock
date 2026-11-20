@@ -7854,6 +7854,7 @@ dependencies = [
  "tt-brokers",
  "tt-chart",
  "tt-core",
+ "tt-session",
  "tt-theme",
 ]
 
@@ -7921,6 +7922,7 @@ dependencies = [
  "lucide-icons",
  "tt-chart",
  "tt-core",
+ "tt-session",
  "tt-theme",
 ]
 
@@ -7931,6 +7933,25 @@ dependencies = [
  "crossbeam-channel",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "tt-session"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "crossbeam-channel",
+ "directories",
+ "egui",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tt-brokers",
+ "tt-chart",
+ "tt-core",
+ "tt-theme",
 ]
 
 [[package]]

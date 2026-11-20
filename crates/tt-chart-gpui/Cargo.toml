@@ -12,3 +12,6 @@ lucide-icons = "1.77.0"
 tt-core = { path = "../tt-core" }
 tt-chart = { path = "../tt-chart" }
 tt-theme = { path = "../tt-theme" }
+
+[dev-dependencies]
+tt-session = { path = "../tt-session" }

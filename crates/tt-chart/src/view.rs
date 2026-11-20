@@ -10,7 +10,7 @@ use crate::viewport::{
     zoom_price_range,
 };
 use crate::{ChartStyle, ChartType, ScaleMode};
-use egui::{CursorIcon, Rect, Response, Sense, Ui, pos2};
+use egui::{CursorIcon, Pos2, Rect, Response, Sense, Ui, Vec2, pos2};
 use std::time::{Duration, Instant};
 use tt_core::{CandleSeries, Placement};
 use tt_theme::Theme;
@@ -61,6 +61,25 @@ pub struct ChartData<'a> {
     /// Exact close time of the last bar (calendar-aware for months), for the
     /// countdown on the last-price tag.
     pub bar_close_ms: Option<i64>,
+}
+
+/// What is under a point, from the last frame's layout
+/// ([`ChartView::hit_test`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChartHit {
+    /// A button in a legend row (indicator id; 0 = the collapse button).
+    LegendButton(u64, LegendButton),
+    /// A legend row (indicator id): hovering it shows its buttons.
+    LegendRow(u64),
+    /// The divider above indicator pane `k` (1 = first pane).
+    PaneDivider(usize),
+    /// The price axis of the price pane: drag scales prices.
+    PriceAxis,
+    /// The time axis: drag zooms in time.
+    TimeAxis,
+    /// The plot: drag pans, wheel zooms.
+    Plot,
+    None,
 }
 
 /// Pointer-dependent state for [`ChartView::render`].
@@ -257,6 +276,115 @@ impl ChartView {
     /// backends that handle input themselves).
     pub fn last_layout(&self) -> &ChartLayout {
         &self.last_layout
+    }
+
+    /// What is at `p` (screen point) in the last frame's layout.
+    pub fn hit_test(&self, p: Pos2) -> ChartHit {
+        for hit in &self.legend_hits {
+            for (button, rect) in &hit.buttons {
+                if rect.contains(p) {
+                    return ChartHit::LegendButton(hit.id, *button);
+                }
+            }
+        }
+        for hit in &self.legend_hits {
+            if hit.id != 0 && hit.row.contains(p) {
+                return ChartHit::LegendRow(hit.id);
+            }
+        }
+        let l = &self.last_layout;
+        for (k, pane) in l.panes.iter().enumerate().skip(1) {
+            if (p.y - pane.top()).abs() <= 3.0
+                && p.x >= l.plot.left()
+                && p.x <= l.price_axis.right()
+            {
+                return ChartHit::PaneDivider(k);
+            }
+        }
+        if let Some(main) = l.panes.first()
+            && l.price_axis.x_range().contains(p.x)
+            && main.y_range().contains(p.y)
+        {
+            return ChartHit::PriceAxis;
+        }
+        if l.time_axis.contains(p) {
+            return ChartHit::TimeAxis;
+        }
+        if l.plot.contains(p) {
+            return ChartHit::Plot;
+        }
+        ChartHit::None
+    }
+
+    /// Clicks a legend button; returns the indicator whose settings should
+    /// open (the gear).
+    pub fn press_legend(&mut self, id: u64, button: LegendButton) -> Option<u64> {
+        match button {
+            LegendButton::Collapse => self.legend_collapsed = !self.legend_collapsed,
+            LegendButton::ToggleVisible => {
+                if let Some(ind) = self.indicator_mut(id) {
+                    ind.visible = !ind.visible;
+                }
+            }
+            LegendButton::Settings => return Some(id),
+            LegendButton::Remove => self.indicators.retain(|i| i.id != id),
+        }
+        None
+    }
+
+    /// Drags the plot by `delta` points: pans in time, and in price while
+    /// the price range is manual.
+    pub fn drag_plot(&mut self, delta: Vec2) {
+        self.pan(delta.x);
+        if let (Some((lo, hi)), Some(main)) = (self.manual_range, self.last_layout.panes.first()) {
+            let frac = delta.y as f64 / main.height().max(1.0) as f64;
+            self.manual_range = Some(pan_price_range(lo, hi, self.last_price_scale, frac));
+        }
+    }
+
+    /// Drags the price axis: down expands the range (bars get flatter), up
+    /// compresses it. Switches the price scale to manual.
+    pub fn drag_price_axis(&mut self, dy: f32) {
+        let (lo, hi) = self.manual_range.unwrap_or(self.last_range);
+        let factor = (dy as f64 * 0.005).exp();
+        let range = zoom_price_range(lo, hi, self.last_price_scale, factor);
+        self.manual_range = Some(range);
+        self.last_range = range;
+    }
+
+    /// Drags the time axis: right zooms in, anchored at the right edge.
+    pub fn drag_time_axis(&mut self, dx: f32) {
+        let right = self.last_layout.plot.right();
+        self.zoom_at((dx * 0.01).exp(), right, right);
+    }
+
+    /// Mouse wheel / trackpad over the chart: horizontal scroll pans,
+    /// vertical zooms around `anchor_x` (~11% per wheel notch of ~20 points).
+    pub fn wheel(&mut self, scroll: Vec2, anchor_x: f32) {
+        if scroll.x != 0.0 {
+            self.right_offset += scroll.x / self.bar_spacing;
+        }
+        let factor = (scroll.y * WHEEL_ZOOM_PER_POINT).exp();
+        if factor != 1.0 {
+            let plot = self.last_layout.plot;
+            let x = if plot.x_range().contains(anchor_x) {
+                anchor_x
+            } else {
+                plot.right()
+            };
+            self.zoom_at(factor, x, plot.right());
+        }
+    }
+
+    /// Moves pane divider `k` (see [`ChartHit::PaneDivider`]) by `dy` points.
+    pub fn drag_pane_divider(&mut self, k: usize, dy: f32) {
+        let h = self.last_layout.plot.height();
+        self.drag_divider(k, dy, h);
+    }
+
+    /// Back to auto-fitting the visible bars vertically.
+    pub fn auto_scale(&mut self) {
+        self.manual_range = None;
     }
 
     /// egui front end: handles input on the widget, then [`Self::render`]s.
@@ -663,15 +791,8 @@ impl ChartView {
                 if !resp.clicked() {
                     continue;
                 }
-                match button {
-                    LegendButton::Collapse => self.legend_collapsed = !self.legend_collapsed,
-                    LegendButton::ToggleVisible => {
-                        if let Some(ind) = self.indicator_mut(hit.id) {
-                            ind.visible = !ind.visible;
-                        }
-                    }
-                    LegendButton::Settings => settings = Some(hit.id),
-                    LegendButton::Remove => self.indicators.retain(|i| i.id != hit.id),
+                if let Some(id) = self.press_legend(hit.id, *button) {
+                    settings = Some(id);
                 }
             }
         }
@@ -746,10 +867,7 @@ impl ChartView {
             return;
         }
         if price_resp.dragged() {
-            let (lo, hi) = self.last_range;
-            // Drag down expands the range (bars get flatter), drag up compresses it.
-            let factor = (price_resp.drag_delta().y as f64 * 0.005).exp();
-            self.manual_range = Some(zoom_price_range(lo, hi, scale, factor));
+            self.drag_price_axis(price_resp.drag_delta().y);
         }
         if let Some((lo, hi)) = self.manual_range
             && plot_resp.dragged()
@@ -930,6 +1048,104 @@ mod tests {
                 over.0
             );
         }
+    }
+
+    #[test]
+    fn hit_test_and_input_api() {
+        let mut series = CandleSeries::new();
+        for i in 0..200 {
+            let c = 100.0 + (i as f64 * 0.2).sin();
+            series.upsert(tt_core::Candle {
+                open_time_ms: i * 60_000,
+                open: c,
+                high: c + 1.0,
+                low: c - 1.0,
+                close: c,
+                volume: 1.0,
+            });
+        }
+        let data = ChartData {
+            series: &series,
+            title: "T",
+            tick_size: Some(0.01),
+            now_ms: None,
+            bar_interval_ms: Some(60_000),
+            bar_close_ms: None,
+        };
+        let theme = Theme::dark();
+        let full = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(900.0, 600.0));
+        let mut v = ChartView {
+            indicators: vec![
+                Indicator::new(tt_core::StudyKind::Volume.default_study()),
+                Indicator::new(tt_core::StudyKind::Rsi.default_study()),
+            ],
+            ..Default::default()
+        };
+        let rsi = v.indicators[1].id;
+        v.render(
+            &mut Texts::default(),
+            full,
+            1.0,
+            data,
+            &theme,
+            RenderInput::default(),
+        );
+
+        let l = v.last_layout().clone();
+        assert_eq!(v.hit_test(l.plot.center()), ChartHit::Plot);
+        assert_eq!(
+            v.hit_test(pos2(l.price_axis.center().x, l.panes[0].center().y)),
+            ChartHit::PriceAxis
+        );
+        assert_eq!(v.hit_test(l.time_axis.center()), ChartHit::TimeAxis);
+        assert_eq!(
+            v.hit_test(pos2(l.plot.center().x, l.panes[1].top())),
+            ChartHit::PaneDivider(1)
+        );
+        // The pane legend row (top left of the RSI pane).
+        let row = pos2(l.panes[1].left() + 20.0, l.panes[1].top() + 12.0);
+        assert_eq!(v.hit_test(row), ChartHit::LegendRow(rsi));
+
+        // Hovering the row shows its buttons; the gear asks for settings and
+        // the trash removes the indicator.
+        v.render(
+            &mut Texts::default(),
+            full,
+            1.0,
+            data,
+            &theme,
+            RenderInput {
+                crosshair: Some(row),
+                legend_hover: Some(rsi),
+            },
+        );
+        let buttons: Vec<_> = v
+            .legend_hits
+            .iter()
+            .find(|h| h.id == rsi)
+            .unwrap()
+            .buttons
+            .clone();
+        assert_eq!(buttons.len(), 3);
+        let gear = buttons
+            .iter()
+            .find(|(b, _)| *b == LegendButton::Settings)
+            .unwrap()
+            .1;
+        assert_eq!(
+            v.hit_test(gear.center()),
+            ChartHit::LegendButton(rsi, LegendButton::Settings)
+        );
+        assert_eq!(v.press_legend(rsi, LegendButton::Settings), Some(rsi));
+        assert_eq!(v.press_legend(rsi, LegendButton::Remove), None);
+        assert!(v.indicators.iter().all(|i| i.id != rsi));
+
+        // Dragging the price axis switches to a manual range; auto_scale undoes it.
+        assert!(v.is_auto_scale());
+        v.drag_price_axis(40.0);
+        assert!(!v.is_auto_scale());
+        v.auto_scale();
+        assert!(v.is_auto_scale());
     }
 
     #[test]

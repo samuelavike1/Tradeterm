@@ -2,11 +2,7 @@ use crate::chrome::{self, TITLE_BAR_HEIGHT, TabView};
 use crate::icons::Icon;
 use crate::indicators::{IndicatorSettings, IndicatorsDialog};
 use crate::perf::PerfStats;
-use crate::runtime::BackgroundRuntime;
 use crate::search::SymbolSearch;
-use crate::settings::{AppSettings, MAX_RECENT, RecentSymbol, SettingsStore};
-use crate::synthetic;
-use crate::tab::{ChartTab, MAX_HISTORY_BARS, Shared};
 use crate::tfmenu::TimeframeMenu;
 use crate::toolbar;
 use egui::{
@@ -18,6 +14,10 @@ use tracing::warn;
 use tt_brokers::{BinanceSource, MarketDataSource};
 use tt_chart::{ChartData, Indicator, ScaleMode};
 use tt_core::{ConnectionStatus, Symbol};
+use tt_session::runtime::BackgroundRuntime;
+use tt_session::settings::{AppSettings, MAX_RECENT, RecentSymbol, SettingsStore};
+use tt_session::synthetic;
+use tt_session::tab::{ChartTab, MAX_HISTORY_BARS, Shared};
 use tt_theme::{Theme, ThemeMode, ThemeOverrides};
 
 const TOGGLE_THEME: KeyboardShortcut =
@@ -31,6 +31,7 @@ const NEW_TAB: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key:
 const CLOSE_TAB: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::W);
 
 pub struct TradeTermApp {
+    ctx: egui::Context,
     shared: Shared,
     // Declared before `runtime` so tab streams are aborted before it shuts down.
     tabs: Vec<ChartTab>,
@@ -69,11 +70,18 @@ impl TradeTermApp {
     ) -> anyhow::Result<Self> {
         let settings = settings.normalized();
         let source = Arc::new(BinanceSource::new()?);
+        let (wake_ctx, wake_after_ctx) = (ctx.clone(), ctx.clone());
+        let chart_style = tt_chart::ChartStyle {
+            bold_family,
+            icon_family: Some(crate::icons::family()),
+            ..Default::default()
+        };
         let shared = Shared {
-            ctx: ctx.clone(),
+            wake: Arc::new(move || wake_ctx.request_repaint()),
+            wake_after: Arc::new(move |d| wake_after_ctx.request_repaint_after(d)),
             handle: runtime.handle().clone(),
             source: source.clone(),
-            bold_family,
+            chart_style,
         };
         tt_theme::install(&ctx, settings.theme_mode, settings.overrides());
         let theme = tt_theme::current(&ctx, settings.overrides());
@@ -98,6 +106,7 @@ impl TradeTermApp {
             .collect::<Vec<_>>();
 
         Ok(Self {
+            ctx: ctx.clone(),
             next_tab_id: tabs.len() as u64,
             tabs,
             active,
@@ -166,7 +175,7 @@ impl TradeTermApp {
     fn set_theme(&mut self, mode: ThemeMode, overrides: ThemeOverrides) {
         self.theme_mode = mode;
         self.overrides = overrides;
-        tt_theme::install(&self.shared.ctx, mode, overrides);
+        tt_theme::install(&self.ctx, mode, overrides);
     }
 
     fn load_synthetic(&mut self) {
@@ -387,7 +396,7 @@ impl TradeTermApp {
     /// Starts a background symbol search whose reply goes to the dialog.
     fn request_search(&self, query: String) {
         let source = self.shared.source.clone();
-        let ctx = self.shared.ctx.clone();
+        let ctx = self.ctx.clone();
         let reply = self.search.reply_sender();
         self.shared.handle.spawn(async move {
             let result = source

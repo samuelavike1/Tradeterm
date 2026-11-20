@@ -6,17 +6,13 @@ mod fonts;
 mod icons;
 mod indicators;
 mod perf;
-mod runtime;
 mod search;
-mod settings;
-mod synthetic;
-mod tab;
 mod tfmenu;
 mod toolbar;
 
 use app::TradeTermApp;
-use runtime::BackgroundRuntime;
-use settings::SettingsStore;
+use tt_session::runtime::BackgroundRuntime;
+use tt_session::settings::SettingsStore;
 
 fn main() -> eframe::Result {
     tracing_subscriber::fmt()
@@ -62,7 +58,7 @@ fn synthetic_arg(mut args: impl Iterator<Item = String>) -> Option<usize> {
     while let Some(a) = args.next() {
         if a == "--synthetic" {
             let n = args.next().and_then(|n| n.replace('_', "").parse().ok());
-            return Some(n.unwrap_or(synthetic::DEFAULT_BARS));
+            return Some(n.unwrap_or(tt_session::synthetic::DEFAULT_BARS));
         }
     }
     None

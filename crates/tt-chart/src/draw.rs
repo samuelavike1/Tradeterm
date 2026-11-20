@@ -79,8 +79,9 @@ fn vp_rect(vp: &Viewport) -> Rect {
 
 /// Clickable parts of the legend, laid out by [`draw`] and hit-tested by the
 /// view on the next frame.
+/// A clickable button in a legend row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum LegendButton {
+pub enum LegendButton {
     ToggleVisible,
     Settings,
     Remove,

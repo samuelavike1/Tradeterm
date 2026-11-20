@@ -19,6 +19,7 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 tt-brokers = { version = "0.1.0", path = "../tt-brokers" }
 tt-chart = { version = "0.1.0", path = "../tt-chart" }
 tt-core = { version = "0.1.0", path = "../tt-core" }
+tt-session = { path = "../tt-session" }
 tt-theme = { version = "0.1.0", path = "../tt-theme" }
 
 [dev-dependencies]

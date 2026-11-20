@@ -25,15 +25,21 @@ pub const MAX_HISTORY_BARS: usize = 250_000;
 const BACKFILL_RETRY: Duration = Duration::from_secs(5);
 const DAY_MS: i64 = 86_400_000;
 
-/// Things every tab needs to start work: the UI context (for repaints),
-/// the tokio runtime and the data source.
+/// Wakes the UI thread (from any thread), e.g. to repaint after new data.
+pub type Wake = Arc<dyn Fn() + Send + Sync>;
+/// Wakes the UI thread after a delay.
+pub type WakeAfter = Arc<dyn Fn(Duration) + Send + Sync>;
+
+/// Things every tab needs to start work: a way to wake the UI, the tokio
+/// runtime and the data source.
 #[derive(Clone)]
 pub struct Shared {
-    pub ctx: egui::Context,
+    pub wake: Wake,
+    pub wake_after: WakeAfter,
     pub handle: Handle,
     pub source: Arc<BinanceSource>,
-    /// Semibold font family for emphasized chart labels, if available.
-    pub bold_family: Option<egui::FontFamily>,
+    /// Style new charts start with (fonts are front-end specific).
+    pub chart_style: tt_chart::ChartStyle,
 }
 
 /// Loading of older history when the user scrolls back.
@@ -46,7 +52,7 @@ pub struct Backfill {
 }
 
 pub struct ChartTab {
-    /// Stable id for egui widget ids (survives reordering).
+    /// Stable id for UI element ids (survives reordering).
     pub id: u64,
     stream: Option<JoinHandle<()>>,
     rx: Receiver<MarketEvent>,
@@ -72,8 +78,7 @@ impl ChartTab {
             symbol = Symbol::new(TabSettings::default().symbol);
         }
         let mut chart = ChartView::default();
-        chart.style.bold_family = shared.bold_family.clone();
-        chart.style.icon_family = Some(crate::icons::family());
+        chart.style = shared.chart_style.clone();
         chart.chart_type = s.chart_type;
         chart.scale_mode = s.scale_mode;
         chart.indicators = s.indicators.iter().map(|i| i.to_indicator()).collect();
@@ -206,8 +211,8 @@ impl ChartTab {
         self.symbol_info = None;
         self.chart.reset_view();
 
-        let ctx = shared.ctx.clone();
-        let sink = EventSink::new(tx, move || ctx.request_repaint());
+        let wake = shared.wake.clone();
+        let sink = EventSink::new(tx, move || wake());
 
         if let Some(n) = self.synthetic {
             self.sink = None;
@@ -307,7 +312,7 @@ impl ChartTab {
                     self.backfill.loading = false;
                     if candles.is_empty() && !exhausted {
                         self.backfill.retry_at = Some(Instant::now() + BACKFILL_RETRY);
-                        shared.ctx.request_repaint_after(BACKFILL_RETRY);
+                        (shared.wake_after)(BACKFILL_RETRY);
                     } else {
                         let added = self.series.prepend(candles);
                         self.backfill.exhausted = exhausted || added == 0;
