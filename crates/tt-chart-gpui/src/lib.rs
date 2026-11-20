@@ -8,7 +8,7 @@ mod canvas;
 mod chart;
 
 pub use canvas::{CanvasFonts, GpuiCanvas, hsla};
-pub use chart::{Chart, ChartState, LayerStats};
+pub use chart::{Chart, ChartEvent, ChartSource, ChartState, LayerStats, SeriesSource};
 
 use std::borrow::Cow;
 

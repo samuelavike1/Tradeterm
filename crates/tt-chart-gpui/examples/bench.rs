@@ -14,7 +14,7 @@ use egui::pos2;
 use gpui_kit::*;
 use std::time::{Duration, Instant};
 use tt_chart::{ChartView, Indicator};
-use tt_chart_gpui::{Chart, ChartState, LayerStats};
+use tt_chart_gpui::{Chart, ChartState, LayerStats, SeriesSource};
 use tt_core::{Source, Study, StudyKind};
 use tt_theme::Theme;
 
@@ -29,7 +29,7 @@ enum Mode {
 }
 
 struct Bench {
-    chart: Entity<Chart>,
+    chart: Entity<Chart<SeriesSource>>,
     mode: Mode,
     secs: u64,
     started: Instant,
@@ -105,12 +105,12 @@ impl Render for Bench {
                     c.update_state(cx, |s| {
                         if switch {
                             if phase == 0 {
-                                s.view.fit_all();
+                                s.source.view.fit_all();
                             } else {
-                                s.view.zoom_to_bars(300);
+                                s.source.view.zoom_to_bars(300);
                             }
                         }
-                        s.view.pan(dx);
+                        s.source.view.pan(dx);
                     });
                     c.set_pointer(Some(pos2(w * 0.5, h * 0.35)), cx);
                 });
@@ -182,10 +182,16 @@ fn main() {
                 if mode != Mode::Pan {
                     view.zoom_to_bars(300);
                 }
-                let mut state = ChartState::new(view, series, Theme::dark());
-                state.title = "SYNTH · 1m · 1,000,000 bars".into();
-                state.tick_size = Some(0.01);
-                state.bar_interval_ms = Some(60_000);
+                let state = ChartState::new(
+                    SeriesSource {
+                        view,
+                        series,
+                        title: "SYNTH · 1m · 1,000,000 bars".into(),
+                        tick_size: Some(0.01),
+                        bar_interval_ms: Some(60_000),
+                    },
+                    Theme::dark(),
+                );
                 let chart = cx.new(|cx| Chart::new(state, cx));
                 cx.new(|_| Bench {
                     chart,

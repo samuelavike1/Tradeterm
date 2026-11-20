@@ -7887,6 +7887,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
+name = "tt-app"
+version = "0.1.0"
+dependencies = [
+ "egui",
+ "futures",
+ "gpui-kit",
+ "lucide-icons",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "tt-brokers",
+ "tt-chart",
+ "tt-chart-gpui",
+ "tt-core",
+ "tt-session",
+ "tt-theme",
+]
+
+[[package]]
 name = "tt-brokers"
 version = "0.1.0"
 dependencies = [
