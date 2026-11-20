@@ -1,6 +1,7 @@
 //! Toolbar widgets: frameless text buttons, dividers and the chart-type
 //! picker with painted icons.
 
+use crate::icons::{self, Icon};
 use egui::{
     Color32, CornerRadius, Painter, Pos2, Rect, Response, Sense, Shape, Stroke, StrokeKind, Ui,
     pos2, vec2,
@@ -77,24 +78,26 @@ pub fn icon_button(
     resp
 }
 
-/// A small "⌄" chevron centered at `c`.
+/// A Lucide chevron-down centered at `c`.
 pub fn chevron(p: &Painter, c: Pos2, color: Color32) {
-    let s = 3.5;
-    p.add(Shape::line(
-        vec![
-            c + vec2(-s, -s / 2.0),
-            c + vec2(0.0, s / 2.0),
-            c + vec2(s, -s / 2.0),
-        ],
-        Stroke::new(1.3, color),
-    ));
+    icons::paint(p, c, Icon::ChevronDown, 14.0, color);
 }
 
-/// A magnifier icon centered at `c`.
+/// A Lucide magnifier centered at `c`.
 pub fn search_icon(p: &Painter, c: Pos2, color: Color32) {
-    let stroke = Stroke::new(1.4, color);
-    p.circle_stroke(c + vec2(-1.5, -1.5), 4.5, stroke);
-    p.line_segment([c + vec2(1.8, 1.8), c + vec2(5.0, 5.0)], stroke);
+    icons::paint(p, c, Icon::Search, 15.0, color);
+}
+
+/// A toolbar toggle showing a Lucide icon; highlighted while `on`.
+pub fn icon_toggle(ui: &mut Ui, on: &mut bool, icon: Icon, theme: &Theme) -> Response {
+    let mut resp = icon_button(ui, 32.0, *on, theme, |p, rect, fg| {
+        icons::paint(p, rect.center(), icon, 17.0, fg);
+    });
+    if resp.clicked() {
+        *on = !*on;
+        resp.mark_changed();
+    }
+    resp
 }
 
 /// Draws a 18×18-ish pictogram of `ty` inside `rect`.

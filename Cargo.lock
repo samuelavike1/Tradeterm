@@ -2094,6 +2094,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4050469837a6ff301cd14c1f8f24f88549e6d548f24f64e2148eb0f72cebc51f"
 
 [[package]]
+name = "lucide-icons"
+version = "1.77.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e9306277cb545b55e87866b0c5f44a692b81431cfbceff3bf1b6fa41b5c46bc3"
+
+[[package]]
 name = "matchers"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4091,6 +4097,7 @@ dependencies = [
  "directories",
  "eframe",
  "egui",
+ "lucide-icons",
  "serde",
  "serde_json",
  "tempfile",

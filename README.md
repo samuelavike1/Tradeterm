@@ -52,6 +52,10 @@ with a custom chart widget built to handle a million bars.
   #089981 / #f23645),
   and a System mode that follows the OS. Up/down colors can be overridden. The whole
   UI (panels, widgets, rounding, spacing) uses the tokens.
+- **Icons:** [Lucide](https://lucide.dev) (ISC) via the `lucide-icons` crate's bundled
+  icon font, drawn as glyphs in theme colors. The title bar has a Sun/Moon quick theme
+  toggle. Chart-type pictograms are custom-drawn because Lucide has no hollow-candle,
+  OHLC-bar or Heikin Ashi icons.
 - **Native fonts:** the UI and chart use the OS UI font (Segoe UI, SF/Helvetica, Noto/DejaVu
   Sans) instead of egui's thin built-in font, with egui's fonts as fallbacks.
 - **Settings persistence:** theme, colors, and every tab (symbol, timeframe, chart type,

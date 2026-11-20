@@ -2,6 +2,7 @@
 //! this module draws the tab strip's window buttons, makes empty title-bar
 //! space draggable and adds resize handles along the window edges.
 
+use crate::icons::{self, Icon};
 use egui::{
     Align2, Color32, CornerRadius, CursorIcon, FontId, Id, Rect, ResizeDirection, Response, Sense,
     Stroke, StrokeKind, Ui, ViewportCommand, pos2, vec2,
@@ -43,7 +44,7 @@ pub enum WindowButton {
     Close,
 }
 
-/// A 46-px wide caption button, drawn like the Windows 11 ones.
+/// A 46-px wide caption button with a Lucide glyph (Windows 11 layout).
 pub fn window_button(ui: &mut Ui, kind: WindowButton, theme: &Theme) -> Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(46.0, TITLE_BAR_HEIGHT), Sense::click());
     let hovered = resp.hovered();
@@ -54,61 +55,32 @@ pub fn window_button(ui: &mut Ui, kind: WindowButton, theme: &Theme) -> Response
     };
     let p = ui.painter();
     p.rect_filled(rect, 0.0, bg);
-    let c = rect.center();
-    let s = 5.0;
-    let stroke = Stroke::new(1.0, fg);
-    match kind {
-        WindowButton::Minimize => {
-            p.hline((c.x - s)..=(c.x + s), c.y, stroke);
-        }
-        WindowButton::Maximize => {
-            p.rect_stroke(
-                Rect::from_center_size(c, vec2(2.0 * s, 2.0 * s)),
-                1.0,
-                stroke,
-                StrokeKind::Inside,
-            );
-        }
-        WindowButton::Restore => {
-            let back = Rect::from_center_size(c + vec2(2.0, -2.0), vec2(8.0, 8.0));
-            let front = Rect::from_center_size(c + vec2(-1.0, 1.0), vec2(8.0, 8.0));
-            p.rect_stroke(back, 1.0, stroke, StrokeKind::Inside);
-            p.rect_filled(front, 1.0, if hovered { bg } else { theme.chrome });
-            p.rect_stroke(front, 1.0, stroke, StrokeKind::Inside);
-        }
-        WindowButton::Close => {
-            p.line_segment([c + vec2(-s, -s), c + vec2(s, s)], stroke);
-            p.line_segment([c + vec2(-s, s), c + vec2(s, -s)], stroke);
-        }
-    }
+    let (icon, size) = match kind {
+        WindowButton::Minimize => (Icon::Minus, 16.0),
+        WindowButton::Maximize => (Icon::Square, 13.0),
+        WindowButton::Restore => (Icon::Copy, 13.0),
+        WindowButton::Close => (Icon::X, 17.0),
+    };
+    icons::paint(p, rect.center(), icon, size, fg);
     resp
 }
 
-/// A painted gear button (the ⚙ character comes from a color-emoji font and
-/// would ignore the theme's text color).
-pub fn settings_button(ui: &mut Ui, theme: &Theme) -> Response {
-    let (rect, resp) = ui.allocate_exact_size(vec2(36.0, TITLE_BAR_HEIGHT), Sense::click());
+/// A frameless title-bar icon button with a rounded hover background, which
+/// also stays highlighted while a popup attached to it is open.
+pub fn title_icon_button(ui: &mut Ui, icon: Icon, theme: &Theme) -> Response {
+    let (rect, resp) = ui.allocate_exact_size(vec2(34.0, TITLE_BAR_HEIGHT), Sense::click());
+    let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
+    let active = resp.hovered() || open;
     let p = ui.painter();
-    let bg_rect = Rect::from_center_size(rect.center(), vec2(30.0, 28.0));
-    if resp.hovered() || egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp))
-    {
-        p.rect_filled(bg_rect, 5.0, theme.border);
+    if active {
+        p.rect_filled(
+            Rect::from_center_size(rect.center(), vec2(28.0, 28.0)),
+            5.0,
+            theme.border,
+        );
     }
-    let color = if resp.hovered() {
-        theme.text
-    } else {
-        theme.text_muted
-    };
-    let c = rect.center();
-    let stroke = Stroke::new(1.5, color);
-    // Eight teeth around a ring, with a hole in the middle.
-    for k in 0..8 {
-        let a = k as f32 * std::f32::consts::TAU / 8.0;
-        let dir = vec2(a.cos(), a.sin());
-        p.line_segment([c + dir * 5.0, c + dir * 7.5], Stroke::new(2.4, color));
-    }
-    p.circle_stroke(c, 5.0, stroke);
-    p.circle_stroke(c, 2.0, stroke);
+    let color = if active { theme.text } else { theme.text_muted };
+    icons::paint(p, rect.center(), icon, 17.0, color);
     resp
 }
 
@@ -260,11 +232,12 @@ pub fn tab(ui: &mut Ui, id: Id, v: &TabView<'_>, theme: &Theme) -> TabAction {
         if close_resp.hovered() {
             p.rect_filled(close_rect, 4.0, theme.border);
         }
-        let c = close_rect.center();
-        let s = 3.5;
-        let stroke = Stroke::new(1.2, theme.text_muted);
-        p.line_segment([c + vec2(-s, -s), c + vec2(s, s)], stroke);
-        p.line_segment([c + vec2(-s, s), c + vec2(s, -s)], stroke);
+        let color = if close_resp.hovered() {
+            theme.text
+        } else {
+            theme.text_muted
+        };
+        icons::paint(p, close_rect.center(), Icon::X, 13.0, color);
     }
 
     let close = v.closable
@@ -283,10 +256,12 @@ pub fn new_tab_button(ui: &mut Ui, theme: &Theme) -> Response {
     if resp.hovered() {
         p.rect_filled(rect, 5.0, theme.border);
     }
-    let c = rect.center();
-    let stroke = Stroke::new(1.3, theme.text_muted);
-    p.hline((c.x - 5.0)..=(c.x + 5.0), c.y, stroke);
-    p.vline(c.x, (c.y - 5.0)..=(c.y + 5.0), stroke);
+    let color = if resp.hovered() {
+        theme.text
+    } else {
+        theme.text_muted
+    };
+    icons::paint(p, rect.center(), Icon::Plus, 16.0, color);
     resp.on_hover_text("New tab (Ctrl+T)")
 }
 

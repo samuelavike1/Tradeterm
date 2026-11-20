@@ -88,8 +88,8 @@ fn first_existing(candidates: &[Candidate]) -> Option<(&Path, FontData)> {
     })
 }
 
-/// Installs system fonts in front of egui's defaults. Falls back to egui's
-/// built-in fonts if none are found.
+/// Installs system fonts in front of egui's defaults (falling back to egui's
+/// built-in fonts if none are found) plus the Lucide icon font.
 pub fn install(ctx: &egui::Context) {
     let mut defs = FontDefinitions::default();
     for (family, name, candidates) in [
@@ -108,6 +108,7 @@ pub fn install(ctx: &egui::Context) {
             None => warn!(?family, "no system font found; using egui's built-in font"),
         }
     }
+    crate::icons::register(&mut defs);
     ctx.set_fonts(defs);
 }
 

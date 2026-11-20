@@ -1,4 +1,5 @@
 use crate::chrome::{self, TITLE_BAR_HEIGHT, TabView};
+use crate::icons::Icon;
 use crate::perf::PerfStats;
 use crate::runtime::BackgroundRuntime;
 use crate::search::SearchOutcome;
@@ -216,8 +217,27 @@ impl TradeTermApp {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 chrome::window_controls(ui, &theme);
                 ui.add_space(4.0);
-                let gear = chrome::settings_button(ui, &theme).on_hover_text("Settings");
+                let gear =
+                    chrome::title_icon_button(ui, Icon::Settings, &theme).on_hover_text("Settings");
                 egui::Popup::menu(&gear).show(|ui| self.settings_menu(ui));
+                // Quick light/dark switch (same as Ctrl/Cmd+Shift+T).
+                let dark = ui.ctx().theme() == egui::Theme::Dark;
+                let (icon, tip) = if dark {
+                    (Icon::Sun, "Switch to light theme")
+                } else {
+                    (Icon::Moon, "Switch to dark theme")
+                };
+                if chrome::title_icon_button(ui, icon, &theme)
+                    .on_hover_text(tip)
+                    .clicked()
+                {
+                    let next = if dark {
+                        ThemeMode::Light
+                    } else {
+                        ThemeMode::Dark
+                    };
+                    self.set_theme(next, self.overrides);
+                }
                 ui.add_space(4.0);
                 // Whatever is left between the tabs and the buttons moves the window.
                 let rest = ui.available_rect_before_wrap();
@@ -327,9 +347,13 @@ impl TradeTermApp {
                         });
                 }
                 toolbar::divider(ui, &theme);
-                let vol = RichText::new("Volume").size(13.5);
-                ui.toggle_value(&mut tab.chart.show_volume, vol)
-                    .on_hover_text("Show the volume pane");
+                toolbar::icon_toggle(
+                    ui,
+                    &mut tab.chart.show_volume,
+                    Icon::ChartNoAxesColumn,
+                    &theme,
+                )
+                .on_hover_text("Volume pane");
             });
         });
     }

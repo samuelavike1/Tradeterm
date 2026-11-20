@@ -3,6 +3,7 @@
 mod app;
 mod chrome;
 mod fonts;
+mod icons;
 mod perf;
 mod runtime;
 mod search;
