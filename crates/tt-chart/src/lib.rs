@@ -4,6 +4,8 @@
 //! - [`viewport`] and [`scale`]: pure math (bar ↔ x, price ↔ y in linear, log
 //!   and percent modes, tick picking, label formatting). Unit tested.
 //! - [`time_axis`]: index-based time ticks (gaps take no space).
+//! - [`lod`]: min/max pyramid; zoomed far out, each pixel column is built
+//!   from a few precomputed blocks instead of thousands of bars.
 //! - `draw`: builds the chart from primitives of the [`render::Canvas`] trait.
 //! - [`render`]: the backend boundary. [`render::EguiCanvas`] implements
 //!   `Canvas` with `egui::Painter`; a custom wgpu renderer implements the
@@ -13,6 +15,7 @@
 pub mod bars;
 mod draw;
 mod kind;
+pub mod lod;
 pub mod render;
 pub mod scale;
 mod style;

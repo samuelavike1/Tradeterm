@@ -1,5 +1,6 @@
 use crate::Candle;
 use std::ops::Range;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// What [`CandleSeries::upsert`] did with a candle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,8 +22,9 @@ pub enum UpsertOutcome {
 ///
 /// [`Self::version`] changes whenever existing bars move or disappear
 /// (anything other than updating the last bar or appending), so derived
-/// caches know when an incremental update is not enough.
-#[derive(Debug, Clone, Default)]
+/// caches know when an incremental update is not enough. Versions are
+/// globally unique; clones share their source's version (same contents).
+#[derive(Debug, Clone)]
 pub struct CandleSeries {
     version: u64,
     open_time_ms: Vec<i64>,
@@ -31,6 +33,27 @@ pub struct CandleSeries {
     low: Vec<f64>,
     close: Vec<f64>,
     volume: Vec<f64>,
+}
+
+/// Versions are unique across *all* series, so a cache can't confuse a
+/// freshly built series with the one it saw before.
+fn next_version() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
+impl Default for CandleSeries {
+    fn default() -> Self {
+        Self {
+            version: next_version(),
+            open_time_ms: Vec::new(),
+            open: Vec::new(),
+            high: Vec::new(),
+            low: Vec::new(),
+            close: Vec::new(),
+            volume: Vec::new(),
+        }
+    }
 }
 
 impl CandleSeries {
@@ -52,7 +75,7 @@ impl CandleSeries {
     }
 
     pub fn clear(&mut self) {
-        self.version += 1;
+        self.version = next_version();
         self.open_time_ms.clear();
         self.open.clear();
         self.high.clear();
@@ -105,7 +128,7 @@ impl CandleSeries {
         if older.is_empty() {
             return 0;
         }
-        self.version += 1;
+        self.version = next_version();
         let n = older.len();
         fn splice<T: Copy>(v: &mut Vec<T>, head: impl Iterator<Item = T>, cap: usize) {
             let mut out = Vec::with_capacity(cap);
@@ -137,7 +160,7 @@ impl CandleSeries {
         };
         let keep = self.open_time_ms.partition_point(|t| *t < t0);
         self.truncate(keep);
-        self.version += 1;
+        self.version = next_version();
         self.reserve(candles.len());
         for c in &candles {
             self.push(c);
@@ -149,7 +172,7 @@ impl CandleSeries {
         if len >= self.len() {
             return;
         }
-        self.version += 1;
+        self.version = next_version();
         self.open_time_ms.truncate(len);
         self.open.truncate(len);
         self.high.truncate(len);

@@ -22,9 +22,15 @@ pub enum TickWeight {
     Hour6,
     Hour12,
     Day,
+    /// Day of month 5, 10, 15, 20, 25, 30.
+    Day5,
     Month,
+    /// April, July, October (January is a year boundary).
+    Quarter,
     Year,
 }
+
+const WEIGHT_COUNT: usize = TickWeight::Year as usize + 1;
 
 /// The most significant boundary crossed between two bar open times.
 pub fn boundary_weight(prev_ms: i64, ms: i64) -> Option<TickWeight> {
@@ -36,10 +42,18 @@ pub fn boundary_weight(prev_ms: i64, ms: i64) -> Option<TickWeight> {
         return Some(TickWeight::Year);
     }
     if a.month != b.month {
-        return Some(TickWeight::Month);
+        return Some(if (a.month - 1) / 3 != (b.month - 1) / 3 {
+            TickWeight::Quarter
+        } else {
+            TickWeight::Month
+        });
     }
     if a.day != b.day {
-        return Some(TickWeight::Day);
+        return Some(if a.day / 5 != b.day / 5 {
+            TickWeight::Day5
+        } else {
+            TickWeight::Day
+        });
     }
     const UNITS: [(i64, TickWeight); 8] = [
         (12 * HOUR_MS, TickWeight::Hour12),
@@ -62,8 +76,8 @@ pub fn tick_label(ms: i64, weight: TickWeight) -> String {
     let dt = DateTime::from_unix_ms(ms);
     match weight {
         TickWeight::Year => dt.year.to_string(),
-        TickWeight::Month => dt.month_name().to_owned(),
-        TickWeight::Day => dt.day.to_string(),
+        TickWeight::Month | TickWeight::Quarter => dt.month_name().to_owned(),
+        TickWeight::Day | TickWeight::Day5 => dt.day.to_string(),
         _ => format!("{:02}:{:02}", dt.hour, dt.minute),
     }
 }
@@ -103,16 +117,22 @@ pub fn time_ticks(
     // Use one regular unit: drop weights so fine that their ticks could not
     // all fit (otherwise leftovers like "08:52" fill the gaps unevenly).
     let span = (x_range.1 - x_range.0).max(1.0);
-    let slot = label_width("00:00") + min_gap;
-    let mut counts = [0usize; 11];
+    let mut counts = [0usize; WEIGHT_COUNT];
     for (w, _) in &cands {
         counts[*w as usize] += 1;
     }
     let mut threshold = TickWeight::Year as usize;
-    let mut at_least = 0;
+    let mut needed = 0.0;
     for w in (0..counts.len()).rev() {
-        at_least += counts[w];
-        if at_least as f32 * slot > span {
+        // Typical label width for this unit.
+        let sample = match w {
+            x if x == TickWeight::Year as usize => "2026",
+            x if x >= TickWeight::Month as usize => "May",
+            x if x >= TickWeight::Day as usize => "28",
+            _ => "00:00",
+        };
+        needed += counts[w] as f32 * (label_width(sample) + min_gap);
+        if needed > span {
             break;
         }
         threshold = w;
@@ -172,11 +192,25 @@ mod tests {
             boundary_weight(NOV20 + 11 * HOUR_MS, NOV20 + 12 * HOUR_MS),
             Some(TickWeight::Hour12)
         );
-        assert_eq!(boundary_weight(NOV20 - m, NOV20), Some(TickWeight::Day));
+        // 19th -> 20th crosses a 5-day mark.
+        assert_eq!(boundary_weight(NOV20 - m, NOV20), Some(TickWeight::Day5));
         // 2026-12-01 and 2027-01-01
         assert_eq!(
             boundary_weight(NOV20, NOV20 + 11 * DAY_MS),
             Some(TickWeight::Month)
+        );
+        assert_eq!(
+            boundary_weight(NOV20, NOV20 + 5 * DAY_MS),
+            Some(TickWeight::Day5)
+        ); // 25th
+        assert_eq!(
+            boundary_weight(NOV20, NOV20 + DAY_MS),
+            Some(TickWeight::Day)
+        ); // 21st
+        // 2026-09-30 -> 2026-10-01 starts Q4.
+        assert_eq!(
+            boundary_weight(NOV20 - 51 * DAY_MS, NOV20 - 50 * DAY_MS),
+            Some(TickWeight::Quarter)
         );
         assert_eq!(
             boundary_weight(NOV20, NOV20 + 42 * DAY_MS),
@@ -256,6 +290,61 @@ mod tests {
         for t in &ticks {
             assert!(t.weight >= TickWeight::Minute15, "{t:?}");
         }
+    }
+
+    #[test]
+    fn multi_year_range_shows_months() {
+        // Two years of daily bars on 1200 px: months fit, days don't.
+        let times: Vec<i64> = (0..730).map(|i| NOV20 + i * crate::scale::DAY_MS).collect();
+        let spacing = 1200.0 / 730.0;
+        let ticks = time_ticks(
+            &times,
+            0..730,
+            (0.0, 1200.0),
+            2,
+            18.0,
+            |i| i as f32 * spacing,
+            |s| s.len() as f32 * 7.0,
+        );
+        let months = ticks
+            .iter()
+            .filter(|t| t.weight >= TickWeight::Month && t.weight < TickWeight::Year)
+            .count();
+        assert!(months >= 8, "{ticks:?}");
+        assert!(ticks.iter().any(|t| t.weight == TickWeight::Year));
+        assert!(ticks.iter().all(|t| t.weight >= TickWeight::Month));
+    }
+
+    #[test]
+    fn million_minutes_show_months() {
+        // ~2.7 years of weekday minutes squeezed into 1200 px, sampled with a stride.
+        let day = crate::scale::DAY_MS;
+        let mut times = Vec::with_capacity(1_000_000);
+        let mut t = 1_704_067_200_000_i64; // 2024-01-01, Monday
+        while times.len() < 1_000_000 {
+            if !matches!(t.div_euclid(day).rem_euclid(7), 2 | 3) {
+                times.push(t);
+            }
+            t += MINUTE_MS;
+        }
+        let spacing = 1200.0 / times.len() as f32;
+        let stride = (3.0 / spacing).ceil() as usize;
+        let ticks = time_ticks(
+            &times,
+            0..times.len(),
+            (0.0, 1200.0),
+            stride,
+            18.0,
+            |i| i as f32 * spacing,
+            |s| s.len() as f32 * 7.0,
+        );
+        // Too long for every month: quarters (Apr/Jul/Oct) between the years.
+        let quarters = ticks
+            .iter()
+            .filter(|t| t.weight == TickWeight::Quarter)
+            .count();
+        assert!(quarters >= 6, "{ticks:?}");
+        assert!(ticks.iter().all(|t| t.weight >= TickWeight::Quarter));
     }
 
     #[test]

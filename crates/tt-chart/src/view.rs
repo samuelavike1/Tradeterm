@@ -1,5 +1,6 @@
 use crate::bars::{collect_bars, price_extent};
 use crate::draw::{self, Scene};
+use crate::lod::Lod;
 use crate::render::{Canvas, EguiCanvas};
 use crate::scale::{precision_from_tick_size, price_decimals};
 use crate::viewport::{
@@ -18,6 +19,8 @@ const MIN_SPACING: f32 = 0.0005;
 const MAX_SPACING: f32 = 80.0;
 /// Fraction of the visible price span added above and below when auto-fitting.
 const Y_PADDING: f64 = 0.08;
+/// Below this bar width (physical pixels) bars are drawn decimated.
+const DECIMATE_BELOW_PX: f32 = 2.0;
 /// Zoom sensitivity: scale factor exponent per scrolled point.
 const WHEEL_ZOOM_PER_POINT: f32 = 0.006;
 /// Share of the plot height used by the volume pane.
@@ -81,6 +84,11 @@ pub struct ChartView {
     last_scale_mode: ScaleMode,
     /// Heikin Ashi cache, kept in sync incrementally.
     ha: HeikinAshi,
+    /// Min/max pyramid for decimated drawing, and whether it was built from HA bars.
+    lod: Lod,
+    lod_is_ha: bool,
+    /// Requested zoom (number of bars to fit), applied on the next frame.
+    pending_zoom: Option<usize>,
 }
 
 impl Default for ChartView {
@@ -103,6 +111,9 @@ impl ChartView {
             last_range: (0.0, 1.0),
             last_scale_mode: ScaleMode::default(),
             ha: HeikinAshi::new(),
+            lod: Lod::new(),
+            lod_is_ha: false,
+            pending_zoom: None,
         }
     }
 
@@ -116,6 +127,16 @@ impl ChartView {
         self.bar_spacing = DEFAULT_SPACING;
         self.right_offset = DEFAULT_RIGHT_OFFSET;
         self.manual_range = None;
+    }
+
+    /// On the next frame, zoom so that `bars` bars fill the plot, newest at the right.
+    pub fn zoom_to_bars(&mut self, bars: usize) {
+        self.pending_zoom = Some(bars.max(1));
+    }
+
+    /// On the next frame, zoom out so the whole series is visible.
+    pub fn fit_all(&mut self) {
+        self.pending_zoom = Some(usize::MAX);
     }
 
     /// `true` while the price axis auto-fits the visible bars.
@@ -147,6 +168,15 @@ impl ChartView {
         let price_resp = ui.interact(price_axis, id.with("price_axis"), Sense::click_and_drag());
         let time_resp = ui.interact(time_axis, id.with("time_axis"), Sense::click_and_drag());
 
+        if let Some(bars) = self.pending_zoom
+            && n > 0
+        {
+            self.pending_zoom = None;
+            let bars = bars.min(n) as f32;
+            self.bar_spacing = (plot.width() / bars).clamp(MIN_SPACING, MAX_SPACING);
+            self.right_offset = 0.0;
+            self.manual_range = None;
+        }
         self.handle_x_input(ui, &plot_resp, &time_resp, plot);
         self.clamp_offset(plot, n);
 
@@ -193,7 +223,19 @@ impl ChartView {
             bar_count: n,
             scale: PriceScale::new(self.scale_mode, base),
         };
-        let bars = collect_bars(display, range.clone(), &vp);
+        // Bars narrower than ~2 px are drawn as per-pixel min/max columns.
+        let ppp = ui.ctx().pixels_per_point();
+        let decimated = self.bar_spacing * ppp < DECIMATE_BELOW_PX;
+        let bars = if decimated {
+            if self.lod_is_ha != is_ha {
+                self.lod = Lod::new();
+                self.lod_is_ha = is_ha;
+            }
+            self.lod.sync(display);
+            self.lod.columns(display, range.clone(), &vp, ppp)
+        } else {
+            collect_bars(display, range.clone(), &vp)
+        };
 
         // ---- vertical range -------------------------------------------------
         let close_only = matches!(self.chart_type, ChartType::Line | ChartType::Area);
@@ -221,7 +263,7 @@ impl ChartView {
             display,
             last_raw: series.last(),
             bars: &bars,
-            decimated: false,
+            decimated,
             crosshair,
             precision,
             tick_size: data.tick_size,

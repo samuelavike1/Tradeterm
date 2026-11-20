@@ -5,6 +5,7 @@ mod perf;
 mod runtime;
 mod search;
 mod settings;
+mod synthetic;
 
 use app::TradeTermApp;
 use runtime::BackgroundRuntime;
@@ -20,6 +21,7 @@ fn main() -> eframe::Result {
 
     let runtime = BackgroundRuntime::start().expect("failed to start tokio runtime");
     let (settings, store) = SettingsStore::load(SettingsStore::default_path());
+    let synthetic = synthetic_arg(std::env::args().skip(1));
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -38,7 +40,41 @@ fn main() -> eframe::Result {
                 runtime,
                 settings,
                 store,
+                synthetic,
             )?))
         }),
     )
+}
+
+/// `--synthetic [N]` starts with N synthetic bars (default 1,000,000).
+fn synthetic_arg(mut args: impl Iterator<Item = String>) -> Option<usize> {
+    while let Some(a) = args.next() {
+        if a == "--synthetic" {
+            let n = args.next().and_then(|n| n.replace('_', "").parse().ok());
+            return Some(n.unwrap_or(synthetic::DEFAULT_BARS));
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::synthetic_arg;
+
+    fn args(v: &[&str]) -> impl Iterator<Item = String> {
+        v.iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>()
+            .into_iter()
+    }
+
+    #[test]
+    fn parses_synthetic_flag() {
+        assert_eq!(synthetic_arg(args(&[])), None);
+        assert_eq!(synthetic_arg(args(&["--synthetic"])), Some(1_000_000));
+        assert_eq!(
+            synthetic_arg(args(&["--synthetic", "250_000"])),
+            Some(250_000)
+        );
+    }
 }

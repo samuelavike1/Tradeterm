@@ -2,6 +2,7 @@ use crate::perf::PerfStats;
 use crate::runtime::BackgroundRuntime;
 use crate::search::{SearchOutcome, SymbolSearch};
 use crate::settings::{AppSettings, SettingsStore};
+use crate::synthetic;
 use crossbeam_channel::Receiver;
 use egui::{Align, Color32, Key, KeyboardShortcut, Layout, Modifiers, RichText, Sense, vec2};
 use std::sync::Arc;
@@ -18,6 +19,8 @@ use tt_theme::{Theme, ThemeMode, ThemeOverrides};
 
 const TOGGLE_THEME: KeyboardShortcut =
     KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::T);
+const LOAD_SYNTHETIC: KeyboardShortcut =
+    KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::D);
 /// Backfill stops once this many bars are loaded, so zooming far out can't
 /// page through years of 1m data.
 const MAX_HISTORY_BARS: usize = 250_000;
@@ -44,6 +47,8 @@ pub struct TradeTermApp {
 
     symbol: Symbol,
     symbol_info: Option<SymbolInfo>,
+    /// `Some(n)`: showing `n` synthetic one-minute bars instead of live data.
+    synthetic: Option<usize>,
     search: SymbolSearch,
     timeframe: Timeframe,
 
@@ -68,6 +73,7 @@ impl TradeTermApp {
         runtime: BackgroundRuntime,
         settings: AppSettings,
         settings_store: SettingsStore,
+        synthetic: Option<usize>,
     ) -> anyhow::Result<Self> {
         let source = Arc::new(BinanceSource::new()?);
         let (_, rx) = crossbeam_channel::unbounded();
@@ -101,6 +107,7 @@ impl TradeTermApp {
             search: SymbolSearch::new(symbol.as_str()),
             symbol,
             symbol_info: None,
+            synthetic,
             timeframe: settings.last_timeframe,
             series: CandleSeries::new(),
             status: ConnectionStatus::Connecting,
@@ -134,6 +141,10 @@ impl TradeTermApp {
 
         let ctx = self.ctx.clone();
         let sink = EventSink::new(tx, move || ctx.request_repaint());
+        if let Some(n) = self.synthetic {
+            self.start_synthetic_stream(n, sink);
+            return;
+        }
         self.sink = Some(sink.clone());
         let (symbol, tf) = (self.symbol.clone(), self.timeframe);
         info!(%symbol, %tf, source = self.source.name(), "starting stream");
@@ -159,11 +170,38 @@ impl TradeTermApp {
         self.ctx.request_repaint();
     }
 
+    /// Generates synthetic data in the background and zooms out to show all of it.
+    fn start_synthetic_stream(&mut self, n: usize, sink: EventSink) {
+        self.sink = None;
+        let tf = self.timeframe;
+        info!(bars = n, %tf, "loading synthetic data");
+        self.chart.fit_all();
+        self.runtime.handle().spawn_blocking(move || {
+            let started = Instant::now();
+            let candles = synthetic::generate(n, tf);
+            info!(bars = candles.len(), elapsed = ?started.elapsed(), "synthetic data ready");
+            sink.send(MarketEvent::SymbolInfo(synthetic::symbol_info()));
+            sink.send(MarketEvent::History(candles));
+            sink.send(MarketEvent::Status(ConnectionStatus::Connected));
+        });
+    }
+
+    /// Debug command: switch to `n` synthetic bars (or back to live data with `None`).
+    fn set_synthetic(&mut self, n: Option<usize>) {
+        self.synthetic = n;
+        self.restart_stream();
+    }
+
     /// Requests the page of bars before the oldest one we hold.
     fn request_backfill(&mut self) {
         let b = &self.backfill;
         let cooling = b.retry_at.is_some_and(|t| Instant::now() < t);
-        if b.loading || b.exhausted || cooling || self.series.len() >= MAX_HISTORY_BARS {
+        if self.synthetic.is_some()
+            || b.loading
+            || b.exhausted
+            || cooling
+            || self.series.len() >= MAX_HISTORY_BARS
+        {
             return;
         }
         let (Some(sink), Some(&oldest)) = (self.sink.clone(), self.series.open_times().first())
@@ -256,6 +294,10 @@ impl TradeTermApp {
         if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::F12)) {
             self.perf.visible = !self.perf.visible;
         }
+        if ctx.input_mut(|i| i.consume_shortcut(&LOAD_SYNTHETIC)) {
+            self.set_synthetic(Some(synthetic::DEFAULT_BARS));
+            self.perf.visible = true;
+        }
     }
 
     fn perf_overlay(&mut self, ctx: &egui::Context) {
@@ -324,8 +366,9 @@ impl TradeTermApp {
             match outcome {
                 Some(SearchOutcome::Submit(text)) => {
                     let sym = Symbol::new(&text);
-                    if sym.is_valid() && sym != self.symbol {
+                    if sym.is_valid() && (sym != self.symbol || self.synthetic.is_some()) {
                         self.symbol = sym;
+                        self.synthetic = None;
                         self.restart_stream();
                     }
                     self.search.input = self.symbol.to_string();
@@ -399,6 +442,31 @@ impl TradeTermApp {
         if mode != self.theme_mode || overrides != self.overrides {
             self.set_theme(mode, overrides);
         }
+
+        ui.separator();
+        ui.label(RichText::new("Debug").strong());
+        ui.checkbox(&mut self.perf.visible, "Performance overlay (F12)");
+        let load = format!(
+            "Load 1,000,000 synthetic bars ({})",
+            ui.ctx().format_shortcut(&LOAD_SYNTHETIC)
+        );
+        if ui.button(load).clicked() {
+            self.set_synthetic(Some(synthetic::DEFAULT_BARS));
+            self.perf.visible = true;
+            ui.close();
+        }
+        if self.synthetic.is_some() && ui.button("Back to live data").clicked() {
+            self.set_synthetic(None);
+            ui.close();
+        }
+    }
+
+    fn source_name(&self) -> &'static str {
+        if self.synthetic.is_some() {
+            "Synthetic"
+        } else {
+            self.source.name()
+        }
     }
 
     fn price_precision(&self) -> usize {
@@ -415,6 +483,10 @@ impl TradeTermApp {
         let t = &self.theme;
         ui.horizontal(|ui| {
             let (color, text) = match &self.status {
+                _ if self.synthetic.is_some() => (
+                    t.series_palette[1],
+                    format!("Synthetic data ({} 1m bars)", self.synthetic.unwrap_or(0)),
+                ),
                 ConnectionStatus::Connected => (t.up, self.status.to_string()),
                 ConnectionStatus::Connecting => (t.accent, self.status.to_string()),
                 ConnectionStatus::Disconnected { .. } => {
@@ -449,7 +521,7 @@ impl TradeTermApp {
                 ui.label(RichText::new("loading older…").weak());
             } else if self.backfill.exhausted {
                 ui.label(RichText::new("(full history)").weak());
-            } else if self.series.len() >= MAX_HISTORY_BARS {
+            } else if self.synthetic.is_none() && self.series.len() >= MAX_HISTORY_BARS {
                 ui.label(RichText::new("(history limit)").weak());
             }
 
@@ -458,7 +530,7 @@ impl TradeTermApp {
                     .symbol_info
                     .as_ref()
                     .map_or("UTC", |i| i.timezone.as_str());
-                ui.label(RichText::new(format!("{} · {tz}", self.source.name())).weak());
+                ui.label(RichText::new(format!("{} · {tz}", self.source_name())).weak());
                 if let Some(i) = &self.symbol_info {
                     ui.separator();
                     ui.label(
@@ -524,12 +596,12 @@ impl eframe::App for TradeTermApp {
             .show_separator_line(false)
             .show(ui, |ui| self.status_bar(ui));
 
-        let title = format!(
-            "{} · {} · {}",
-            self.symbol,
-            self.timeframe,
-            self.source.name()
-        );
+        let shown = if self.synthetic.is_some() {
+            "SYNTH".to_owned()
+        } else {
+            self.symbol.to_string()
+        };
+        let title = format!("{shown} · {} · {}", self.timeframe, self.source_name());
         let theme = self.theme.clone();
         let tick_size = self.symbol_info.as_ref().map(|i| i.tick_size);
         let out = egui::CentralPanel::no_frame()
