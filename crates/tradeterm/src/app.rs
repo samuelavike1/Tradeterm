@@ -10,7 +10,7 @@ use std::time::Instant;
 use tokio::task::JoinHandle;
 use tracing::{error, info};
 use tt_brokers::{BinanceSource, MarketDataSource};
-use tt_chart::ChartView;
+use tt_chart::{ChartData, ChartView, ScaleMode};
 use tt_core::{CandleSeries, ConnectionStatus, EventSink, MarketEvent, Symbol, Timeframe};
 use tt_theme::{Theme, ThemeMode, ThemeOverrides};
 
@@ -252,6 +252,16 @@ impl TradeTermApp {
                 }
             }
 
+            ui.separator();
+            for mode in ScaleMode::ALL {
+                ui.selectable_value(&mut self.chart.scale_mode, mode, mode.label())
+                    .on_hover_text(match mode {
+                        ScaleMode::Linear => "Linear price scale",
+                        ScaleMode::Logarithmic => "Logarithmic price scale",
+                        ScaleMode::Percent => "Percent change from the first visible bar",
+                    });
+            }
+
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.menu_button("⚙ Settings", |ui| self.settings_menu(ui));
             });
@@ -388,7 +398,12 @@ impl eframe::App for TradeTermApp {
         );
         let theme = self.theme.clone();
         egui::CentralPanel::no_frame().show(ui, |ui| {
-            self.chart.show(ui, &self.series, &theme, &title);
+            let data = ChartData {
+                series: &self.series,
+                title: &title,
+                price_precision: None,
+            };
+            self.chart.show(ui, data, &theme);
         });
         self.perf
             .chart
