@@ -4,6 +4,7 @@ use crate::scale::price_decimals;
 use crate::viewport::{PlotRect, Viewport, padded_price_range, visible_range};
 use egui::{CursorIcon, Rect, Response, Sense, Ui, pos2};
 use tt_core::CandleSeries;
+use tt_theme::Theme;
 
 const DEFAULT_SPACING: f32 = 8.0;
 const DEFAULT_RIGHT_OFFSET: f32 = 5.0;
@@ -48,7 +49,13 @@ impl ChartView {
     }
 
     /// Draws the chart filling all available space. `title` is shown top-left.
-    pub fn show(&mut self, ui: &mut Ui, series: &CandleSeries, title: &str) -> Response {
+    pub fn show(
+        &mut self,
+        ui: &mut Ui,
+        series: &CandleSeries,
+        theme: &Theme,
+        title: &str,
+    ) -> Response {
         let (full, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
 
         let decimals = series.last().map_or(2, |c| price_decimals(c.close));
@@ -84,6 +91,7 @@ impl ChartView {
             vp,
             series,
             style: &self.style,
+            theme,
             full,
             plot,
             crosshair,

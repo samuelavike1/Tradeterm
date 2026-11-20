@@ -1,15 +1,19 @@
 use crate::runtime::BackgroundRuntime;
-use crate::theme::{self, palette};
 use crossbeam_channel::Receiver;
-use egui::{Align, Layout, RichText, Sense, TextEdit, vec2};
+use egui::{
+    Align, Color32, Key, KeyboardShortcut, Layout, Modifiers, RichText, Sense, TextEdit, vec2,
+};
 use std::sync::Arc;
 use tokio::task::JoinHandle;
 use tracing::{error, info};
 use tt_brokers::{BinanceSource, MarketDataSource};
 use tt_chart::ChartView;
 use tt_core::{CandleSeries, ConnectionStatus, EventSink, MarketEvent, Symbol, Timeframe};
+use tt_theme::{Theme, ThemeMode, ThemeOverrides};
 
 const DEFAULT_SYMBOL: &str = "BTCUSDT";
+const TOGGLE_THEME: KeyboardShortcut =
+    KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::T);
 
 pub struct TradeTermApp {
     ctx: egui::Context,
@@ -26,6 +30,11 @@ pub struct TradeTermApp {
     status: ConnectionStatus,
     chart: ChartView,
 
+    theme_mode: ThemeMode,
+    overrides: ThemeOverrides,
+    /// Resolved palette for the current frame.
+    theme: Theme,
+
     runtime: BackgroundRuntime,
 }
 
@@ -33,6 +42,10 @@ impl TradeTermApp {
     pub fn new(ctx: egui::Context, runtime: BackgroundRuntime) -> anyhow::Result<Self> {
         let source = Arc::new(BinanceSource::new()?);
         let (_, rx) = crossbeam_channel::unbounded();
+        let theme_mode = ThemeMode::System;
+        let overrides = ThemeOverrides::default();
+        tt_theme::install(&ctx, theme_mode, overrides);
+        let theme = tt_theme::current(&ctx, overrides);
         let mut app = Self {
             ctx,
             stream: None,
@@ -43,7 +56,10 @@ impl TradeTermApp {
             timeframe: Timeframe::M1,
             series: CandleSeries::new(),
             status: ConnectionStatus::Connecting,
-            chart: ChartView::new(theme::chart_style()),
+            chart: ChartView::default(),
+            theme_mode,
+            overrides,
+            theme,
             runtime,
         };
         app.restart_stream();
@@ -90,6 +106,23 @@ impl TradeTermApp {
         }
     }
 
+    fn set_theme(&mut self, mode: ThemeMode, overrides: ThemeOverrides) {
+        self.theme_mode = mode;
+        self.overrides = overrides;
+        tt_theme::install(&self.ctx, mode, overrides);
+    }
+
+    fn handle_hotkeys(&mut self, ctx: &egui::Context) {
+        if ctx.input_mut(|i| i.consume_shortcut(&TOGGLE_THEME)) {
+            let next = if ctx.theme() == egui::Theme::Dark {
+                ThemeMode::Light
+            } else {
+                ThemeMode::Dark
+            };
+            self.set_theme(next, self.overrides);
+        }
+    }
+
     fn apply_symbol_input(&mut self) {
         let sym = Symbol::new(&self.symbol_input);
         if sym.is_valid() && sym != self.symbol {
@@ -101,11 +134,7 @@ impl TradeTermApp {
 
     fn top_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.label(
-                RichText::new("tradeterm")
-                    .strong()
-                    .color(palette::TEXT_STRONG),
-            );
+            ui.label(RichText::new("tradeterm").strong());
             ui.separator();
 
             let edit = ui.add(
@@ -138,32 +167,60 @@ impl TradeTermApp {
                     self.restart_stream();
                 }
             }
+
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.menu_button("⚙ Settings", |ui| self.settings_menu(ui));
+            });
         });
     }
 
+    fn settings_menu(&mut self, ui: &mut egui::Ui) {
+        ui.set_min_width(220.0);
+        ui.label(RichText::new("Theme").strong());
+        let mut mode = self.theme_mode;
+        for m in ThemeMode::ALL {
+            ui.radio_value(&mut mode, m, m.label());
+        }
+        ui.label(
+            RichText::new(format!(
+                "Toggle: {}",
+                ui.ctx().format_shortcut(&TOGGLE_THEME)
+            ))
+            .small()
+            .weak(),
+        );
+
+        ui.separator();
+        ui.label(RichText::new("Candle colors").strong());
+        let mut overrides = self.overrides;
+        color_row(ui, "Up", &mut overrides.up, self.theme.up);
+        color_row(ui, "Down", &mut overrides.down, self.theme.down);
+
+        if mode != self.theme_mode || overrides != self.overrides {
+            self.set_theme(mode, overrides);
+        }
+    }
+
     fn status_bar(&self, ui: &mut egui::Ui) {
+        let t = &self.theme;
         ui.horizontal(|ui| {
             let (color, text) = match &self.status {
-                ConnectionStatus::Connected => (palette::UP, self.status.to_string()),
-                ConnectionStatus::Connecting => (palette::WARN, self.status.to_string()),
+                ConnectionStatus::Connected => (t.up, self.status.to_string()),
+                ConnectionStatus::Connecting => (t.accent, self.status.to_string()),
                 ConnectionStatus::Disconnected { .. } => {
-                    (palette::DOWN, format!("{} (retrying)", self.status))
+                    (t.down, format!("{} (retrying)", self.status))
                 }
             };
             let (dot, _) = ui.allocate_exact_size(vec2(10.0, 10.0), Sense::hover());
             ui.painter().circle_filled(dot.center(), 4.0, color);
-            ui.label(RichText::new(text).color(palette::TEXT));
+            ui.label(text);
 
             ui.separator();
             match self.series.last() {
                 Some(c) => {
                     let d = tt_chart::scale::price_decimals(c.close);
-                    let color = if c.is_bullish() {
-                        palette::UP
-                    } else {
-                        palette::DOWN
-                    };
-                    ui.label(RichText::new("Last").color(palette::TEXT_WEAK));
+                    let color = if c.is_bullish() { t.up } else { t.down };
+                    ui.label(RichText::new("Last").weak());
                     ui.label(
                         RichText::new(format!("{:.d$}", c.close))
                             .monospace()
@@ -171,37 +228,57 @@ impl TradeTermApp {
                     );
                 }
                 None => {
-                    ui.label(RichText::new("Last —").color(palette::TEXT_WEAK));
+                    ui.label(RichText::new("Last —").weak());
                 }
             }
 
             ui.separator();
-            ui.label(RichText::new("Bars").color(palette::TEXT_WEAK));
+            ui.label(RichText::new("Bars").weak());
             ui.label(RichText::new(self.series.len().to_string()).monospace());
 
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.label(
-                    RichText::new(format!("{} · UTC", self.source.name()))
-                        .color(palette::TEXT_WEAK),
-                );
+                ui.label(RichText::new(format!("{} · UTC", self.source.name())).weak());
             });
         });
     }
 }
 
+/// A color picker with a "reset to palette default" button.
+fn color_row(ui: &mut egui::Ui, label: &str, value: &mut Option<Color32>, current: Color32) {
+    ui.horizontal(|ui| {
+        ui.label(label);
+        let mut c = value.unwrap_or(current);
+        if egui::color_picker::color_edit_button_srgba(
+            ui,
+            &mut c,
+            egui::color_picker::Alpha::Opaque,
+        )
+        .changed()
+        {
+            *value = Some(c);
+        }
+        if value.is_some() && ui.small_button("Reset").clicked() {
+            *value = None;
+        }
+    });
+}
+
 impl eframe::App for TradeTermApp {
-    fn logic(&mut self, _ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.handle_hotkeys(ctx);
         self.drain_events();
+        self.theme = tt_theme::current(ctx, self.overrides);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let bar = self.theme.bar_frame();
         egui::Panel::top("top_bar")
-            .frame(theme::bar_frame())
+            .frame(bar)
             .show_separator_line(false)
             .show(ui, |ui| self.top_bar(ui));
 
         egui::Panel::bottom("status_bar")
-            .frame(theme::bar_frame())
+            .frame(bar)
             .show_separator_line(false)
             .show(ui, |ui| self.status_bar(ui));
 
@@ -211,8 +288,9 @@ impl eframe::App for TradeTermApp {
             self.timeframe,
             self.source.name()
         );
+        let theme = self.theme.clone();
         egui::CentralPanel::no_frame().show(ui, |ui| {
-            self.chart.show(ui, &self.series, &title);
+            self.chart.show(ui, &self.series, &theme, &title);
         });
     }
 }

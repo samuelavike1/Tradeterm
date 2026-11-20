@@ -8,4 +8,6 @@ description = "Candlestick chart widget for tradeterm (egui)."
 
 [dependencies]
 egui = "0.37.0"
+serde = { version = "1.0.229", features = ["derive"] }
 tt-core = { version = "0.1.0", path = "../tt-core" }
+tt-theme = { version = "0.1.0", path = "../tt-theme" }

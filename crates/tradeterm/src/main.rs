@@ -2,7 +2,6 @@
 
 mod app;
 mod runtime;
-mod theme;
 
 use app::TradeTermApp;
 use runtime::BackgroundRuntime;
@@ -28,9 +27,6 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "tradeterm",
         options,
-        Box::new(move |cc| {
-            theme::apply(&cc.egui_ctx);
-            Ok(Box::new(TradeTermApp::new(cc.egui_ctx.clone(), runtime)?))
-        }),
+        Box::new(move |cc| Ok(Box::new(TradeTermApp::new(cc.egui_ctx.clone(), runtime)?))),
     )
 }

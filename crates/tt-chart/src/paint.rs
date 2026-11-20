@@ -9,12 +9,14 @@ use crate::scale::{
 use crate::viewport::Viewport;
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Shape, Stroke, pos2, vec2};
 use tt_core::CandleSeries;
+use tt_theme::Theme;
 
 /// Everything the painter needs for one frame.
 pub(crate) struct FrameData<'a> {
     pub vp: Viewport,
     pub series: &'a CandleSeries,
     pub style: &'a ChartStyle,
+    pub theme: &'a Theme,
     /// Whole widget area (plot + axes).
     pub full: Rect,
     pub plot: Rect,
@@ -26,7 +28,8 @@ pub(crate) struct FrameData<'a> {
 
 pub(crate) fn paint(painter: &Painter, f: &FrameData<'_>) {
     let s = f.style;
-    painter.rect_filled(f.full, 0.0, s.background);
+    let t = f.theme;
+    painter.rect_filled(f.full, 0.0, t.bg);
 
     if f.series.is_empty() {
         painter.text(
@@ -34,7 +37,7 @@ pub(crate) fn paint(painter: &Painter, f: &FrameData<'_>) {
             Align2::CENTER_CENTER,
             "Waiting for data…",
             FontId::proportional(s.font_size + 2.0),
-            s.axis_text,
+            t.text_muted,
         );
         paint_axis_lines(painter, f);
         paint_title(painter, f, None);
@@ -77,7 +80,7 @@ fn price_grid(painter: &Painter, plot_painter: &Painter, f: &FrameData<'_>) -> V
     let ticks: Vec<f64> = scale::ticks(f.vp.price_lo, f.vp.price_hi, step).collect();
     for &p in &ticks {
         let y = crisp(f.vp.y_of(p), ppp);
-        plot_painter.hline(f.plot.x_range(), y, Stroke::new(1.0, f.style.grid));
+        plot_painter.hline(f.plot.x_range(), y, Stroke::new(1.0, f.theme.grid));
     }
     ticks
 }
@@ -100,7 +103,7 @@ fn time_grid(plot_painter: &Painter, f: &FrameData<'_>) -> Vec<(f32, i64, i64)> 
             continue;
         }
         last_x = x;
-        plot_painter.vline(x, f.plot.y_range(), Stroke::new(1.0, f.style.grid));
+        plot_painter.vline(x, f.plot.y_range(), Stroke::new(1.0, f.theme.grid));
         out.push((x, t, step));
     }
     out
@@ -124,10 +127,10 @@ fn paint_candles(painter: &Painter, f: &FrameData<'_>, range: std::ops::Range<us
 
     let mut shapes = Vec::with_capacity(range.len() * 2);
     for i in range {
-        let color = if c[i] >= o[i] {
-            f.style.up
+        let (color, wick) = if c[i] >= o[i] {
+            (f.theme.up, f.theme.up_wick)
         } else {
-            f.style.down
+            (f.theme.down, f.theme.down_wick)
         };
         let cx_px = (f.vp.x_of(i as f32) * ppp).round();
 
@@ -137,7 +140,7 @@ fn paint_candles(painter: &Painter, f: &FrameData<'_>, range: std::ops::Range<us
         shapes.push(Shape::rect_filled(
             Rect::from_min_max(pos2(wick_x0, y_hi), pos2(wick_x0 + wick_px / ppp, y_lo)),
             0.0,
-            color,
+            wick,
         ));
 
         if body_px > wick_px {
@@ -162,7 +165,7 @@ fn paint_candles(painter: &Painter, f: &FrameData<'_>, range: std::ops::Range<us
 
 fn paint_axis_lines(painter: &Painter, f: &FrameData<'_>) {
     let ppp = painter.pixels_per_point();
-    let stroke = Stroke::new(1.0, f.style.axis_line);
+    let stroke = Stroke::new(1.0, f.theme.border);
     let x = crisp(f.plot.right(), ppp);
     painter.vline(x, f.full.y_range(), stroke);
     let y = crisp(f.plot.bottom(), ppp);
@@ -181,7 +184,7 @@ fn paint_price_labels(painter: &Painter, f: &FrameData<'_>, ticks: &[f64]) {
             Align2::LEFT_CENTER,
             format_price(p, f.decimals),
             font(f.style),
-            f.style.axis_text,
+            f.theme.text_muted,
         );
     }
 }
@@ -194,7 +197,7 @@ fn paint_time_labels(painter: &Painter, f: &FrameData<'_>, labels: &[(f32, i64, 
             Align2::CENTER_CENTER,
             format_axis_time(t, step),
             font(f.style),
-            f.style.axis_text,
+            f.theme.text_muted,
         );
     }
 }
@@ -208,23 +211,23 @@ fn axis_tag(
     text: String,
     bg: Color32,
 ) {
-    let galley = painter.layout_no_wrap(text, font(f.style), f.style.label_text);
+    let galley = painter.layout_no_wrap(text, font(f.style), f.theme.text_on_accent);
     let size = galley.size() + vec2(10.0, 6.0);
     let rect = align.anchor_size(anchor, size);
     painter.rect_filled(rect, 2.0, bg);
     painter.galley(
         rect.center() - galley.size() / 2.0,
         galley,
-        f.style.label_text,
+        f.theme.text_on_accent,
     );
 }
 
 fn paint_last_price(painter: &Painter, plot_painter: &Painter, f: &FrameData<'_>) {
     let Some(last) = f.series.last() else { return };
     let color = if last.is_bullish() {
-        f.style.up
+        f.theme.up
     } else {
-        f.style.down
+        f.theme.down
     };
     let ppp = painter.pixels_per_point();
     let y = crisp(f.vp.y_of(last.close), ppp);
@@ -255,7 +258,7 @@ fn paint_crosshair(
     bar: Option<usize>,
 ) {
     let ppp = painter.pixels_per_point();
-    let stroke = Stroke::new(1.0, f.style.crosshair);
+    let stroke = Stroke::new(1.0, f.theme.crosshair);
     // Snap the vertical line to the hovered bar like TradingView does.
     let x = crisp(bar.map_or(pointer.x, |i| f.vp.x_of(i as f32)), ppp);
     let y = crisp(pointer.y, ppp);
@@ -278,7 +281,7 @@ fn paint_crosshair(
         pos2(f.plot.right() + 1.0, y),
         Align2::LEFT_CENTER,
         format_price(f.vp.price_at(pointer.y), f.decimals),
-        f.style.label_bg,
+        f.theme.crosshair_label_bg,
     );
     if let Some(i) = bar {
         let t = f.series.open_times()[i];
@@ -288,7 +291,7 @@ fn paint_crosshair(
             pos2(x, f.plot.bottom() + 2.0),
             Align2::CENTER_TOP,
             format_full_time(t, f.bar_interval_ms),
-            f.style.label_bg,
+            f.theme.crosshair_label_bg,
         );
     }
 }
@@ -296,6 +299,7 @@ fn paint_crosshair(
 /// Top-left readout: title and OHLCV of the hovered (or last) bar.
 fn paint_title(painter: &Painter, f: &FrameData<'_>, bar: Option<usize>) {
     let s = f.style;
+    let t = f.theme;
     let font = font(s);
     let mut pos = f.plot.left_top() + vec2(10.0, 8.0);
     let mut put = |text: String, color: Color32, gap: f32| {
@@ -304,15 +308,15 @@ fn paint_title(painter: &Painter, f: &FrameData<'_>, bar: Option<usize>) {
     };
 
     if !f.title.is_empty() {
-        put(f.title.to_owned(), s.text, 14.0);
+        put(f.title.to_owned(), t.text, 14.0);
     }
     let Some(c) = bar.and_then(|i| f.series.get(i)) else {
         return;
     };
-    let color = if c.is_bullish() { s.up } else { s.down };
+    let color = if c.is_bullish() { t.up } else { t.down };
     let d = f.decimals;
     for (k, v) in [("O", c.open), ("H", c.high), ("L", c.low), ("C", c.close)] {
-        put(k.to_owned(), s.axis_text, 3.0);
+        put(k.to_owned(), t.text_muted, 3.0);
         put(format_price(v, d), color, 10.0);
     }
     let change = c.close - c.open;
@@ -322,6 +326,6 @@ fn paint_title(painter: &Painter, f: &FrameData<'_>, bar: Option<usize>) {
         0.0
     };
     put(format!("{change:+.d$} ({pct:+.2}%)"), color, 14.0);
-    put("Vol".to_owned(), s.axis_text, 3.0);
-    put(format_volume(c.volume), s.text, 0.0);
+    put("Vol".to_owned(), t.text_muted, 3.0);
+    put(format_volume(c.volume), t.text, 0.0);
 }

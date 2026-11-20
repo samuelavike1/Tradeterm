@@ -8,3 +8,4 @@ description = "Core market-data types for tradeterm (no UI, no network)."
 
 [dependencies]
 crossbeam-channel = "0.5.17"
+serde = { version = "1.0.229", features = ["derive"] }
