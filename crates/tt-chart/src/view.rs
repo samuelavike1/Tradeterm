@@ -1,3 +1,4 @@
+use crate::bars::{collect_bars, price_extent};
 use crate::draw::{self, Scene};
 use crate::render::{Canvas, EguiCanvas};
 use crate::scale::{precision_from_tick_size, price_decimals};
@@ -8,7 +9,7 @@ use crate::viewport::{
 use crate::{ChartStyle, ChartType, ScaleMode};
 use egui::{CursorIcon, Rect, Response, Sense, Ui, pos2};
 use std::time::{Duration, Instant};
-use tt_core::CandleSeries;
+use tt_core::{CandleSeries, HeikinAshi};
 use tt_theme::Theme;
 
 const DEFAULT_SPACING: f32 = 8.0;
@@ -17,6 +18,8 @@ const MIN_SPACING: f32 = 0.0005;
 const MAX_SPACING: f32 = 80.0;
 /// Fraction of the visible price span added above and below when auto-fitting.
 const Y_PADDING: f64 = 0.08;
+/// Share of the plot height used by the volume pane.
+const VOLUME_PANE_FRACTION: f32 = 0.2;
 
 /// Per-frame numbers for performance overlays.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -67,6 +70,8 @@ pub struct ChartView {
     /// Price range used last frame (for switching auto → manual seamlessly).
     last_range: (f64, f64),
     last_scale_mode: ScaleMode,
+    /// Heikin Ashi cache, kept in sync incrementally.
+    ha: HeikinAshi,
 }
 
 impl Default for ChartView {
@@ -88,6 +93,7 @@ impl ChartView {
             manual_range: None,
             last_range: (0.0, 1.0),
             last_scale_mode: ScaleMode::default(),
+            ha: HeikinAshi::new(),
         }
     }
 
@@ -135,37 +141,59 @@ impl ChartView {
         self.handle_x_input(ui, &plot_resp, &time_resp, plot);
         self.clamp_offset(plot, n);
 
-        // ---- vertical range -------------------------------------------------
+        // ---- bars to draw ---------------------------------------------------
+        let mut ha = std::mem::take(&mut self.ha);
+        let is_ha = self.chart_type == ChartType::HeikinAshi;
+        if is_ha {
+            ha.sync(series);
+        }
+        let display: &CandleSeries = if is_ha { ha.series() } else { series };
+
+        // The volume pane takes the bottom of the plot; prices get the rest.
+        let volume_rect = self.show_volume.then(|| {
+            Rect::from_min_max(
+                pos2(
+                    plot.left(),
+                    plot.bottom() - plot.height() * VOLUME_PANE_FRACTION,
+                ),
+                plot.max,
+            )
+        });
+        let price_rect = match volume_rect {
+            Some(vr) => Rect::from_min_max(plot.min, pos2(plot.right(), vr.top())),
+            None => plot,
+        };
+
         let range = visible_range_for(n, self.bar_spacing, self.right_offset, plot.width());
         let base = if range.is_empty() {
             1.0
         } else {
-            series.closes()[range.start]
+            display.closes()[range.start]
         };
-        let scale = PriceScale::new(self.scale_mode, base);
-        let auto = series
-            .price_range(range.clone())
-            .map_or((0.0, 1.0), |(lo, hi)| {
-                fit_price_range(lo, hi, scale, Y_PADDING)
-            });
-        self.last_range = self.manual_range.unwrap_or(auto);
-        self.handle_y_input(&plot_resp, &price_resp, plot, scale);
-        let (price_min, price_max) = self.manual_range.unwrap_or(auto);
-
-        let vp = Viewport {
+        let mut vp = Viewport {
             bar_spacing: self.bar_spacing,
             right_offset_bars: self.right_offset,
-            price_min,
-            price_max,
+            price_min: 0.0,
+            price_max: 1.0,
             plot: PlotRect {
-                left: plot.left(),
-                top: plot.top(),
-                right: plot.right(),
-                bottom: plot.bottom(),
+                left: price_rect.left(),
+                top: price_rect.top(),
+                right: price_rect.right(),
+                bottom: price_rect.bottom(),
             },
             bar_count: n,
-            scale,
+            scale: PriceScale::new(self.scale_mode, base),
         };
+        let bars = collect_bars(display, range.clone(), &vp);
+
+        // ---- vertical range -------------------------------------------------
+        let close_only = matches!(self.chart_type, ChartType::Line | ChartType::Area);
+        let auto = price_extent(&bars, close_only).map_or((0.0, 1.0), |(lo, hi)| {
+            fit_price_range(lo, hi, vp.scale, Y_PADDING)
+        });
+        self.last_range = self.manual_range.unwrap_or(auto);
+        self.handle_y_input(&plot_resp, &price_resp, price_rect, vp.scale);
+        (vp.price_min, vp.price_max) = self.manual_range.unwrap_or(auto);
 
         let crosshair = plot_resp
             .hover_pos()
@@ -175,11 +203,16 @@ impl ChartView {
             vp,
             theme,
             style: &self.style,
+            chart_type: self.chart_type,
             full,
             plot,
+            volume_rect,
             price_axis,
             time_axis,
-            series,
+            display,
+            last_raw: series.last(),
+            bars: &bars,
+            decimated: false,
             crosshair,
             precision,
             tick_size: data.tick_size,
@@ -188,6 +221,7 @@ impl ChartView {
         };
         draw::draw(&mut canvas, &scene);
         canvas.finish();
+        self.ha = ha;
 
         self.stats = ChartStats {
             visible_bars: range.len(),

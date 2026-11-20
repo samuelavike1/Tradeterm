@@ -10,6 +10,7 @@
 //!   same trait.
 //! - [`ChartView`]: input handling (pan/zoom/axis drags/crosshair) and layout.
 
+pub mod bars;
 mod draw;
 mod kind;
 pub mod render;

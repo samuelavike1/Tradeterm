@@ -10,7 +10,7 @@ use std::time::Instant;
 use tokio::task::JoinHandle;
 use tracing::{error, info};
 use tt_brokers::{BinanceSource, MarketDataSource};
-use tt_chart::{ChartData, ChartView, ScaleMode};
+use tt_chart::{ChartData, ChartType, ChartView, ScaleMode};
 use tt_core::{CandleSeries, ConnectionStatus, EventSink, MarketEvent, Symbol, Timeframe};
 use tt_theme::{Theme, ThemeMode, ThemeOverrides};
 
@@ -251,6 +251,18 @@ impl TradeTermApp {
                     self.restart_stream();
                 }
             }
+
+            ui.separator();
+            egui::ComboBox::from_id_salt("chart_type")
+                .selected_text(self.chart.chart_type.label())
+                .width(130.0)
+                .show_ui(ui, |ui| {
+                    for t in ChartType::ALL {
+                        ui.selectable_value(&mut self.chart.chart_type, t, t.label());
+                    }
+                });
+            ui.toggle_value(&mut self.chart.show_volume, "Vol")
+                .on_hover_text("Show the volume pane");
 
             ui.separator();
             for mode in ScaleMode::ALL {

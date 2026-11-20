@@ -18,8 +18,13 @@ pub enum UpsertOutcome {
 /// (min/max for auto-scaling, volume sums, future GPU uploads) cache friendly.
 /// All vectors always have the same length and `open_time_ms` is strictly
 /// increasing.
+///
+/// [`Self::version`] changes whenever existing bars move or disappear
+/// (anything other than updating the last bar or appending), so derived
+/// caches know when an incremental update is not enough.
 #[derive(Debug, Clone, Default)]
 pub struct CandleSeries {
+    version: u64,
     open_time_ms: Vec<i64>,
     open: Vec<f64>,
     high: Vec<f64>,
@@ -41,7 +46,13 @@ impl CandleSeries {
         self.open_time_ms.is_empty()
     }
 
+    /// Structural version; see the type docs.
+    pub fn version(&self) -> u64 {
+        self.version
+    }
+
     pub fn clear(&mut self) {
+        self.version += 1;
         self.open_time_ms.clear();
         self.open.clear();
         self.high.clear();
@@ -84,6 +95,20 @@ impl CandleSeries {
                 UpsertOutcome::Appended
             }
         }
+    }
+
+    /// Keeps only the first `len` bars.
+    pub fn truncate(&mut self, len: usize) {
+        if len >= self.len() {
+            return;
+        }
+        self.version += 1;
+        self.open_time_ms.truncate(len);
+        self.open.truncate(len);
+        self.high.truncate(len);
+        self.low.truncate(len);
+        self.close.truncate(len);
+        self.volume.truncate(len);
     }
 
     pub fn get(&self, i: usize) -> Option<Candle> {
@@ -245,6 +270,24 @@ mod tests {
         for col in [s.opens(), s.highs(), s.lows(), s.closes(), s.volumes()] {
             assert_eq!(col.len(), n);
         }
+    }
+
+    #[test]
+    fn version_tracks_structural_changes_only() {
+        let mut s = CandleSeries::new();
+        let v0 = s.version();
+        s.upsert(candle(1, 1.0));
+        s.upsert(candle(1, 2.0));
+        s.upsert(candle(2, 3.0));
+        assert_eq!(s.version(), v0, "update/append keep the version");
+        s.truncate(1);
+        assert_eq!(s.len(), 1);
+        assert_ne!(s.version(), v0);
+        let v1 = s.version();
+        s.truncate(5); // no-op
+        assert_eq!(s.version(), v1);
+        s.set_history([candle(1, 1.0)]);
+        assert_ne!(s.version(), v1);
     }
 
     #[test]
