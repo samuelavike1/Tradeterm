@@ -88,6 +88,9 @@ pub struct TimeTick {
     pub x: f32,
     pub weight: TickWeight,
     pub label: String,
+    /// Heavier than the regular unit shown at this zoom (e.g. a full hour
+    /// among half-hours, or a new day); drawn bold like TradingView.
+    pub major: bool,
 }
 
 /// Picks non-overlapping time ticks for the visible bars.
@@ -160,9 +163,16 @@ pub fn time_ticks(
             x,
             weight,
             label,
+            major: false,
         });
     }
     placed.sort_by(|a, b| a.x.total_cmp(&b.x));
+    // The lightest weight on screen is the regular unit; heavier ones are major.
+    if let Some(min) = placed.iter().map(|t| t.weight).min() {
+        for t in &mut placed {
+            t.major = t.weight > min;
+        }
+    }
     placed
 }
 
@@ -345,6 +355,33 @@ mod tests {
             .count();
         assert!(quarters >= 6, "{ticks:?}");
         assert!(ticks.iter().all(|t| t.weight >= TickWeight::Quarter));
+    }
+
+    #[test]
+    fn hours_are_major_among_half_hours() {
+        // 5m bars, ~80 px apart per 30 min: half-hour labels, hours emphasized.
+        let times: Vec<i64> = (0..200).map(|i| NOV20 + i * 5 * MINUTE_MS).collect();
+        let spacing = 80.0 / 6.0;
+        let ticks = time_ticks(
+            &times,
+            0..200,
+            (0.0, 200.0 * spacing),
+            1,
+            45.0,
+            |i| i as f32 * spacing,
+            |s| s.len() as f32 * 7.0,
+        );
+        assert!(
+            ticks.iter().any(|t| t.label.ends_with(":30") && !t.major),
+            "{ticks:?}"
+        );
+        assert!(
+            ticks
+                .iter()
+                .filter(|t| t.label.ends_with(":00"))
+                .all(|t| t.major),
+            "{ticks:?}"
+        );
     }
 
     #[test]

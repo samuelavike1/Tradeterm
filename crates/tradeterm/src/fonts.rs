@@ -43,6 +43,41 @@ fn ui_candidates() -> Vec<Candidate> {
     }
 }
 
+fn semibold_candidates() -> Vec<Candidate> {
+    #[cfg(target_os = "windows")]
+    {
+        let fonts = windows_fonts_dir();
+        vec![
+            (fonts.join("seguisb.ttf"), 0),
+            (fonts.join("arialbd.ttf"), 0),
+        ]
+    }
+    #[cfg(target_os = "macos")]
+    {
+        vec![
+            (
+                "/System/Library/Fonts/Supplemental/Arial Bold.ttf".into(),
+                0,
+            ),
+            ("/Library/Fonts/Arial Bold.ttf".into(), 0),
+        ]
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        [
+            "/usr/share/fonts/truetype/noto/NotoSans-SemiBold.ttf",
+            "/usr/share/fonts/noto/NotoSans-SemiBold.ttf",
+            "/usr/share/fonts/google-noto/NotoSans-SemiBold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans-Bold.ttf",
+        ]
+        .iter()
+        .map(|p| (PathBuf::from(p), 0))
+        .collect()
+    }
+}
+
 fn mono_candidates() -> Vec<Candidate> {
     #[cfg(target_os = "windows")]
     {
@@ -88,10 +123,26 @@ fn first_existing(candidates: &[Candidate]) -> Option<(&Path, FontData)> {
     })
 }
 
+/// Name of the semibold family registered by [`install`].
+pub const SEMIBOLD: &str = "system-ui-semibold";
+
 /// Installs system fonts in front of egui's defaults (falling back to egui's
 /// built-in fonts if none are found) plus the Lucide icon font.
-pub fn install(ctx: &egui::Context) {
+///
+/// Returns the semibold family if one was found (used for emphasized labels).
+pub fn install(ctx: &egui::Context) -> Option<FontFamily> {
     let mut defs = FontDefinitions::default();
+    let mut semibold = None;
+    if let Some((path, data)) = first_existing(&semibold_candidates()) {
+        info!(font = %path.display(), "using system semibold font");
+        defs.font_data.insert(SEMIBOLD.to_owned(), Arc::new(data));
+        let family = FontFamily::Name(SEMIBOLD.into());
+        // Fall back to the regular stack for glyphs the bold face lacks.
+        let mut stack = vec![SEMIBOLD.to_owned()];
+        stack.extend(defs.families[&FontFamily::Proportional].iter().cloned());
+        defs.families.insert(family.clone(), stack);
+        semibold = Some(family);
+    }
     for (family, name, candidates) in [
         (FontFamily::Proportional, "system-ui", ui_candidates()),
         (FontFamily::Monospace, "system-mono", mono_candidates()),
@@ -108,8 +159,16 @@ pub fn install(ctx: &egui::Context) {
             None => warn!(?family, "no system font found; using egui's built-in font"),
         }
     }
+    // The semibold stack falls back to the (now system-first) regular stack.
+    if let Some(f) = &semibold {
+        let regular = defs.families[&FontFamily::Proportional].clone();
+        let stack = defs.families.get_mut(f).expect("inserted above");
+        stack.truncate(1);
+        stack.extend(regular);
+    }
     crate::icons::register(&mut defs);
     ctx.set_fonts(defs);
+    semibold
 }
 
 #[cfg(test)]

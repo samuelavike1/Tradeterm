@@ -2,7 +2,10 @@
 
 use crate::bars::{DrawBar, max_volume};
 use crate::render::Canvas;
-use crate::scale::{self, format_full_time, format_percent, format_price, format_volume};
+use crate::scale::{
+    self, format_countdown, format_full_time, format_percent, format_price, format_signed_price,
+    format_volume,
+};
 use crate::time_axis;
 use crate::viewport::Viewport;
 use crate::{ChartStyle, ChartType, ScaleMode};
@@ -35,6 +38,10 @@ pub(crate) struct Scene<'a> {
     pub precision: usize,
     pub tick_size: Option<f64>,
     pub bar_interval_ms: i64,
+    /// Current time, for the bar-close countdown (None = no countdown).
+    pub now_ms: Option<i64>,
+    /// Bar length used for the countdown (the timeframe's, if known).
+    pub countdown_interval_ms: Option<i64>,
     pub title: &'a str,
 }
 
@@ -51,28 +58,26 @@ pub(crate) fn draw(c: &mut dyn Canvas, s: &Scene<'_>) {
             s.style.font_size + 1.0,
             t.text_muted,
         );
-        axis_lines(c, s);
         readout(c, s, None);
         return;
     }
 
     let price_ticks = price_ticks(s);
-    c.set_clip(s.plot);
-    for (y, _) in &price_ticks {
-        c.line(
-            pos2(s.plot.left(), *y),
-            pos2(s.plot.right(), *y),
-            1.0,
-            t.grid,
-        );
-    }
     let time_ticks = time_ticks(c, s);
-    for (x, _) in &time_ticks {
-        c.line(
-            pos2(*x, s.plot.top()),
-            pos2(*x, s.plot.bottom()),
-            1.0,
-            t.grid,
+
+    // Grid: one line per price label and per time label, like TradingView.
+    c.set_clip(s.plot);
+    let ppp = c.pixels_per_point();
+    for (y, _) in &price_ticks {
+        let y = crisp(*y, ppp);
+        grid_line(c, s, pos2(s.plot.left(), y), pos2(s.plot.right(), y));
+    }
+    for tick in &time_ticks {
+        grid_line(
+            c,
+            s,
+            pos2(tick.x, s.plot.top()),
+            pos2(tick.x, s.plot.bottom()),
         );
     }
 
@@ -83,26 +88,27 @@ pub(crate) fn draw(c: &mut dyn Canvas, s: &Scene<'_>) {
     c.set_clip(s.vp_rect());
     series(c, s);
     c.set_clip(s.plot);
-    let last_tag = last_price_line(c, s);
+    last_price_line(c, s);
 
+    // Axis tags are computed before the tick labels so labels underneath can
+    // be hidden; the crosshair tag is drawn last, on top.
     c.set_clip(s.full);
-    axis_lines(c, s);
-    price_labels(c, s, &price_ticks);
-    time_labels(c, s, &time_ticks);
-    if let Some((y, label, color)) = last_tag {
-        axis_tag(
-            c,
-            s,
-            pos2(s.price_axis.left() + 1.0, y),
-            Align2::LEFT_CENTER,
-            &label,
-            color,
-        );
+    let hovered = s.crosshair.and_then(|p| s.vp.bar_at(p.x));
+    let mut tags: Vec<Tag> = Vec::new();
+    if let Some(tag) = last_price_tag(c, s) {
+        tags.push(tag);
+    }
+    let mut time_tag = None;
+    if let Some(p) = s.crosshair {
+        let (price_tag, ttag) = crosshair(c, s, p, hovered);
+        tags.push(price_tag);
+        time_tag = ttag;
     }
 
-    let hovered = s.crosshair.and_then(|p| s.vp.bar_at(p.x));
-    if let Some(p) = s.crosshair {
-        crosshair(c, s, p, hovered);
+    price_labels(c, s, &price_ticks, &tags);
+    time_labels(c, s, &time_ticks, time_tag.as_ref());
+    for tag in tags.iter().chain(time_tag.iter()) {
+        draw_tag(c, s, tag);
     }
     readout(c, s, hovered.or(s.display.len().checked_sub(1)));
 }
@@ -326,49 +332,98 @@ fn volume(c: &mut dyn Canvas, s: &Scene<'_>, rect: Rect) {
     }
 }
 
+/// One grid line: dotted (1 px on, 3 px off) or solid, per the style.
+fn grid_line(c: &mut dyn Canvas, s: &Scene<'_>, a: Pos2, b: Pos2) {
+    if s.style.dotted_grid {
+        c.dotted_line(a, b, s.theme.grid);
+    } else {
+        c.line(a, b, 1.0, s.theme.grid);
+    }
+}
+
 /// Grid/label positions on the price axis: (y, label).
 fn price_ticks(s: &Scene<'_>) -> Vec<(f32, String)> {
     let vp = &s.vp;
-    scale::price_ticks(vp, 56.0, s.tick_size)
+    scale::price_ticks(vp, s.style.price_label_spacing, s.tick_size)
         .into_iter()
         .map(|p| (vp.y_of(p), axis_value_label(s, p)))
         .collect()
 }
 
-/// Time-axis tick positions: (x, label).
-fn time_ticks(c: &mut dyn Canvas, s: &Scene<'_>) -> Vec<(f32, String)> {
+/// Time-axis ticks (pixel-snapped x, label, major flag).
+fn time_ticks(c: &mut dyn Canvas, s: &Scene<'_>) -> Vec<time_axis::TimeTick> {
     let ppp = c.pixels_per_point();
     let vp = s.vp;
     // Examine at most one candidate bar per ~3 points.
     let stride = (3.0 / vp.bar_spacing).ceil().max(1.0) as usize;
     let size = s.style.font_size;
+    // Gap chosen so regular labels land ~`time_label_spacing` apart.
+    let typical = c.text_size("00:00", size).x;
+    let gap = (s.style.time_label_spacing - typical).max(16.0);
     time_axis::time_ticks(
         s.display.open_times(),
         vp.visible_range(),
         (s.plot.left(), s.plot.right()),
         stride,
-        18.0,
+        gap,
         |i| crisp(vp.x_of(i as f32), ppp),
-        |text| c.text_size(text, size).x,
+        |text| c.text_size_styled(text, size, true).x,
     )
-    .into_iter()
-    .map(|t| (t.x, t.label))
-    .collect()
 }
 
-fn axis_lines(c: &mut dyn Canvas, s: &Scene<'_>) {
-    let ppp = c.pixels_per_point();
-    let col = s.theme.border;
-    let x = crisp(s.plot.right(), ppp);
-    c.line(pos2(x, s.full.top()), pos2(x, s.full.bottom()), 1.0, col);
-    let y = crisp(s.plot.bottom(), ppp);
-    c.line(pos2(s.full.left(), y), pos2(s.full.right(), y), 1.0, col);
+/// A label box on an axis. Price-axis tags span the whole axis width.
+struct Tag {
+    rect: Rect,
+    lines: Vec<String>,
+    bg: Color32,
+    /// Text aligned with the price labels (price axis) vs. centered (time axis).
+    on_price_axis: bool,
 }
 
-fn price_labels(c: &mut dyn Canvas, s: &Scene<'_>, ticks: &[(f32, String)]) {
+fn draw_tag(c: &mut dyn Canvas, s: &Scene<'_>, tag: &Tag) {
+    c.fill_rounded_rect(tag.rect, 2.0, tag.bg);
+    let line_h = s.style.font_size + 3.0;
+    let top = tag.rect.center().y - line_h * tag.lines.len() as f32 / 2.0;
+    for (i, text) in tag.lines.iter().enumerate() {
+        let y = top + line_h * (i as f32 + 0.5);
+        let (pos, align) = if tag.on_price_axis {
+            // Left-aligned with the axis labels, like TradingView.
+            (pos2(s.price_axis.left() + 8.0, y), Align2::LEFT_CENTER)
+        } else {
+            (pos2(tag.rect.center().x, y), Align2::CENTER_CENTER)
+        };
+        c.text(pos, align, text, s.style.font_size, s.theme.text_on_accent);
+    }
+}
+
+/// A tag spanning the price axis, centered on `y`.
+fn price_axis_tag(s: &Scene<'_>, y: f32, lines: Vec<String>, bg: Color32) -> Tag {
+    let line_h = s.style.font_size + 3.0;
+    let h = line_h * lines.len() as f32 + 6.0;
+    let rect = Rect::from_min_max(
+        pos2(s.price_axis.left() + 1.0, y - h / 2.0),
+        pos2(s.price_axis.right() - 1.0, y + h / 2.0),
+    );
+    Tag {
+        rect,
+        lines,
+        bg,
+        on_price_axis: true,
+    }
+}
+
+fn price_labels(c: &mut dyn Canvas, s: &Scene<'_>, ticks: &[(f32, String)], tags: &[Tag]) {
     let x = s.price_axis.left() + 8.0;
+    let half = s.style.font_size * 0.7;
     for (y, label) in ticks {
-        if *y < s.plot.top() + 6.0 || *y > s.vp.plot.bottom - 6.0 {
+        if *y < s.plot.top() + half || *y > s.vp.plot.bottom - half {
+            continue;
+        }
+        // Hidden under the last-price / crosshair tags, as on TradingView.
+        if tags
+            .iter()
+            .any(|t| *y + half > t.rect.top() && *y - half < t.rect.bottom())
+        {
             continue;
         }
         c.text(
@@ -381,15 +436,30 @@ fn price_labels(c: &mut dyn Canvas, s: &Scene<'_>, ticks: &[(f32, String)]) {
     }
 }
 
-fn time_labels(c: &mut dyn Canvas, s: &Scene<'_>, ticks: &[(f32, String)]) {
+fn time_labels(
+    c: &mut dyn Canvas,
+    s: &Scene<'_>,
+    ticks: &[time_axis::TimeTick],
+    tag: Option<&Tag>,
+) {
     let y = s.time_axis.center().y;
-    for (x, label) in ticks {
-        c.text(
-            pos2(*x, y),
+    let size = s.style.font_size;
+    for t in ticks {
+        let w = c.text_size_styled(&t.label, size, t.major).x;
+        let (l, r) = (t.x - w / 2.0, t.x + w / 2.0);
+        if let Some(tag) = tag
+            && r > tag.rect.left() - 4.0
+            && l < tag.rect.right() + 4.0
+        {
+            continue;
+        }
+        c.text_styled(
+            pos2(t.x, y),
             Align2::CENTER_CENTER,
-            label,
-            s.style.font_size,
+            &t.label,
+            size,
             s.theme.text_muted,
+            t.major,
         );
     }
 }
@@ -402,47 +472,46 @@ fn axis_value_label(s: &Scene<'_>, price: f64) -> String {
     }
 }
 
-/// A filled tag on an axis with centered text.
-fn axis_tag(
-    c: &mut dyn Canvas,
-    s: &Scene<'_>,
-    anchor: Pos2,
-    align: Align2,
-    text: &str,
-    bg: Color32,
-) {
-    let size = c.text_size(text, s.style.font_size) + vec2(10.0, 6.0);
-    let rect = align.anchor_size(anchor, size);
-    c.fill_rounded_rect(rect, 2.0, bg);
-    c.text(
-        rect.center(),
-        Align2::CENTER_CENTER,
-        text,
-        s.style.font_size,
-        s.theme.text_on_accent,
+/// Dotted last-price line across the plot in the last candle's color.
+fn last_price_line(c: &mut dyn Canvas, s: &Scene<'_>) {
+    let Some(last) = s.last_raw else { return };
+    let (color, _) = s.colors(last.is_bullish());
+    let ppp = c.pixels_per_point();
+    let y = crisp(s.vp.y_of(last.close), ppp);
+    if y < s.plot.top() || y > s.vp.plot.bottom {
+        return;
+    }
+    let px = 1.0 / ppp;
+    c.dashed_line(
+        pos2(s.plot.left(), y),
+        pos2(s.plot.right(), y),
+        px,
+        color,
+        px,
+        2.0 * px,
     );
 }
 
-/// Draws the dashed last-price line; returns where to put its axis tag.
-fn last_price_line(c: &mut dyn Canvas, s: &Scene<'_>) -> Option<(f32, String, Color32)> {
+/// Last-price tag: price plus the time left until the bar closes.
+fn last_price_tag(c: &mut dyn Canvas, s: &Scene<'_>) -> Option<Tag> {
     let last = s.last_raw?;
     let (color, _) = s.colors(last.is_bullish());
     let y = crisp(s.vp.y_of(last.close), c.pixels_per_point());
     if y < s.plot.top() || y > s.vp.plot.bottom {
         return None;
     }
-    c.dashed_line(
-        pos2(s.plot.left(), y),
-        pos2(s.plot.right(), y),
-        1.0,
-        color,
-        2.0,
-        2.0,
-    );
-    Some((y, axis_value_label(s, last.close), color))
+    let mut lines = vec![axis_value_label(s, last.close)];
+    if let (Some(now), Some(interval)) = (s.now_ms, s.countdown_interval_ms) {
+        let remaining = last.open_time_ms + interval - now;
+        if remaining > 0 && remaining <= interval {
+            lines.push(format_countdown(remaining));
+        }
+    }
+    Some(price_axis_tag(s, y, lines, color))
 }
 
-fn crosshair(c: &mut dyn Canvas, s: &Scene<'_>, p: Pos2, bar: Option<usize>) {
+/// Draws crosshair lines; returns its price-axis tag and time-axis tag.
+fn crosshair(c: &mut dyn Canvas, s: &Scene<'_>, p: Pos2, bar: Option<usize>) -> (Tag, Option<Tag>) {
     let ppp = c.pixels_per_point();
     let col = s.theme.crosshair;
     // Snap the vertical line to the hovered bar's center.
@@ -476,25 +545,23 @@ fn crosshair(c: &mut dyn Canvas, s: &Scene<'_>, p: Pos2, bar: Option<usize>) {
         }
         _ => axis_value_label(s, s.vp.price_at(p.y)),
     };
-    axis_tag(
-        c,
-        s,
-        pos2(s.price_axis.left() + 1.0, y),
-        Align2::LEFT_CENTER,
-        &label,
-        s.theme.crosshair_label_bg,
-    );
-    if let Some(i) = bar {
-        let t = s.display.open_times()[i];
-        axis_tag(
-            c,
-            s,
-            pos2(x, s.time_axis.top() + 2.0),
-            Align2::CENTER_TOP,
-            &format_full_time(t, s.bar_interval_ms),
-            s.theme.crosshair_label_bg,
-        );
-    }
+    let price_tag = price_axis_tag(s, y, vec![label], s.theme.crosshair_label_bg);
+
+    let time_tag = bar.map(|i| {
+        let text = format_full_time(s.display.open_times()[i], s.bar_interval_ms);
+        let size = c.text_size(&text, s.style.font_size) + vec2(16.0, 8.0);
+        let mut rect = Align2::CENTER_CENTER.anchor_size(pos2(x, s.time_axis.center().y), size);
+        // Keep it inside the time axis.
+        let dx = (s.plot.left() - rect.left()).max(0.0) + (s.plot.right() - rect.right()).min(0.0);
+        rect = rect.translate(vec2(dx, 0.0));
+        Tag {
+            rect,
+            lines: vec![text],
+            bg: s.theme.crosshair_label_bg,
+            on_price_axis: false,
+        }
+    });
+    (price_tag, time_tag)
 }
 
 /// Top-left readout: title, OHLC, change vs previous close and volume of the
@@ -529,7 +596,147 @@ fn readout(c: &mut dyn Canvas, s: &Scene<'_>, bar: Option<usize>) {
     } else {
         0.0
     };
-    put(c, &format!("{change:+.d$} ({pct:+.2}%)"), color, 14.0);
+    put(
+        c,
+        &format!("{} ({pct:+.2}%)", format_signed_price(change, d)),
+        color,
+        14.0,
+    );
     put(c, "Vol", t.text_muted, 3.0);
     put(c, &format_volume(k.volume), t.text, 0.0);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::viewport::{PlotRect, PriceScale};
+    use egui::Vec2;
+
+    /// Records drawn text; geometry primitives are ignored.
+    #[derive(Default)]
+    struct Recorder {
+        texts: Vec<String>,
+    }
+
+    impl Canvas for Recorder {
+        fn pixels_per_point(&self) -> f32 {
+            1.0
+        }
+        fn set_clip(&mut self, _: Rect) {}
+        fn fill_rect(&mut self, _: Rect, _: Color32) {}
+        fn fill_rounded_rect(&mut self, _: Rect, _: f32, _: Color32) {}
+        fn stroke_rect(&mut self, _: Rect, _: f32, _: Color32) {}
+        fn line(&mut self, _: Pos2, _: Pos2, _: f32, _: Color32) {}
+        fn dashed_line(&mut self, _: Pos2, _: Pos2, _: f32, _: Color32, _: f32, _: f32) {}
+        fn polyline(&mut self, _: &[Pos2], _: f32, _: Color32) {}
+        fn fill_area(&mut self, _: &[Pos2], _: f32, _: f32, _: Color32, _: Color32) {}
+        fn text_styled(
+            &mut self,
+            pos: Pos2,
+            anchor: Align2,
+            text: &str,
+            size: f32,
+            _: Color32,
+            bold: bool,
+        ) -> Rect {
+            self.texts.push(text.to_owned());
+            anchor.anchor_size(pos, self.text_size_styled(text, size, bold))
+        }
+        fn text_size_styled(&mut self, text: &str, size: f32, _: bool) -> Vec2 {
+            vec2(text.len() as f32 * size * 0.6, size)
+        }
+    }
+
+    fn scene_with<'a>(
+        series: &'a CandleSeries,
+        theme: &'a Theme,
+        style: &'a ChartStyle,
+        now_ms: Option<i64>,
+    ) -> Scene<'a> {
+        let plot = Rect::from_min_max(pos2(0.0, 0.0), pos2(800.0, 500.0));
+        let vp = Viewport {
+            bar_spacing: 10.0,
+            right_offset_bars: 2.0,
+            price_min: 90.0,
+            price_max: 110.0,
+            plot: PlotRect {
+                left: 0.0,
+                top: 0.0,
+                right: 800.0,
+                bottom: 500.0,
+            },
+            bar_count: series.len(),
+            scale: PriceScale::linear(),
+        };
+        Scene {
+            vp,
+            theme,
+            style,
+            chart_type: ChartType::Candles,
+            full: Rect::from_min_max(pos2(0.0, 0.0), pos2(880.0, 528.0)),
+            plot,
+            volume_rect: None,
+            price_axis: Rect::from_min_max(pos2(800.0, 0.0), pos2(880.0, 500.0)),
+            time_axis: Rect::from_min_max(pos2(0.0, 500.0), pos2(800.0, 528.0)),
+            display: series,
+            last_raw: series.last(),
+            bars: &[],
+            decimated: false,
+            crosshair: None,
+            precision: 2,
+            tick_size: Some(0.01),
+            bar_interval_ms: 300_000,
+            now_ms,
+            countdown_interval_ms: Some(300_000),
+            title: "",
+        }
+    }
+
+    fn series() -> CandleSeries {
+        let mut s = CandleSeries::new();
+        for i in 0..20 {
+            s.upsert(Candle {
+                open_time_ms: i * 300_000,
+                open: 100.0,
+                high: 101.0,
+                low: 99.0,
+                close: 100.5,
+                volume: 1.0,
+            });
+        }
+        s
+    }
+
+    #[test]
+    fn last_price_tag_shows_countdown_while_bar_is_open() {
+        let (s, theme, style) = (series(), Theme::dark(), ChartStyle::default());
+        let last_open = 19 * 300_000;
+        // 2m16s into the 5m bar → 02:44 left.
+        let scene = scene_with(&s, &theme, &style, Some(last_open + 136_000));
+        let mut c = Recorder::default();
+        let tag = last_price_tag(&mut c, &scene).expect("tag");
+        assert_eq!(tag.lines, ["100.50", "02:44"]);
+
+        // No clock (synthetic/historical data) → price only.
+        let scene = scene_with(&s, &theme, &style, None);
+        assert_eq!(last_price_tag(&mut c, &scene).unwrap().lines.len(), 1);
+    }
+
+    #[test]
+    fn labels_under_tags_are_hidden_and_prices_have_separators() {
+        let (s, theme, style) = (series(), Theme::dark(), ChartStyle::default());
+        let scene = scene_with(&s, &theme, &style, None);
+        let mut c = Recorder::default();
+        draw(&mut c, &scene);
+        // The 100.00 grid label sits under the 100.50 last-price tag, so it is
+        // hidden; it appears only once, as the readout's open value.
+        assert_eq!(
+            c.texts.iter().filter(|t| *t == "100.00").count(),
+            1,
+            "{:?}",
+            c.texts
+        );
+        assert!(c.texts.iter().any(|t| t == "98.00"), "{:?}", c.texts);
+        assert!(c.texts.iter().any(|t| t == "102.00"), "{:?}", c.texts);
+    }
 }

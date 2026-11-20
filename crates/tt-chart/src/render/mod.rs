@@ -31,6 +31,13 @@ pub trait Canvas {
 
     fn polyline(&mut self, points: &[Pos2], width: f32, color: Color32);
 
+    /// A 1-px dotted line (1 px on, 3 px off, TradingView's grid style).
+    /// Backends may draw it as one textured quad instead of many dots.
+    fn dotted_line(&mut self, a: Pos2, b: Pos2, color: Color32) {
+        let px = 1.0 / self.pixels_per_point();
+        self.dashed_line(a, b, px, color, px, 3.0 * px);
+    }
+
     /// Fills the area between `points` (an x-sorted polyline) and `baseline_y`
     /// with a fixed vertical gradient: `top` at `gradient_top_y`, `bottom` at
     /// `baseline_y` (independent of the line's shape, so there is no banding).
@@ -43,9 +50,27 @@ pub trait Canvas {
         bottom: Color32,
     );
 
-    /// Draws text in the UI (proportional) font; returns its bounding rect.
-    fn text(&mut self, pos: Pos2, anchor: Align2, text: &str, size: f32, color: Color32) -> Rect;
+    /// Draws text in the UI font (`bold` uses the semibold face when the
+    /// backend has one); returns its bounding rect.
+    fn text_styled(
+        &mut self,
+        pos: Pos2,
+        anchor: Align2,
+        text: &str,
+        size: f32,
+        color: Color32,
+        bold: bool,
+    ) -> Rect;
 
     /// Size of `text` at `size` without drawing it.
-    fn text_size(&mut self, text: &str, size: f32) -> Vec2;
+    fn text_size_styled(&mut self, text: &str, size: f32, bold: bool) -> Vec2;
+
+    /// Regular-weight text; see [`Canvas::text_styled`].
+    fn text(&mut self, pos: Pos2, anchor: Align2, text: &str, size: f32, color: Color32) -> Rect {
+        self.text_styled(pos, anchor, text, size, color, false)
+    }
+
+    fn text_size(&mut self, text: &str, size: f32) -> Vec2 {
+        self.text_size_styled(text, size, false)
+    }
 }

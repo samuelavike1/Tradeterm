@@ -1,6 +1,6 @@
 use super::Canvas;
 use egui::epaint::{Mesh, PathShape, PathStroke, RectShape};
-use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Shape, Stroke, Vec2, pos2};
+use egui::{Align2, Color32, FontFamily, FontId, Painter, Pos2, Rect, Shape, Stroke, Vec2, pos2};
 
 /// [`Canvas`] on top of `egui::Painter`.
 ///
@@ -12,6 +12,8 @@ pub struct EguiCanvas {
     ppp: f32,
     clip: Rect,
     mesh: Mesh,
+    /// Font family for bold text, if the app registered one.
+    bold_family: Option<FontFamily>,
     /// Shapes grouped by clip rect, in draw order.
     batches: Vec<(Rect, Vec<Shape>)>,
 }
@@ -25,7 +27,21 @@ impl EguiCanvas {
             ppp,
             clip,
             mesh: Mesh::default(),
+            bold_family: None,
             batches: vec![(clip, Vec::new())],
+        }
+    }
+
+    /// Uses `family` for bold text (falls back to the regular face if `None`).
+    pub fn with_bold_family(mut self, family: Option<FontFamily>) -> Self {
+        self.bold_family = family;
+        self
+    }
+
+    fn font(&self, size: f32, bold: bool) -> FontId {
+        match (&self.bold_family, bold) {
+            (Some(f), true) => FontId::new(size, f.clone()),
+            _ => FontId::proportional(size),
         }
     }
 
@@ -46,6 +62,29 @@ impl EguiCanvas {
     fn add(&mut self, shape: Shape) {
         self.flush_mesh();
         self.push_shape(shape);
+    }
+
+    /// A 4×4 texture whose only opaque texel is (0, 0): row 0 and column 0
+    /// are the "1 on, 3 off" dot pattern; with repeat wrapping one quad draws
+    /// a whole dotted line. Created once per egui context.
+    fn dots_texture(&self) -> egui::TextureId {
+        let ctx = self.painter.ctx();
+        let id = egui::Id::unique("tt-chart-dots-texture");
+        if let Some(h) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
+            return h.id();
+        }
+        let mut image = egui::ColorImage::filled([4, 4], Color32::TRANSPARENT);
+        image.pixels[0] = Color32::WHITE;
+        let options = egui::TextureOptions {
+            magnification: egui::TextureFilter::Nearest,
+            minification: egui::TextureFilter::Nearest,
+            wrap_mode: egui::TextureWrapMode::Repeat,
+            mipmap_mode: None,
+        };
+        let handle = ctx.load_texture("tt-chart-dots", image, options);
+        let tex = handle.id();
+        ctx.data_mut(|d| d.insert_temp(id, handle));
+        tex
     }
 
     /// Submits everything to the painter.
@@ -152,6 +191,36 @@ impl Canvas for EguiCanvas {
         )));
     }
 
+    fn dotted_line(&mut self, a: Pos2, b: Pos2, color: Color32) {
+        let ppp = self.ppp;
+        let px = 1.0 / ppp;
+        // Texel centers of row 0 / column 0 (v or u = 0.5 / 4).
+        let (rect, uv) = if a.y == b.y {
+            let (x0, x1) = (a.x.min(b.x), a.x.max(b.x));
+            let len_px = (x1 - x0) * ppp;
+            (
+                Rect::from_min_max(pos2(x0, a.y - px / 2.0), pos2(x1, a.y + px / 2.0)),
+                Rect::from_min_max(pos2(0.0, 0.125), pos2(len_px / 4.0, 0.125)),
+            )
+        } else if a.x == b.x {
+            let (y0, y1) = (a.y.min(b.y), a.y.max(b.y));
+            let len_px = (y1 - y0) * ppp;
+            (
+                Rect::from_min_max(pos2(a.x - px / 2.0, y0), pos2(a.x + px / 2.0, y1)),
+                Rect::from_min_max(pos2(0.125, 0.0), pos2(0.125, len_px / 4.0)),
+            )
+        } else {
+            self.dashed_line(a, b, px, color, px, 3.0 * px);
+            return;
+        };
+        if !rect.intersects(self.clip) {
+            return;
+        }
+        let mut mesh = Mesh::with_texture(self.dots_texture());
+        mesh.add_rect_with_uv(rect, uv, color);
+        self.add(Shape::mesh(mesh));
+    }
+
     fn fill_area(
         &mut self,
         points: &[Pos2],
@@ -184,22 +253,26 @@ impl Canvas for EguiCanvas {
         self.push_shape(Shape::mesh(mesh));
     }
 
-    fn text(&mut self, pos: Pos2, anchor: Align2, text: &str, size: f32, color: Color32) -> Rect {
-        let galley =
-            self.painter
-                .layout_no_wrap(text.to_owned(), FontId::proportional(size), color);
+    fn text_styled(
+        &mut self,
+        pos: Pos2,
+        anchor: Align2,
+        text: &str,
+        size: f32,
+        color: Color32,
+        bold: bool,
+    ) -> Rect {
+        let font = self.font(size, bold);
+        let galley = self.painter.layout_no_wrap(text.to_owned(), font, color);
         let rect = anchor.anchor_size(pos, galley.size());
         self.add(Shape::galley(rect.min, galley, color));
         rect
     }
 
-    fn text_size(&mut self, text: &str, size: f32) -> Vec2 {
+    fn text_size_styled(&mut self, text: &str, size: f32, bold: bool) -> Vec2 {
+        let font = self.font(size, bold);
         self.painter
-            .layout_no_wrap(
-                text.to_owned(),
-                FontId::proportional(size),
-                Color32::PLACEHOLDER,
-            )
+            .layout_no_wrap(text.to_owned(), font, Color32::PLACEHOLDER)
             .size()
     }
 }

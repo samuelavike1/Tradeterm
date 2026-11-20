@@ -43,8 +43,39 @@ pub fn price_decimals(price: f64) -> usize {
     }
 }
 
+/// Price with thousands separators, e.g. `26,310.10`.
 pub fn format_price(price: f64, decimals: usize) -> String {
-    format!("{price:.decimals$}")
+    let digits = format!("{:.decimals$}", price.abs());
+    let (int, frac) = match digits.split_once('.') {
+        Some((i, f)) => (i, Some(f)),
+        None => (digits.as_str(), None),
+    };
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3 + 1);
+    // No sign for values that round to zero ("-0.00").
+    if price < 0.0 && digits.bytes().any(|b| (b'1'..=b'9').contains(&b)) {
+        out.push('-');
+    }
+    for (i, ch) in int.chars().enumerate() {
+        if i > 0 && (int.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    if let Some(f) = frac {
+        out.push('.');
+        out.push_str(f);
+    }
+    out
+}
+
+/// Like [`format_price`] but always signed: `+10.20`, `-1,226.90`.
+pub fn format_signed_price(value: f64, decimals: usize) -> String {
+    let s = format_price(value, decimals);
+    if s.starts_with('-') {
+        s
+    } else {
+        format!("+{s}")
+    }
 }
 
 pub fn format_percent(pct: f64) -> String {
@@ -187,6 +218,13 @@ impl DateTime {
         }
     }
 
+    /// Day of week, `"Mon"` … `"Sun"`.
+    pub fn weekday_name(ms: i64) -> &'static str {
+        // 1970-01-01 was a Thursday.
+        const W: [&str; 7] = ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"];
+        W[ms.div_euclid(DAY_MS).rem_euclid(7) as usize]
+    }
+
     pub fn month_name(&self) -> &'static str {
         const M: [&str; 12] = [
             "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
@@ -209,20 +247,35 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
-/// Full crosshair label: `20 Nov 2026  14:05` (time omitted for daily+ bars).
+/// Crosshair label in TradingView's format: `Fri 20 Nov '26  03:35`
+/// (time omitted for daily and longer bars).
 pub fn format_full_time(ms: i64, bar_interval_ms: i64) -> String {
     let dt = DateTime::from_unix_ms(ms);
+    let date = format!(
+        "{} {} {} '{:02}",
+        DateTime::weekday_name(ms),
+        dt.day,
+        dt.month_name(),
+        dt.year.rem_euclid(100)
+    );
     if bar_interval_ms >= DAY_MS {
-        format!("{} {} {}", dt.day, dt.month_name(), dt.year)
+        date
     } else {
-        format!(
-            "{} {} {}  {:02}:{:02}",
-            dt.day,
-            dt.month_name(),
-            dt.year,
-            dt.hour,
-            dt.minute
-        )
+        format!("{date}  {:02}:{:02}", dt.hour, dt.minute)
+    }
+}
+
+/// Time left until a bar closes: `mm:ss`, or `hh:mm:ss` from one hour up,
+/// or `Nd hh:mm` beyond a day.
+pub fn format_countdown(remaining_ms: i64) -> String {
+    let secs = remaining_ms.max(0) / 1000;
+    let (d, h, m, s) = (secs / 86_400, secs / 3600 % 24, secs / 60 % 60, secs % 60);
+    if d > 0 {
+        format!("{d}d {h:02}:{m:02}")
+    } else if h > 0 {
+        format!("{h:02}:{m:02}:{s:02}")
+    } else {
+        format!("{m:02}:{s:02}")
     }
 }
 
@@ -281,6 +334,27 @@ mod tests {
         assert_eq!(price_decimals(0.5), 4);
         assert_eq!(price_decimals(0.000_012_34), 8);
         assert_eq!(format_price(1.5, 2), "1.50");
+    }
+
+    #[test]
+    fn thousands_separators() {
+        assert_eq!(format_price(26_400.0, 2), "26,400.00");
+        assert_eq!(format_price(1_234_567.891, 2), "1,234,567.89");
+        assert_eq!(format_price(999.0, 0), "999");
+        assert_eq!(format_price(1000.0, 0), "1,000");
+        assert_eq!(format_price(-1_234.5, 1), "-1,234.5");
+        assert_eq!(format_price(0.000_12, 5), "0.00012");
+        assert_eq!(format_price(-0.001, 2), "0.00");
+        assert_eq!(format_signed_price(10.2, 2), "+10.20");
+        assert_eq!(format_signed_price(-1226.9, 2), "-1,226.90");
+    }
+
+    #[test]
+    fn countdowns() {
+        assert_eq!(format_countdown(164_000), "02:44");
+        assert_eq!(format_countdown(3_600_000 + 61_000), "01:01:01");
+        assert_eq!(format_countdown(2 * DAY_MS + 3 * 3_600_000), "2d 03:00");
+        assert_eq!(format_countdown(-5), "00:00");
         assert_eq!(format_percent(1.234), "+1.23%");
     }
 
@@ -331,8 +405,9 @@ mod tests {
             (dt.year, dt.month, dt.day, dt.hour, dt.minute),
             (2026, 11, 20, 14, 5)
         );
-        assert_eq!(format_full_time(ms, MINUTE_MS), "20 Nov 2026  14:05");
-        assert_eq!(format_full_time(ms, DAY_MS), "20 Nov 2026");
+        assert_eq!(format_full_time(ms, MINUTE_MS), "Fri 20 Nov '26  14:05");
+        assert_eq!(format_full_time(ms, DAY_MS), "Fri 20 Nov '26");
+        assert_eq!(DateTime::weekday_name(0), "Thu");
         assert_eq!(DateTime::from_unix_ms(0).year, 1970);
         assert_eq!(DateTime::from_unix_ms(-1).year, 1969);
     }

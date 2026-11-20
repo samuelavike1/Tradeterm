@@ -33,6 +33,8 @@ pub struct Shared {
     pub ctx: egui::Context,
     pub handle: Handle,
     pub source: Arc<BinanceSource>,
+    /// Semibold font family for emphasized chart labels, if available.
+    pub bold_family: Option<egui::FontFamily>,
 }
 
 /// Loading of older history when the user scrolls back.
@@ -72,6 +74,7 @@ impl ChartTab {
             symbol = Symbol::new(TabSettings::default().symbol);
         }
         let mut chart = ChartView::default();
+        chart.style.bold_family = shared.bold_family.clone();
         chart.chart_type = s.chart_type;
         chart.scale_mode = s.scale_mode;
         chart.show_volume = s.show_volume;

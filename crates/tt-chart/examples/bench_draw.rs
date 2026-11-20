@@ -88,6 +88,8 @@ fn run(series: &mut CandleSeries, chart_type: ChartType, visible: usize, ppp: f3
                 series,
                 title: "BENCH · 1m",
                 tick_size: Some(0.01),
+                now_ms: None,
+                bar_interval_ms: Some(60_000),
             };
             view.show(ui, data, &theme);
         });

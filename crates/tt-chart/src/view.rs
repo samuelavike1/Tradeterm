@@ -45,6 +45,11 @@ pub struct ChartData<'a> {
     /// Minimum price increment; drives label precision and the finest grid step.
     /// Precision is guessed from the price magnitude if `None`.
     pub tick_size: Option<f64>,
+    /// Current time (Unix ms) for the bar-close countdown on the last-price
+    /// tag; `None` hides it (e.g. for historical or synthetic data).
+    pub now_ms: Option<i64>,
+    /// The timeframe's bar length (ms). Inferred from the data if `None`.
+    pub bar_interval_ms: Option<i64>,
 }
 
 /// What happened in [`ChartView::show`].
@@ -154,7 +159,8 @@ impl ChartView {
         }
 
         let (full, _) = ui.allocate_exact_size(ui.available_size(), Sense::hover());
-        let mut canvas = EguiCanvas::new(ui.painter_at(full));
+        let mut canvas =
+            EguiCanvas::new(ui.painter_at(full)).with_bold_family(self.style.bold_family.clone());
 
         let precision = match data.tick_size {
             Some(t) => precision_from_tick_size(t),
@@ -267,7 +273,11 @@ impl ChartView {
             crosshair,
             precision,
             tick_size: data.tick_size,
-            bar_interval_ms: bar_interval_ms(series),
+            bar_interval_ms: data
+                .bar_interval_ms
+                .unwrap_or_else(|| bar_interval_ms(series)),
+            now_ms: data.now_ms,
+            countdown_interval_ms: data.bar_interval_ms,
             title: data.title,
         };
         draw::draw(&mut canvas, &scene);
@@ -305,7 +315,7 @@ impl ChartView {
         let sample_price = series.highs().last().copied().unwrap_or(1.0).abs() * 10.0;
         let sample = match self.scale_mode {
             ScaleMode::Percent => "+1000.00%".to_owned(),
-            _ => format!("{sample_price:.precision$}"),
+            _ => crate::scale::format_price(sample_price, precision),
         };
         let axis_w = (canvas.text_size(&sample, self.style.font_size).x + 22.0).max(64.0);
         let plot_right = full.right() - axis_w;

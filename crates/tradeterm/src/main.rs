@@ -42,13 +42,14 @@ fn main() -> eframe::Result {
         "tradeterm",
         options,
         Box::new(move |cc| {
-            fonts::install(&cc.egui_ctx);
+            let bold_family = fonts::install(&cc.egui_ctx);
             Ok(Box::new(TradeTermApp::new(
                 cc.egui_ctx.clone(),
                 runtime,
                 settings,
                 store,
                 synthetic,
+                bold_family,
             )?))
         }),
     )

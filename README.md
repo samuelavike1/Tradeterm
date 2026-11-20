@@ -27,9 +27,15 @@ with a custom chart widget built to handle a million bars.
   horizontally. Double-click the plot to reset the view.
 - **Time axis by bar index:** weekend and closed-session gaps take no space.
   Labels step through year → quarter → month → 5 days → day → 12h → … → 1m depending
-  on zoom, and never overlap.
-- **Price axis:** "nice" 1-2-5 steps. Label precision comes from the symbol's tick
-  size (from Binance `exchangeInfo`).
+  on zoom (~80 px apart) and never overlap; boundaries heavier than the regular unit
+  (e.g. full hours among half-hours, a new day) are drawn semibold. The crosshair
+  shows TradingView's date format, e.g. `Fri 20 Nov '26  03:35`.
+- **Price axis (TradingView-style):** labels every ~38 px with "nice" 1-2-5 steps and
+  thousands separators; precision from the symbol's tick size. The last-price tag spans
+  the axis in the candle color and shows a countdown to the bar close; tick labels under
+  the last-price or crosshair tags are hidden.
+- **Grid:** dotted (1 px on, 3 px off) at every price and time label, drawn as one
+  textured quad per line.
 - **Volume pane:** the bottom 20% of the chart, with its own scale and up/down
   colors. Toggle it with **Vol**.
 - **Crosshair:** snaps to bar centers, shows labels on both axes (volume inside the

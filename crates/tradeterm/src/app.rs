@@ -53,6 +53,7 @@ impl TradeTermApp {
         settings: AppSettings,
         settings_store: SettingsStore,
         synthetic: Option<usize>,
+        bold_family: Option<egui::FontFamily>,
     ) -> anyhow::Result<Self> {
         let settings = settings.normalized();
         let source = Arc::new(BinanceSource::new()?);
@@ -60,6 +61,7 @@ impl TradeTermApp {
             ctx: ctx.clone(),
             handle: runtime.handle().clone(),
             source: source.clone(),
+            bold_family,
         };
         tt_theme::install(&ctx, settings.theme_mode, settings.overrides());
         let theme = tt_theme::current(&ctx, settings.overrides());
@@ -385,7 +387,7 @@ impl TradeTermApp {
                     let d = tab.price_precision();
                     let color = if c.is_bullish() { t.up } else { t.down };
                     ui.label(RichText::new("Last").weak());
-                    ui.label(RichText::new(format!("{:.d$}", c.close)).color(color));
+                    ui.label(RichText::new(tt_chart::scale::format_price(c.close, d)).color(color));
                 }
                 None => {
                     ui.label(RichText::new("Last —").weak());
@@ -463,6 +465,12 @@ impl TradeTermApp {
         // Keep measuring while the overlay is open.
         ctx.request_repaint();
     }
+}
+
+fn now_unix_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as i64)
 }
 
 /// A stable badge color per symbol, from the series palette.
@@ -574,12 +582,24 @@ impl TradeTermApp {
             tab.source_name(&shared)
         );
         let tick_size = tab.symbol_info.as_ref().map(|i| i.tick_size);
+        // Live tabs show the bar-close countdown, which needs a tick per second.
+        let live = tab.synthetic.is_none();
+        let now_ms = live.then(now_unix_ms);
+        if live {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(
+                    1000 - (now_unix_ms().rem_euclid(1000)) as u64,
+                ));
+        }
+        let bar_interval_ms = Some(tab.timeframe.duration_ms());
         let out = egui::CentralPanel::no_frame()
             .show(ui, |ui| {
                 let data = ChartData {
                     series: &tab.series,
                     title: &title,
                     tick_size,
+                    now_ms,
+                    bar_interval_ms,
                 };
                 tab.chart.show(ui, data, &theme)
             })
