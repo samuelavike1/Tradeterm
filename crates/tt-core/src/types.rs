@@ -34,67 +34,6 @@ impl From<&str> for Symbol {
     }
 }
 
-/// Bar interval.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
-)]
-pub enum Timeframe {
-    #[serde(rename = "1m")]
-    M1,
-    #[serde(rename = "5m")]
-    M5,
-    #[serde(rename = "15m")]
-    M15,
-    #[serde(rename = "1h")]
-    H1,
-    #[serde(rename = "4h")]
-    H4,
-    #[serde(rename = "1D")]
-    D1,
-}
-
-impl Timeframe {
-    pub const ALL: [Timeframe; 6] = [
-        Timeframe::M1,
-        Timeframe::M5,
-        Timeframe::M15,
-        Timeframe::H1,
-        Timeframe::H4,
-        Timeframe::D1,
-    ];
-
-    /// Human-readable label used in the UI (`1m`, `5m`, …, `1D`).
-    pub const fn label(self) -> &'static str {
-        match self {
-            Timeframe::M1 => "1m",
-            Timeframe::M5 => "5m",
-            Timeframe::M15 => "15m",
-            Timeframe::H1 => "1h",
-            Timeframe::H4 => "4h",
-            Timeframe::D1 => "1D",
-        }
-    }
-
-    /// Bar length in milliseconds.
-    pub const fn duration_ms(self) -> i64 {
-        const MIN: i64 = 60_000;
-        match self {
-            Timeframe::M1 => MIN,
-            Timeframe::M5 => 5 * MIN,
-            Timeframe::M15 => 15 * MIN,
-            Timeframe::H1 => 60 * MIN,
-            Timeframe::H4 => 240 * MIN,
-            Timeframe::D1 => 1440 * MIN,
-        }
-    }
-}
-
-impl fmt::Display for Timeframe {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.label())
-    }
-}
-
 /// One OHLCV bar. `open_time_ms` is the Unix epoch time (UTC, milliseconds)
 /// at which the bar opened and uniquely identifies it within a series.
 #[derive(Debug, Clone, Copy, PartialEq)]

@@ -3,18 +3,48 @@
 use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
 use serde_json::Value;
-use tt_core::{Candle, Symbol, SymbolInfo, Timeframe, precision_from_tick_size};
+use tt_core::{
+    Candle, Symbol, SymbolInfo, TimeUnit, Timeframe, can_resample, precision_from_tick_size,
+};
 
-/// Binance interval string for a timeframe.
-pub fn interval(tf: Timeframe) -> &'static str {
-    match tf {
-        Timeframe::M1 => "1m",
-        Timeframe::M5 => "5m",
-        Timeframe::M15 => "15m",
-        Timeframe::H1 => "1h",
-        Timeframe::H4 => "4h",
-        Timeframe::D1 => "1d",
-    }
+/// Intervals Binance serves natively, with their API names.
+const NATIVE: [(TimeUnit, u32, &str); 16] = [
+    (TimeUnit::Second, 1, "1s"),
+    (TimeUnit::Minute, 1, "1m"),
+    (TimeUnit::Minute, 3, "3m"),
+    (TimeUnit::Minute, 5, "5m"),
+    (TimeUnit::Minute, 15, "15m"),
+    (TimeUnit::Minute, 30, "30m"),
+    (TimeUnit::Hour, 1, "1h"),
+    (TimeUnit::Hour, 2, "2h"),
+    (TimeUnit::Hour, 4, "4h"),
+    (TimeUnit::Hour, 6, "6h"),
+    (TimeUnit::Hour, 8, "8h"),
+    (TimeUnit::Hour, 12, "12h"),
+    (TimeUnit::Day, 1, "1d"),
+    (TimeUnit::Day, 3, "3d"),
+    (TimeUnit::Week, 1, "1w"),
+    (TimeUnit::Month, 1, "1M"),
+];
+
+/// Binance's name for `tf` if it is served natively.
+pub fn interval(tf: Timeframe) -> Option<&'static str> {
+    NATIVE
+        .iter()
+        .find(|(u, c, _)| Timeframe::new(*u, *c) == tf)
+        .map(|(_, _, name)| *name)
+}
+
+/// The native interval to download for `tf`: `tf` itself when native,
+/// otherwise the largest native interval that can be resampled into it
+/// (e.g. 45m ← 15m, 3h ← 1h, 2D ← 1d, 3M ← 1M, 5s ← 1s).
+pub fn base_timeframe(tf: Timeframe) -> Timeframe {
+    NATIVE
+        .iter()
+        .rev()
+        .map(|(u, c, _)| Timeframe::new(*u, *c))
+        .find(|base| can_resample(*base, tf))
+        .unwrap_or(Timeframe::M1)
 }
 
 /// Parses the body of `GET /api/v3/klines`.
@@ -419,7 +449,28 @@ mod tests {
 
     #[test]
     fn intervals_match_binance() {
-        let all: Vec<_> = Timeframe::ALL.iter().map(|&t| interval(t)).collect();
+        let all: Vec<_> = Timeframe::ALL
+            .iter()
+            .map(|&t| interval(t).unwrap())
+            .collect();
         assert_eq!(all, ["1m", "5m", "15m", "1h", "4h", "1d"]);
+        assert_eq!(interval(Timeframe::MN1), Some("1M"));
+        assert_eq!(interval(Timeframe::W1), Some("1w"));
+        assert_eq!(interval(Timeframe::new(TimeUnit::Minute, 45)), None);
+    }
+
+    #[test]
+    fn non_native_intervals_pick_the_largest_dividing_base() {
+        let base = |code: &str| base_timeframe(Timeframe::parse(code).unwrap()).code();
+        assert_eq!(base("45m"), "15m");
+        assert_eq!(base("10m"), "5m");
+        assert_eq!(base("7m"), "1m");
+        assert_eq!(base("3h"), "1h");
+        assert_eq!(base("2D"), "1D");
+        assert_eq!(base("6D"), "3D");
+        assert_eq!(base("2W"), "1W");
+        assert_eq!(base("3M"), "1M");
+        assert_eq!(base("5s"), "1s");
+        assert_eq!(base("4h"), "4h");
     }
 }

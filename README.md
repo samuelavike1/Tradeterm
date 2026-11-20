@@ -40,6 +40,14 @@ with a custom chart widget built to handle a million bars.
   colors. Toggle it with **Vol**.
 - **Crosshair:** snaps to bar centers, shows labels on both axes (volume inside the
   volume pane), and an OHLCV + change % readout at the top left.
+- **Timeframes (TradingView-style):** any number of seconds, minutes, hours, days, weeks
+  or months. Toolbar buttons are your favorites (plus the current interval). The chevron
+  menu has collapsible Seconds/Minutes/Hours/Days sections: star an interval to add it
+  to the toolbar, or "Add custom interval…" for things like 7m or 2D (custom ones can
+  be removed). Binance-native intervals stream directly. Others are built from the
+  largest native interval that divides them (45m ← 15m, 3h ← 1h, 3M ← 1M) and
+  resampled live. Weeks start Monday and months follow the calendar; the bar-close
+  countdown uses exact bar ends.
 - **Symbol search (TradingView-style):** click the ticker pill or just start typing on
   the chart to open a search dialog. The field starts with the current symbol selected
   (or with the letter you typed). Quote-currency chips (All, USDT, USDC, FDUSD, BTC, …)

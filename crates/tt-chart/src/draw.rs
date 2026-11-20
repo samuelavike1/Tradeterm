@@ -40,8 +40,8 @@ pub(crate) struct Scene<'a> {
     pub bar_interval_ms: i64,
     /// Current time, for the bar-close countdown (None = no countdown).
     pub now_ms: Option<i64>,
-    /// Bar length used for the countdown (the timeframe's, if known).
-    pub countdown_interval_ms: Option<i64>,
+    /// Exact close time of the last bar, for the countdown.
+    pub bar_close_ms: Option<i64>,
     pub title: &'a str,
 }
 
@@ -505,9 +505,10 @@ fn last_price_tag(c: &mut dyn Canvas, s: &Scene<'_>) -> Option<Tag> {
         return None;
     }
     let mut lines = vec![axis_value_label(s, last.close)];
-    if let (Some(now), Some(interval)) = (s.now_ms, s.countdown_interval_ms) {
-        let remaining = last.open_time_ms + interval - now;
-        if remaining > 0 && remaining <= interval {
+    if let (Some(now), Some(close)) = (s.now_ms, s.bar_close_ms) {
+        // Hidden once the bar should have closed (e.g. market closed / stale).
+        let remaining = close - now;
+        if remaining > 0 && close - last.open_time_ms >= remaining {
             lines.push(format_countdown(remaining));
         }
     }
@@ -692,7 +693,7 @@ mod tests {
             tick_size: Some(0.01),
             bar_interval_ms: 300_000,
             now_ms,
-            countdown_interval_ms: Some(300_000),
+            bar_close_ms: Some(series.last().map_or(0, |c| c.open_time_ms + 300_000)),
             title: "",
         }
     }

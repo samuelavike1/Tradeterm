@@ -13,13 +13,11 @@ use tt_core::{EventSink, MarketEvent, Symbol, Timeframe};
 async fn main() -> anyhow::Result<()> {
     let mut args = std::env::args().skip(1);
     let symbol = Symbol::new(args.next().unwrap_or_else(|| "BTCUSDT".into()));
-    let tf = match args.next().as_deref() {
-        Some(s) => Timeframe::ALL
-            .into_iter()
-            .find(|t| t.label().eq_ignore_ascii_case(s))
-            .unwrap_or(Timeframe::M1),
-        None => Timeframe::M1,
-    };
+    // Any interval code: 1m, 45m, 4h, 1D, 2W, 3M, 5s (non-native ones are resampled).
+    let tf = args
+        .next()
+        .and_then(|s| Timeframe::parse(&s))
+        .unwrap_or(Timeframe::M1);
     let secs: u64 = args.next().and_then(|s| s.parse().ok()).unwrap_or(15);
     let source = BinanceSource::new()?;
 

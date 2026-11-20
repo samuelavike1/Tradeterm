@@ -50,6 +50,9 @@ pub struct ChartData<'a> {
     pub now_ms: Option<i64>,
     /// The timeframe's bar length (ms). Inferred from the data if `None`.
     pub bar_interval_ms: Option<i64>,
+    /// Exact close time of the last bar (calendar-aware for months), for the
+    /// countdown on the last-price tag.
+    pub bar_close_ms: Option<i64>,
 }
 
 /// What happened in [`ChartView::show`].
@@ -277,7 +280,7 @@ impl ChartView {
                 .bar_interval_ms
                 .unwrap_or_else(|| bar_interval_ms(series)),
             now_ms: data.now_ms,
-            countdown_interval_ms: data.bar_interval_ms,
+            bar_close_ms: data.bar_close_ms,
             title: data.title,
         };
         draw::draw(&mut canvas, &scene);

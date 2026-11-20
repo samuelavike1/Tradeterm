@@ -1,8 +1,8 @@
 //! Building higher timeframes from lower ones (e.g. 1m → 5m / 15m / 1h / 1D).
 //!
-//! Buckets are aligned to multiples of the target interval since the Unix
-//! epoch (UTC): 5m bars start at :00, :05, …; 4h bars at 00:00, 04:00, …;
-//! daily bars at 00:00 UTC. A target bar takes the first open, highest high,
+//! Buckets follow [`Timeframe::bucket_start`] (UTC): multiples of the
+//! interval since the epoch for seconds … days, Mondays for weeks, calendar
+//! months for months. A target bar takes the first open, highest high,
 //! lowest low, last close and summed volume of the source bars in its bucket.
 //! Missing source bars (gaps) simply contribute nothing; empty buckets
 //! produce no bar.
@@ -28,20 +28,35 @@ impl fmt::Display for ResampleError {
 
 impl std::error::Error for ResampleError {}
 
-/// Start of the bucket containing `t` for buckets of `bucket_ms`.
+/// Start of the bucket containing `t` for fixed buckets of `bucket_ms`.
 pub fn bucket_start(t: i64, bucket_ms: i64) -> i64 {
     t.div_euclid(bucket_ms) * bucket_ms
 }
 
 /// `true` if `to` bars can be built from `from` bars.
+///
+/// - fixed targets (seconds … days): `to` is a whole multiple of `from`;
+/// - weeks: from any fixed interval that divides a day, or fewer weeks;
+/// - months: from any fixed interval that divides a day, or months that
+///   divide the target count.
 pub fn can_resample(from: Timeframe, to: Timeframe) -> bool {
-    let (f, t) = (from.duration_ms(), to.duration_ms());
-    t >= f && t % f == 0
+    use crate::TimeUnit::{Month, Week};
+    let divides_day = from.is_fixed() && crate::timeframe::DAY_MS % from.duration_ms() == 0;
+    match (from.unit(), to.unit()) {
+        (Month, Month) => to.count().is_multiple_of(from.count()),
+        (Week, Week) => to.count().is_multiple_of(from.count()),
+        (_, Month) | (_, Week) => divides_day,
+        (Month, _) | (Week, _) => false,
+        _ => {
+            let (f, t) = (from.duration_ms(), to.duration_ms());
+            t >= f && t % f == 0
+        }
+    }
 }
 
-fn check(from: Timeframe, to: Timeframe) -> Result<i64, ResampleError> {
+fn check(from: Timeframe, to: Timeframe) -> Result<Timeframe, ResampleError> {
     if can_resample(from, to) {
-        Ok(to.duration_ms())
+        Ok(to)
     } else {
         Err(ResampleError::Incompatible { from, to })
     }
@@ -62,7 +77,7 @@ pub fn resample(
     from: Timeframe,
     to: Timeframe,
 ) -> Result<CandleSeries, ResampleError> {
-    let bucket_ms = check(from, to)?;
+    let to = check(from, to)?;
     let mut out = CandleSeries::new();
     let (t, o, h, l, c, v) = (
         src.open_times(),
@@ -82,7 +97,7 @@ pub fn resample(
             close: c[i],
             volume: v[i],
         };
-        let b = bucket_start(bar.open_time_ms, bucket_ms);
+        let b = to.bucket_start(bar.open_time_ms);
         match &mut agg {
             Some(a) if a.open_time_ms == b => merge(a, &bar),
             _ => {
@@ -109,7 +124,7 @@ pub fn resample(
 /// [`CandleSeries::upsert`] into the target series.
 #[derive(Debug, Clone)]
 pub struct Resampler {
-    bucket_ms: i64,
+    to: Timeframe,
     bucket: Option<i64>,
     /// Source bars of the current bucket, by open time.
     parts: Vec<Candle>,
@@ -118,7 +133,7 @@ pub struct Resampler {
 impl Resampler {
     pub fn new(from: Timeframe, to: Timeframe) -> Result<Self, ResampleError> {
         Ok(Self {
-            bucket_ms: check(from, to)?,
+            to: check(from, to)?,
             bucket: None,
             parts: Vec::new(),
         })
@@ -127,7 +142,7 @@ impl Resampler {
     /// Applies a source bar; returns the aggregated target bar, or `None`
     /// for updates older than the current bucket.
     pub fn push(&mut self, c: Candle) -> Option<Candle> {
-        let b = bucket_start(c.open_time_ms, self.bucket_ms);
+        let b = self.to.bucket_start(c.open_time_ms);
         match self.bucket {
             Some(cur) if b < cur => return None,
             Some(cur) if b == cur => {
@@ -254,6 +269,60 @@ mod tests {
         let src = minutes(DAY0 + 3 * HOUR, 120); // 03:00..04:59
         let out = resample(&src, Timeframe::M1, Timeframe::H4).unwrap();
         assert_eq!(out.open_times(), &[DAY0, DAY0 + 4 * HOUR]);
+    }
+
+    #[test]
+    fn weekly_and_monthly_buckets() {
+        use crate::{TimeUnit, days_from_civil};
+        // Daily bars Sat 2026-11-14 .. Tue 2026-11-17: Mon 16th starts a week.
+        let sat = days_from_civil(2026, 11, 14);
+        let mut src = CandleSeries::new();
+        for d in 0..4 {
+            src.upsert(bar(
+                (sat + d) * 24 * HOUR,
+                d as f64,
+                10.0,
+                0.0,
+                d as f64,
+                1.0,
+            ));
+        }
+        let w = resample(&src, Timeframe::D1, Timeframe::W1).unwrap();
+        assert_eq!(
+            w.open_times(),
+            &[(sat - 5) * 24 * HOUR, (sat + 2) * 24 * HOUR]
+        );
+        assert_eq!(w.get(1).unwrap().volume, 2.0);
+
+        // Monthly bars → quarters on calendar boundaries.
+        let mut m = CandleSeries::new();
+        for (i, (y, mo)) in [(2026, 2), (2026, 3), (2026, 4), (2026, 5)]
+            .iter()
+            .enumerate()
+        {
+            m.upsert(bar(
+                days_from_civil(*y, *mo, 1) * 24 * HOUR,
+                i as f64,
+                9.0,
+                0.0,
+                i as f64,
+                1.0,
+            ));
+        }
+        let q = resample(&m, Timeframe::MN1, Timeframe::new(TimeUnit::Month, 3)).unwrap();
+        assert_eq!(
+            q.open_times(),
+            &[
+                days_from_civil(2026, 1, 1) * 24 * HOUR,
+                days_from_civil(2026, 4, 1) * 24 * HOUR
+            ]
+        );
+        assert!(can_resample(Timeframe::H1, Timeframe::MN1));
+        assert!(!can_resample(
+            Timeframe::new(TimeUnit::Minute, 7),
+            Timeframe::W1
+        ));
+        assert!(!can_resample(Timeframe::MN1, Timeframe::D1));
     }
 
     #[test]

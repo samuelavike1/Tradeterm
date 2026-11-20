@@ -3,7 +3,8 @@
 mod parse;
 
 pub use parse::{
-    KlineUpdate, interval, parse_exchange_info, parse_rest_klines, parse_ws_kline, rank_symbols,
+    KlineUpdate, base_timeframe, interval, parse_exchange_info, parse_rest_klines, parse_ws_kline,
+    rank_symbols,
 };
 
 use crate::MarketDataSource;
@@ -15,13 +16,18 @@ use tokio::sync::OnceCell;
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, info, warn};
-use tt_core::{Candle, ConnectionStatus, EventSink, MarketEvent, Symbol, SymbolInfo, Timeframe};
+use tt_core::{
+    Candle, CandleSeries, ConnectionStatus, EventSink, MarketEvent, Resampler, Symbol, SymbolInfo,
+    Timeframe, resample,
+};
 
 pub const DEFAULT_REST_BASE: &str = "https://data-api.binance.vision";
 pub const DEFAULT_WS_BASE: &str = "wss://data-stream.binance.vision/ws";
 
 /// Bars per klines request (Binance maximum).
 pub const MAX_KLINES: usize = 1000;
+/// Most base bars downloaded to build one page of a resampled timeframe.
+const MAX_BASE_BARS: usize = 5000;
 /// Search results returned by `search_symbols`.
 const SEARCH_LIMIT: usize = 100;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -97,7 +103,12 @@ impl BinanceSource {
     ) -> Result<Vec<Candle>> {
         let mut query = vec![
             ("symbol", symbol.as_str().to_owned()),
-            ("interval", interval(tf).to_owned()),
+            (
+                "interval",
+                interval(tf)
+                    .with_context(|| format!("{tf} is not a native Binance interval"))?
+                    .to_owned(),
+            ),
             ("limit", limit.clamp(1, MAX_KLINES).to_string()),
         ];
         if let Some(t) = before {
@@ -123,6 +134,72 @@ impl BinanceSource {
             .cloned()
     }
 
+    /// Up to `total` native bars ending before `before` (or the latest),
+    /// paging backwards through the klines endpoint. Oldest first.
+    async fn fetch_paged(
+        &self,
+        symbol: &Symbol,
+        native: Timeframe,
+        before: Option<i64>,
+        total: usize,
+    ) -> Result<Vec<Candle>> {
+        let mut out: Vec<Candle> = Vec::new();
+        let mut end = before;
+        while out.len() < total {
+            let n = (total - out.len()).min(MAX_KLINES);
+            let page = self.fetch_klines(symbol, native, end, n).await?;
+            let short = page.len() < n;
+            let Some(first) = page.first() else { break };
+            end = Some(first.open_time_ms);
+            out.splice(0..0, page);
+            if short {
+                break;
+            }
+        }
+        Ok(out)
+    }
+
+    /// History for any timeframe: native intervals come straight from
+    /// Binance; others are built from the base interval's bars. Returns the
+    /// target bars plus the base bars of the newest bucket (to seed live
+    /// resampling).
+    async fn history_for(
+        &self,
+        symbol: &Symbol,
+        tf: Timeframe,
+        before: Option<i64>,
+        limit: usize,
+    ) -> Result<(Vec<Candle>, Vec<Candle>)> {
+        if interval(tf).is_some() {
+            let bars = self.fetch_paged(symbol, tf, before, limit).await?;
+            return Ok((bars, Vec::new()));
+        }
+        let base = base_timeframe(tf);
+        let ratio = (tf.duration_ms() as f64 / base.duration_ms() as f64).ceil() as usize;
+        let want = ((limit + 1) * ratio.max(1)).min(MAX_BASE_BARS);
+        let base_bars = self.fetch_paged(symbol, base, before, want).await?;
+
+        let mut src = CandleSeries::new();
+        src.set_history(base_bars.iter().copied());
+        let target = resample(&src, base, tf).context("resampling history")?;
+        let mut bars: Vec<Candle> = (0..target.len()).filter_map(|i| target.get(i)).collect();
+        // The oldest bucket is usually only partly covered by the download.
+        if bars.len() > 1 {
+            bars.remove(0);
+        }
+        let keep_from = bars.len().saturating_sub(limit);
+        let bars = bars.split_off(keep_from);
+        let seed = match bars.last() {
+            Some(last) => base_bars
+                .iter()
+                .copied()
+                .filter(|b| tf.bucket_start(b.open_time_ms) == last.open_time_ms)
+                .collect(),
+            None => Vec::new(),
+        };
+        Ok((bars, seed))
+    }
+
     /// One connection lifetime: connect WS, load history, then forward live bars.
     async fn session(
         &self,
@@ -131,11 +208,13 @@ impl BinanceSource {
         sink: &EventSink,
         backoff: &mut Backoff,
     ) -> Result<SessionEnd> {
+        // Non-native timeframes stream their base interval and are resampled.
+        let stream_tf = base_timeframe(tf);
         let url = format!(
             "{}/{}@kline_{}",
             self.ws_base,
             symbol.as_str().to_ascii_lowercase(),
-            interval(tf)
+            interval(stream_tf).expect("base timeframes are native")
         );
         debug!(%url, "connecting websocket");
 
@@ -149,8 +228,19 @@ impl BinanceSource {
         .context("websocket connect timed out")?
         .context("websocket connect failed")?;
 
-        let history = self.fetch_klines(symbol, tf, None, MAX_KLINES).await?;
-        info!(%symbol, %tf, bars = history.len(), "history loaded");
+        let (history, seed) = self.history_for(symbol, tf, None, MAX_KLINES).await?;
+        info!(%symbol, %tf, base = %stream_tf, bars = history.len(), "history loaded");
+        let mut resampler = if stream_tf == tf {
+            None
+        } else {
+            let mut r = Resampler::new(stream_tf, tf).context("resampler")?;
+            // Seed with the newest bucket's base bars so the forming bar is
+            // complete from the first live update.
+            for b in seed {
+                r.push(b);
+            }
+            Some(r)
+        };
         if !sink.send(MarketEvent::History(history)) {
             return Ok(SessionEnd::SinkClosed);
         }
@@ -168,9 +258,18 @@ impl BinanceSource {
             match msg {
                 Message::Text(text) => match parse_ws_kline(&text) {
                     Ok(Some(u)) => {
-                        let ev = MarketEvent::CandleUpdate {
-                            candle: u.candle,
-                            closed: u.closed,
+                        let ev = match &mut resampler {
+                            None => MarketEvent::CandleUpdate {
+                                candle: u.candle,
+                                closed: u.closed,
+                            },
+                            Some(r) => match r.push(u.candle) {
+                                Some(candle) => MarketEvent::CandleUpdate {
+                                    candle,
+                                    closed: false,
+                                },
+                                None => continue,
+                            },
                         };
                         if !sink.send(ev) {
                             return Ok(SessionEnd::SinkClosed);
@@ -246,7 +345,7 @@ impl MarketDataSource for BinanceSource {
         before: Option<i64>,
         limit: usize,
     ) -> Result<Vec<Candle>> {
-        self.fetch_klines(symbol, timeframe, before, limit).await
+        Ok(self.history_for(symbol, timeframe, before, limit).await?.0)
     }
 
     async fn run(&self, symbol: Symbol, timeframe: Timeframe, sink: EventSink) -> Result<()> {

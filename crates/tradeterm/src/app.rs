@@ -6,6 +6,7 @@ use crate::search::SymbolSearch;
 use crate::settings::{AppSettings, MAX_RECENT, RecentSymbol, SettingsStore};
 use crate::synthetic;
 use crate::tab::{ChartTab, MAX_HISTORY_BARS, Shared};
+use crate::tfmenu::TimeframeMenu;
 use crate::toolbar;
 use egui::{
     Align, Color32, Key, KeyboardShortcut, Layout, Modifiers, RichText, Sense, Stroke, vec2,
@@ -15,7 +16,7 @@ use std::time::Instant;
 use tracing::warn;
 use tt_brokers::{BinanceSource, MarketDataSource};
 use tt_chart::{ChartData, ScaleMode};
-use tt_core::{ConnectionStatus, Symbol, Timeframe};
+use tt_core::{ConnectionStatus, Symbol};
 use tt_theme::{Theme, ThemeMode, ThemeOverrides};
 
 const TOGGLE_THEME: KeyboardShortcut =
@@ -43,6 +44,7 @@ pub struct TradeTermApp {
     settings_store: SettingsStore,
     perf: PerfStats,
     search: SymbolSearch,
+    tf_menu: TimeframeMenu,
     /// Recently opened symbols, most recent first (persisted).
     recent: Vec<RecentSymbol>,
     /// Owns the tokio thread; dropped last (after the tabs).
@@ -99,6 +101,11 @@ impl TradeTermApp {
             settings_store,
             perf: PerfStats::default(),
             search: SymbolSearch::default(),
+            tf_menu: TimeframeMenu::new(
+                settings.favorite_timeframes.clone(),
+                settings.custom_timeframes.clone(),
+                &settings.collapsed_timeframe_sections,
+            ),
             recent: settings.recent_symbols.clone(),
             _runtime: runtime,
         })
@@ -134,6 +141,9 @@ impl TradeTermApp {
             tabs: self.tabs.iter().map(ChartTab::settings).collect(),
             active_tab: self.active,
             recent_symbols: self.recent.clone(),
+            favorite_timeframes: self.tf_menu.favorites.clone(),
+            custom_timeframes: self.tf_menu.custom.clone(),
+            collapsed_timeframe_sections: self.tf_menu.collapsed_keys(),
             ..AppSettings::default()
         };
         s.set_overrides(self.overrides);
@@ -304,6 +314,7 @@ impl TradeTermApp {
         let shared = self.shared.clone();
         let theme = self.theme.clone();
         let tab = &mut self.tabs[self.active];
+        let tf_menu = &mut self.tf_menu;
         let mut open_search: Option<String> = None;
         toolbar::apply_style(ui, &theme);
         ui.horizontal(|ui| {
@@ -318,11 +329,8 @@ impl TradeTermApp {
             }
 
             toolbar::divider(ui, &theme);
-            for tf in Timeframe::ALL {
-                let text = RichText::new(tf.label()).size(13.5);
-                if ui.selectable_label(tab.timeframe == tf, text).clicked() {
-                    tab.set_timeframe(tf, &shared);
-                }
+            if let Some(tf) = tf_menu.toolbar_ui(ui, tab.timeframe, &theme) {
+                tab.set_timeframe(tf, &shared);
             }
 
             toolbar::divider(ui, &theme);
@@ -631,6 +639,10 @@ impl eframe::App for TradeTermApp {
 
         let ctx = ui.ctx().clone();
         self.search_dialog(&ctx);
+        if let Some(tf) = self.tf_menu.dialog_ui(&ctx, &self.theme.clone()) {
+            let shared = self.shared.clone();
+            self.tab().set_timeframe(tf, &shared);
+        }
         self.perf_overlay(&ctx);
         // Last, so they sit on top of everything else.
         chrome::resize_handles(ui);
@@ -686,6 +698,11 @@ impl TradeTermApp {
                 ));
         }
         let bar_interval_ms = Some(tab.timeframe.duration_ms());
+        // Exact (calendar-aware) close of the forming bar, for the countdown.
+        let bar_close_ms = tab
+            .series
+            .last()
+            .map(|c| tab.timeframe.bar_end_ms(c.open_time_ms));
         let out = egui::CentralPanel::no_frame()
             .show(ui, |ui| {
                 let data = ChartData {
@@ -694,6 +711,7 @@ impl TradeTermApp {
                     tick_size,
                     now_ms,
                     bar_interval_ms,
+                    bar_close_ms,
                 };
                 tab.chart.show(ui, data, &theme)
             })

@@ -10,6 +10,7 @@ mod search;
 mod settings;
 mod synthetic;
 mod tab;
+mod tfmenu;
 mod toolbar;
 
 use app::TradeTermApp;

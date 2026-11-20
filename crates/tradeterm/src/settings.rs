@@ -66,6 +66,12 @@ pub struct AppSettings {
     pub active_tab: usize,
     /// Most recent first.
     pub recent_symbols: Vec<RecentSymbol>,
+    /// Intervals shown as toolbar buttons.
+    pub favorite_timeframes: Vec<Timeframe>,
+    /// User-added intervals (beyond the built-in lists).
+    pub custom_timeframes: Vec<Timeframe>,
+    /// Collapsed sections of the interval menu ("seconds", "minutes", …).
+    pub collapsed_timeframe_sections: Vec<String>,
 }
 
 impl Default for AppSettings {
@@ -77,6 +83,9 @@ impl Default for AppSettings {
             tabs: vec![TabSettings::default()],
             active_tab: 0,
             recent_symbols: Vec::new(),
+            favorite_timeframes: Timeframe::ALL.to_vec(),
+            custom_timeframes: Vec::new(),
+            collapsed_timeframe_sections: Vec::new(),
         }
     }
 }

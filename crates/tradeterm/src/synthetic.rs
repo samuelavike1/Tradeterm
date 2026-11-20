@@ -68,10 +68,11 @@ pub fn generate_minutes(n: usize, seed: u64) -> CandleSeries {
 /// Synthetic bars for `tf`, resampled locally from one-minute data.
 pub fn generate(n: usize, tf: Timeframe) -> Vec<Candle> {
     let minutes = generate_minutes(n, 0x5EED);
-    let series = if tf == Timeframe::M1 {
+    // Sub-minute timeframes can't be built from 1m data; show minutes then.
+    let series = if tf == Timeframe::M1 || !tt_core::can_resample(Timeframe::M1, tf) {
         minutes
     } else {
-        resample(&minutes, Timeframe::M1, tf).expect("1m divides every timeframe")
+        resample(&minutes, Timeframe::M1, tf).expect("checked by can_resample")
     };
     (0..series.len()).filter_map(|i| series.get(i)).collect()
 }
