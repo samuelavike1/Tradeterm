@@ -9,6 +9,14 @@ with a custom chart widget built to handle a million bars.
 
 ## Features
 
+- **Custom window chrome:** the OS title bar is replaced by our own. It has a tab
+  strip (symbol badge, symbol, 24h change %, close button, "+" for a new tab), a
+  settings menu, and minimize/maximize/close buttons. Drag empty space in it to move
+  the window (OS snapping works), double-click it to maximize or restore, and drag
+  any window edge to resize.
+- **Tabs:** each tab is an independent chart with its own live stream, so background
+  tabs stay current. Open tabs, their order and the active tab are restored on the
+  next launch.
 - **Chart types:** Candles, Hollow candles, OHLC bars, Line, Area and Heikin Ashi.
   Heikin Ashi bars are computed in `tt-core` and updated incrementally.
 - **Price scales:** linear, logarithmic, and percent (relative to the first visible
@@ -39,17 +47,20 @@ with a custom chart widget built to handle a million bars.
 - **Resampling:** `tt-core` builds higher timeframes from lower ones (1m → 5m, 15m,
   1h, 4h, 1D) with buckets aligned to the UTC clock. It works in batch and
   incrementally.
-- **Themes:** semantic color tokens with Dark (TradingView-like) and Light palettes,
+- **Themes:** semantic color tokens with neutral Dark and Light palettes (pure grays in
+  the style of shadcn's "neutral" scale, with TradingView-style up/down colors),
   and a System mode that follows the OS. Up/down colors can be overridden. The whole
   UI (panels, widgets, rounding, spacing) uses the tokens.
-- **Settings persistence:** theme, colors, last symbol and timeframe, chart type,
-  scale mode and volume visibility are saved as JSON, 750 ms after the last change
-  and again on exit.
+- **Settings persistence:** theme, colors, and every tab (symbol, timeframe, chart type,
+  scale mode, volume) plus the active tab are saved as JSON, 750 ms after the last
+  change and again on exit.
 
 ### Hotkeys
 
 | Key | Action |
 |---|---|
+| Ctrl+T / Ctrl+W (Cmd on macOS) | New tab / close tab |
+| Ctrl+Tab / Ctrl+Shift+Tab | Next / previous tab |
 | Ctrl+Shift+T (Cmd+Shift+T on macOS) | Toggle dark/light theme |
 | F12 | Performance overlay |
 | Ctrl+Shift+D (Cmd+Shift+D on macOS) | Load 1,000,000 synthetic bars (stress test) |
@@ -65,7 +76,7 @@ with a custom chart widget built to handle a million bars.
 | Drag the time axis | Zoom horizontally |
 | Double-click the plot | Reset the view |
 
-The **⚙ Settings** menu has the theme selector, up/down color pickers, the performance
+The **⚙** menu in the title bar has the theme selector, up/down color pickers, the performance
 overlay toggle and the synthetic-data command. You can also start with synthetic data
 from the command line: `tradeterm --synthetic [N]`.
 
@@ -91,8 +102,9 @@ crates/
      draw.rs       Builds the picture from Canvas primitives only.
      render/       Canvas trait (the backend boundary) + EguiCanvas.
      view.rs       ChartView: input, layout, caches, per-frame orchestration.
-  tradeterm/   eframe app: top bar, symbol search, chart, status bar, settings
-               persistence, perf overlay, synthetic data.
+  tradeterm/   eframe app. chrome.rs: custom title bar, tabs, window buttons,
+               resize edges. tab.rs: one chart session per tab. Also the toolbar,
+               symbol search, status bar, settings, perf overlay and synthetic data.
 ```
 
 **Why a separate `tt-theme` crate:** the tokens style both the chart and the rest of
@@ -236,3 +248,10 @@ Settings are stored at:
 - Linux: `~/.config/tradeterm/settings.json`
 
 Delete the file to reset to defaults.
+
+### Window chrome notes
+
+The window is created without OS decorations. On Windows a maximized borderless
+window extends about 8 px past each screen edge, so the app insets its content by
+that amount while maximized. macOS and Linux get the same Windows-style buttons on the
+right (native traffic lights aren't used).

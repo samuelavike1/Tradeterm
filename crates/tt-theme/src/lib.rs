@@ -49,6 +49,10 @@ pub struct ThemeOverrides {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Theme {
     pub dark: bool,
+    /// Title bar / tab strip.
+    pub chrome: Color32,
+    /// The selected tab in the tab strip.
+    pub tab_active: Color32,
     /// Chart and text-field background.
     pub bg: Color32,
     /// Toolbars and status bar.
@@ -59,6 +63,7 @@ pub struct Theme {
     pub grid: Color32,
     pub text: Color32,
     pub text_muted: Color32,
+    /// Focus rings and emphasis; neutral, not a brand color.
     pub accent: Color32,
     /// Text drawn on top of `accent`, `up`, `down` or `crosshair_label_bg`.
     pub text_on_accent: Color32,
@@ -68,6 +73,8 @@ pub struct Theme {
     pub down_wick: Color32,
     pub crosshair: Color32,
     pub crosshair_label_bg: Color32,
+    /// Background of selected controls (active timeframe, chosen list row)
+    /// and text selection.
     pub selection: Color32,
     pub volume_up: Color32,
     pub volume_down: Color32,
@@ -104,56 +111,61 @@ const SERIES_PALETTE: [Color32; 8] = [
 ];
 
 impl Theme {
-    /// TradingView-like dark palette.
+    /// Neutral dark palette (pure grays, shadcn "neutral" scale) with
+    /// TradingView-style up/down colors.
     pub fn dark() -> Self {
         let up = rgb(0x26a69a);
         let down = rgb(0xef5350);
         Self {
             dark: true,
-            bg: rgb(0x131722),
-            panel: rgb(0x181c27),
-            panel_alt: rgb(0x1e222d),
-            border: rgb(0x2a2e39),
-            grid: rgb(0x1f2330),
-            text: rgb(0xd1d4dc),
-            text_muted: rgb(0x787b86),
-            accent: rgb(0x2962ff),
+            chrome: rgb(0x141414),
+            tab_active: rgb(0x262626),
+            bg: rgb(0x0a0a0a),
+            panel: rgb(0x0a0a0a),
+            panel_alt: rgb(0x171717),
+            border: rgb(0x262626),
+            grid: rgb(0x171717),
+            text: rgb(0xfafafa),
+            text_muted: rgb(0xa3a3a3),
+            accent: rgb(0xd4d4d4),
             text_on_accent: rgb(0xffffff),
             up,
             down,
             up_wick: up,
             down_wick: down,
-            crosshair: rgb(0x758696),
-            crosshair_label_bg: rgb(0x4c525e),
-            selection: with_alpha(rgb(0x2962ff), 0.35),
+            crosshair: rgb(0x737373),
+            crosshair_label_bg: rgb(0x404040),
+            selection: rgb(0x2e2e2e),
             volume_up: with_alpha(up, 0.45),
             volume_down: with_alpha(down, 0.45),
             series_palette: SERIES_PALETTE,
         }
     }
 
-    /// Light palette.
+    /// Neutral light palette.
     pub fn light() -> Self {
         let up = rgb(0x089981);
         let down = rgb(0xf23645);
         Self {
             dark: false,
+            chrome: rgb(0xebebeb),
+            tab_active: rgb(0xffffff),
             bg: rgb(0xffffff),
-            panel: rgb(0xf8f9fd),
-            panel_alt: rgb(0xf0f3fa),
-            border: rgb(0xe0e3eb),
-            grid: rgb(0xf0f3fa),
-            text: rgb(0x131722),
-            text_muted: rgb(0x787b86),
-            accent: rgb(0x2962ff),
+            panel: rgb(0xffffff),
+            panel_alt: rgb(0xf5f5f5),
+            border: rgb(0xe5e5e5),
+            grid: rgb(0xf2f2f2),
+            text: rgb(0x0a0a0a),
+            text_muted: rgb(0x737373),
+            accent: rgb(0x171717),
             text_on_accent: rgb(0xffffff),
             up,
             down,
             up_wick: up,
             down_wick: down,
-            crosshair: rgb(0x9598a1),
-            crosshair_label_bg: rgb(0x131722),
-            selection: with_alpha(rgb(0x2962ff), 0.25),
+            crosshair: rgb(0xa3a3a3),
+            crosshair_label_bg: rgb(0x171717),
+            selection: rgb(0xe5e5e5),
             volume_up: with_alpha(up, 0.40),
             volume_down: with_alpha(down, 0.40),
             series_palette: SERIES_PALETTE,
@@ -231,8 +243,8 @@ impl Theme {
         v.error_fg_color = self.down;
         v.weak_text_color = Some(self.text_muted);
 
-        v.selection.bg_fill = self.accent;
-        v.selection.stroke = Stroke::new(1.0, self.text_on_accent);
+        v.selection.bg_fill = self.selection;
+        v.selection.stroke = Stroke::new(1.0, self.text);
 
         let w = &mut v.widgets;
         w.noninteractive.bg_fill = self.panel;

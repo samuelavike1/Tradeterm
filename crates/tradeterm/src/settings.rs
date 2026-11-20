@@ -15,6 +15,29 @@ use tt_theme::{ThemeMode, ThemeOverrides};
 /// Changes are written once settings have been stable for this long.
 pub const SAVE_DEBOUNCE: Duration = Duration::from_millis(750);
 
+/// One chart tab.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TabSettings {
+    pub symbol: String,
+    pub timeframe: Timeframe,
+    pub chart_type: ChartType,
+    pub scale_mode: ScaleMode,
+    pub show_volume: bool,
+}
+
+impl Default for TabSettings {
+    fn default() -> Self {
+        Self {
+            symbol: "BTCUSDT".to_owned(),
+            timeframe: Timeframe::M1,
+            chart_type: ChartType::Candles,
+            scale_mode: ScaleMode::Linear,
+            show_volume: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppSettings {
@@ -22,11 +45,9 @@ pub struct AppSettings {
     /// `None` = palette default. Stored as `[r, g, b]`.
     pub up_color: Option<[u8; 3]>,
     pub down_color: Option<[u8; 3]>,
-    pub last_symbol: String,
-    pub last_timeframe: Timeframe,
-    pub chart_type: ChartType,
-    pub scale_mode: ScaleMode,
-    pub show_volume: bool,
+    /// Open chart tabs, left to right. Never empty after [`Self::normalized`].
+    pub tabs: Vec<TabSettings>,
+    pub active_tab: usize,
 }
 
 impl Default for AppSettings {
@@ -35,16 +56,22 @@ impl Default for AppSettings {
             theme_mode: ThemeMode::System,
             up_color: None,
             down_color: None,
-            last_symbol: "BTCUSDT".to_owned(),
-            last_timeframe: Timeframe::M1,
-            chart_type: ChartType::Candles,
-            scale_mode: ScaleMode::Linear,
-            show_volume: true,
+            tabs: vec![TabSettings::default()],
+            active_tab: 0,
         }
     }
 }
 
 impl AppSettings {
+    /// Guarantees at least one tab and a valid active index.
+    pub fn normalized(mut self) -> Self {
+        if self.tabs.is_empty() {
+            self.tabs.push(TabSettings::default());
+        }
+        self.active_tab = self.active_tab.min(self.tabs.len() - 1);
+        self
+    }
+
     pub fn overrides(&self) -> ThemeOverrides {
         let c = |v: Option<[u8; 3]>| v.map(|[r, g, b]| Color32::from_rgb(r, g, b));
         ThemeOverrides {
@@ -81,7 +108,11 @@ impl SettingsStore {
 
     /// Loads from `path`; missing or unreadable files fall back to defaults.
     pub fn load(path: Option<PathBuf>) -> (AppSettings, Self) {
-        let settings = path.as_deref().and_then(read_settings).unwrap_or_default();
+        let settings = path
+            .as_deref()
+            .and_then(read_settings)
+            .unwrap_or_default()
+            .normalized();
         let store = Self {
             path,
             saved: settings.clone(),
@@ -171,11 +202,17 @@ mod tests {
     fn json_round_trip_and_partial_files() {
         let mut s = AppSettings {
             theme_mode: ThemeMode::Light,
-            last_symbol: "ETHUSDT".into(),
-            last_timeframe: Timeframe::H4,
-            chart_type: ChartType::HeikinAshi,
-            scale_mode: ScaleMode::Logarithmic,
-            show_volume: false,
+            tabs: vec![
+                TabSettings::default(),
+                TabSettings {
+                    symbol: "ETHUSDT".into(),
+                    timeframe: Timeframe::H4,
+                    chart_type: ChartType::HeikinAshi,
+                    scale_mode: ScaleMode::Logarithmic,
+                    show_volume: false,
+                },
+            ],
+            active_tab: 1,
             ..Default::default()
         };
         s.set_overrides(ThemeOverrides {
@@ -183,16 +220,22 @@ mod tests {
             down: None,
         });
         let json = serde_json::to_string(&s).unwrap();
-        assert!(json.contains(r#""last_timeframe":"4h""#), "{json}");
+        assert!(json.contains(r#""timeframe":"4h""#), "{json}");
         let back: AppSettings = serde_json::from_str(&json).unwrap();
         assert_eq!(back, s);
         assert_eq!(back.overrides().up, Some(Color32::from_rgb(1, 2, 3)));
 
         // Unknown/missing fields fall back to defaults (forward/backward compatible).
         let partial: AppSettings =
-            serde_json::from_str(r#"{"last_symbol":"SOLUSDT","future_field":1}"#).unwrap();
-        assert_eq!(partial.last_symbol, "SOLUSDT");
-        assert_eq!(partial.chart_type, ChartType::Candles);
+            serde_json::from_str(r#"{"tabs":[{"symbol":"SOLUSDT"}],"future_field":1}"#).unwrap();
+        assert_eq!(partial.tabs[0].symbol, "SOLUSDT");
+        assert_eq!(partial.tabs[0].chart_type, ChartType::Candles);
+
+        // No tabs / out-of-range active tab are repaired.
+        let broken: AppSettings = serde_json::from_str(r#"{"tabs":[],"active_tab":7}"#).unwrap();
+        let fixed = broken.normalized();
+        assert_eq!(fixed.tabs.len(), 1);
+        assert_eq!(fixed.active_tab, 0);
     }
 
     #[test]
@@ -204,12 +247,12 @@ mod tests {
         assert_eq!(s, AppSettings::default());
 
         let t0 = Instant::now();
-        s.last_symbol = "ETHUSDT".into();
+        s.tabs[0].symbol = "ETHUSDT".into();
         assert_eq!(store.tick(&s, t0), Some(SAVE_DEBOUNCE));
         assert!(!path.exists(), "must not save before the debounce elapses");
 
         // Another change restarts the timer.
-        s.show_volume = false;
+        s.tabs[0].show_volume = false;
         store.tick(&s, t0 + Duration::from_millis(500));
         store.tick(&s, t0 + Duration::from_millis(1000));
         assert!(!path.exists());
@@ -233,7 +276,7 @@ mod tests {
         let (s, mut store) = SettingsStore::load(Some(path.clone()));
         assert_eq!(s, AppSettings::default());
         let mut changed = s.clone();
-        changed.last_symbol = "BNBUSDT".into();
+        changed.tabs[0].symbol = "BNBUSDT".into();
         store.flush(&changed);
         assert_eq!(SettingsStore::load(Some(path)).0, changed);
     }

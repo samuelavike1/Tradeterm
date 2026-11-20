@@ -1,11 +1,13 @@
 //! tradeterm — native desktop charting.
 
 mod app;
+mod chrome;
 mod perf;
 mod runtime;
 mod search;
 mod settings;
 mod synthetic;
+mod tab;
 
 use app::TradeTermApp;
 use runtime::BackgroundRuntime;
@@ -27,7 +29,9 @@ fn main() -> eframe::Result {
         viewport: egui::ViewportBuilder::default()
             .with_title("tradeterm")
             .with_inner_size([1280.0, 800.0])
-            .with_min_inner_size([640.0, 400.0]),
+            .with_min_inner_size([640.0, 400.0])
+            // We draw our own title bar with tabs and window buttons.
+            .with_decorations(false),
         ..Default::default()
     };
 
