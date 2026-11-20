@@ -82,9 +82,44 @@ pub fn tick_label(ms: i64, weight: TickWeight) -> String {
     }
 }
 
+/// Time of any bar *slot* on the x axis, like TradingView's time scale: real
+/// bar times inside the data, extrapolated by the bar interval before the
+/// first bar and after the last one. The axis and grid are a continuous ruler
+/// over slots, so they continue into empty space where no candles exist.
+#[derive(Debug, Clone, Copy)]
+pub struct SlotTimes<'a> {
+    times: &'a [i64],
+    interval_ms: i64,
+}
+
+impl<'a> SlotTimes<'a> {
+    pub fn new(times: &'a [i64], interval_ms: i64) -> Self {
+        Self {
+            times,
+            interval_ms: interval_ms.max(1),
+        }
+    }
+
+    /// Open time of slot `i` (may be negative or past the last bar).
+    /// `None` only when there is no data at all.
+    pub fn time_at(&self, i: i64) -> Option<i64> {
+        let n = self.times.len() as i64;
+        if n == 0 {
+            None
+        } else if i < 0 {
+            Some(self.times[0] + i * self.interval_ms)
+        } else if i >= n {
+            Some(self.times[n as usize - 1] + (i - (n - 1)) * self.interval_ms)
+        } else {
+            Some(self.times[i as usize])
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct TimeTick {
-    pub index: usize,
+    /// Slot index (can lie outside the data).
+    pub index: i64,
     pub x: f32,
     pub weight: TickWeight,
     pub label: String,
@@ -101,22 +136,46 @@ pub struct TimeTick {
 ///   bounded when thousands of bars share a pixel). Candidates sit on
 ///   multiples of `stride`, so they stay put while panning.
 pub fn time_ticks(
-    times: &[i64],
-    visible: Range<usize>,
+    slots: &SlotTimes<'_>,
+    visible: Range<i64>,
     x_range: (f32, f32),
     stride: usize,
     min_gap: f32,
-    x_of: impl Fn(usize) -> f32,
+    x_of: impl Fn(i64) -> f32,
     mut label_width: impl FnMut(&str) -> f32,
 ) -> Vec<TimeTick> {
-    let stride = stride.max(1);
-    let end = visible.end.min(times.len());
-    let first = visible.start.div_ceil(stride).max(1) * stride;
-
-    let mut cands: Vec<(TickWeight, usize)> = (first..end)
-        .step_by(stride)
-        .filter_map(|i| boundary_weight(times[i - stride], times[i]).map(|w| (w, i)))
-        .collect();
+    let stride = stride.max(1) as i64;
+    // Candidates on multiples of `stride`, so they stay put while panning.
+    let first = visible.start.div_euclid(stride) * stride;
+    let mut cands: Vec<(TickWeight, i64)> = Vec::new();
+    let mut i = first;
+    while i < visible.end {
+        if i >= visible.start
+            && let (Some(prev), Some(t)) = (slots.time_at(i - stride), slots.time_at(i))
+            && let Some(w) = boundary_weight(prev, t)
+        {
+            // With stride > 1 the boundary lies somewhere in (i - stride, i];
+            // put the tick on the exact first slot past it (12:00, not 12:15).
+            // The weight from a fixed `prev` only grows with time, so bisect.
+            let (mut lo, mut hi) = (i - stride, i);
+            while hi - lo > 1 {
+                let mid = lo + (hi - lo) / 2;
+                let reached = slots
+                    .time_at(mid)
+                    .and_then(|tm| boundary_weight(prev, tm))
+                    .is_some_and(|wm| wm >= w);
+                if reached {
+                    hi = mid;
+                } else {
+                    lo = mid;
+                }
+            }
+            if hi >= visible.start {
+                cands.push((w, hi));
+            }
+        }
+        i += stride;
+    }
     // Use one regular unit: drop weights so fine that their ticks could not
     // all fit (otherwise leftovers like "08:52" fill the gaps unevenly).
     let span = (x_range.1 - x_range.0).max(1.0);
@@ -148,7 +207,7 @@ pub fn time_ticks(
     let mut spans: Vec<(f32, f32)> = Vec::new();
     for (weight, i) in cands {
         let x = x_of(i);
-        let label = tick_label(times[i], weight);
+        let label = tick_label(slots.time_at(i).expect("candidates have times"), weight);
         let half = label_width(&label) / 2.0 + min_gap / 2.0;
         let (l, r) = (x - half, x + half);
         if l < x_range.0 || r > x_range.1 {
@@ -252,12 +311,12 @@ mod tests {
     fn ticks_never_overlap_and_prefer_heavy_boundaries() {
         let times = bars_with_gap();
         for spacing in [0.5_f32, 2.0, 6.0, 20.0] {
-            let x_of = |i: usize| i as f32 * spacing;
+            let x_of = |i: i64| i as f32 * spacing;
             let width = times.len() as f32 * spacing;
             let stride = (3.0 / spacing).ceil() as usize;
             let ticks = time_ticks(
-                &times,
-                0..times.len(),
+                &SlotTimes::new(&times, MINUTE_MS),
+                0..times.len() as i64,
                 (0.0, width),
                 stride,
                 12.0,
@@ -288,7 +347,7 @@ mod tests {
             .map(|i| NOV20 + 8 * HOUR_MS + i * MINUTE_MS)
             .collect();
         let ticks = time_ticks(
-            &times,
+            &SlotTimes::new(&times, MINUTE_MS),
             0..150,
             (0.0, 900.0),
             1,
@@ -308,7 +367,7 @@ mod tests {
         let times: Vec<i64> = (0..730).map(|i| NOV20 + i * crate::scale::DAY_MS).collect();
         let spacing = 1200.0 / 730.0;
         let ticks = time_ticks(
-            &times,
+            &SlotTimes::new(&times, MINUTE_MS),
             0..730,
             (0.0, 1200.0),
             2,
@@ -340,8 +399,8 @@ mod tests {
         let spacing = 1200.0 / times.len() as f32;
         let stride = (3.0 / spacing).ceil() as usize;
         let ticks = time_ticks(
-            &times,
-            0..times.len(),
+            &SlotTimes::new(&times, MINUTE_MS),
+            0..times.len() as i64,
             (0.0, 1200.0),
             stride,
             18.0,
@@ -363,8 +422,8 @@ mod tests {
         let times: Vec<i64> = (0..200).map(|i| NOV20 + i * 5 * MINUTE_MS).collect();
         let spacing = 80.0 / 6.0;
         let ticks = time_ticks(
-            &times,
-            0..200,
+            &SlotTimes::new(&times, MINUTE_MS),
+            1..200,
             (0.0, 200.0 * spacing),
             1,
             45.0,
@@ -385,14 +444,77 @@ mod tests {
     }
 
     #[test]
+    fn slots_extrapolate_beyond_the_data() {
+        let times = [NOV20, NOV20 + 5 * MINUTE_MS, NOV20 + 10 * MINUTE_MS];
+        let slots = SlotTimes::new(&times, 5 * MINUTE_MS);
+        assert_eq!(slots.time_at(1), Some(NOV20 + 5 * MINUTE_MS));
+        assert_eq!(slots.time_at(5), Some(NOV20 + 25 * MINUTE_MS));
+        assert_eq!(slots.time_at(-2), Some(NOV20 - 10 * MINUTE_MS));
+        assert_eq!(SlotTimes::new(&[], 1).time_at(0), None);
+    }
+
+    #[test]
+    fn ticks_continue_into_empty_space_after_the_last_bar() {
+        // 5m bars until 08:40; the view shows slots up to ~10:30, like TradingView.
+        let times: Vec<i64> = (0..=104).map(|k| NOV20 + k * 5 * MINUTE_MS).collect();
+        let slots = SlotTimes::new(&times, 5 * MINUTE_MS);
+        let spacing = 85.0 / 6.0;
+        let ticks = time_ticks(
+            &slots,
+            1..131,
+            (0.0, 131.0 * spacing),
+            1,
+            45.0,
+            |i| i as f32 * spacing,
+            |s| s.len() as f32 * 7.0,
+        );
+        let future: Vec<&str> = ticks
+            .iter()
+            .filter(|t| t.index > 104)
+            .map(|t| t.label.as_str())
+            .collect();
+        assert_eq!(future, ["09:00", "09:30", "10:00", "10:30"], "{ticks:?}");
+    }
+
+    #[test]
+    fn strided_ticks_land_on_the_exact_boundary() {
+        // 5m bars from 11:10, sampled every 4 slots: the 12:00 boundary is
+        // found between samples and must be labelled 12:00, not 12:15.
+        let start = NOV20 + 11 * HOUR_MS + 10 * MINUTE_MS;
+        let times: Vec<i64> = (0..40).map(|k| start + k * 5 * MINUTE_MS).collect();
+        let slots = SlotTimes::new(&times, 5 * MINUTE_MS);
+        let ticks = time_ticks(
+            &slots,
+            1..40,
+            (0.0, 4000.0),
+            4,
+            10.0,
+            |i| i as f32 * 100.0,
+            |s| s.len() as f32 * 7.0,
+        );
+        let noon = ticks
+            .iter()
+            .find(|t| t.weight == TickWeight::Hour12)
+            .expect("noon tick");
+        assert_eq!(noon.label, "12:00");
+        assert_eq!(slots.time_at(noon.index), Some(NOV20 + 12 * HOUR_MS));
+    }
+
+    #[test]
     fn gap_takes_no_space() {
         let times = bars_with_gap();
         // Bars 599 and 600 are 3 days apart in time but adjacent on screen.
-        let x_of = |i: usize| i as f32 * 4.0;
+        let x_of = |i: i64| i as f32 * 4.0;
         assert_eq!(x_of(600) - x_of(599), 4.0);
-        let ticks = time_ticks(&times, 550..650, (0.0, 1e6), 1, 10.0, x_of, |s| {
-            s.len() as f32 * 7.0
-        });
+        let ticks = time_ticks(
+            &SlotTimes::new(&times, MINUTE_MS),
+            550..650,
+            (0.0, 1e6),
+            1,
+            10.0,
+            x_of,
+            |s| s.len() as f32 * 7.0,
+        );
         assert!(
             ticks
                 .iter()
@@ -403,9 +525,9 @@ mod tests {
     #[test]
     fn candidates_are_stable_under_panning() {
         let times = bars_with_gap();
-        let tick_idx = |range: Range<usize>| {
+        let tick_idx = |range: Range<i64>| {
             time_ticks(
-                &times,
+                &SlotTimes::new(&times, MINUTE_MS),
                 range,
                 (0.0, 1e9),
                 4,
@@ -417,13 +539,23 @@ mod tests {
             .map(|t| t.index)
             .collect::<Vec<_>>()
         };
-        for i in tick_idx(100..500) {
-            assert_eq!(i % 4, 0);
-        }
-        // Overlapping windows agree on shared candidates' positions.
+        // Panning by a few slots must not move any tick that stays in view:
+        // ticks sit on exact time boundaries, which depend only on the data.
         let a = tick_idx(100..500);
-        let b = tick_idx(101..500);
-        assert!(a.iter().filter(|i| **i >= 104).all(|i| i % 4 == 0));
-        assert!(b.iter().all(|i| i % 4 == 0));
+        for shift in 1..8 {
+            let b = tick_idx(100 + shift..500 + shift);
+            for i in a.iter().filter(|i| **i >= 108 && **i < 500) {
+                assert!(
+                    b.contains(i),
+                    "tick {i} moved after panning by {shift}: {a:?} vs {b:?}"
+                );
+            }
+        }
+        // And every tick is on an actual boundary (its slot starts a new unit).
+        let slots = SlotTimes::new(&times, MINUTE_MS);
+        for i in &a {
+            let w = boundary_weight(slots.time_at(i - 1).unwrap(), slots.time_at(*i).unwrap());
+            assert!(w.is_some(), "tick {i} is not on a boundary");
+        }
     }
 }

@@ -171,6 +171,19 @@ impl Viewport {
         visible_range(self)
     }
 
+    /// Slot (bar position, possibly without a bar) nearest to screen x.
+    pub fn slot_at(&self, x: f32) -> i64 {
+        self.index_at(x).round() as i64
+    }
+
+    /// Slots at least partially inside the plot, including empty ones before
+    /// the first bar and after the last (for the time scale and grid).
+    pub fn visible_slots(&self) -> std::ops::Range<i64> {
+        let lo = (self.index_at(self.plot.left) - 0.5).floor() as i64;
+        let hi = (self.index_at(self.plot.right) + 0.5).ceil() as i64 + 1;
+        lo..hi
+    }
+
     /// Nearest existing bar to screen x, if any.
     pub fn bar_at(&self, x: f32) -> Option<usize> {
         let i = self.index_at(x).round();

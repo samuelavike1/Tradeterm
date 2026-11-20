@@ -93,6 +93,9 @@ pub(crate) fn draw(c: &mut dyn Canvas, s: &Scene<'_>) {
     // Axis tags are computed before the tick labels so labels underneath can
     // be hidden; the crosshair tag is drawn last, on top.
     c.set_clip(s.full);
+    // The crosshair snaps to any slot (also past the last bar); the readout
+    // shows the bar under it, or the last bar over empty space.
+    let hovered_slot = s.crosshair.map(|p| s.vp.slot_at(p.x));
     let hovered = s.crosshair.and_then(|p| s.vp.bar_at(p.x));
     let mut tags: Vec<Tag> = Vec::new();
     if let Some(tag) = last_price_tag(c, s) {
@@ -100,7 +103,7 @@ pub(crate) fn draw(c: &mut dyn Canvas, s: &Scene<'_>) {
     }
     let mut time_tag = None;
     if let Some(p) = s.crosshair {
-        let (price_tag, ttag) = crosshair(c, s, p, hovered);
+        let (price_tag, ttag) = crosshair(c, s, p, hovered_slot);
         tags.push(price_tag);
         time_tag = ttag;
     }
@@ -360,9 +363,10 @@ fn time_ticks(c: &mut dyn Canvas, s: &Scene<'_>) -> Vec<time_axis::TimeTick> {
     // Gap chosen so regular labels land ~`time_label_spacing` apart.
     let typical = c.text_size("00:00", size).x;
     let gap = (s.style.time_label_spacing - typical).max(16.0);
+    let slots = time_axis::SlotTimes::new(s.display.open_times(), s.bar_interval_ms);
     time_axis::time_ticks(
-        s.display.open_times(),
-        vp.visible_range(),
+        &slots,
+        vp.visible_slots(),
         (s.plot.left(), s.plot.right()),
         stride,
         gap,
@@ -511,11 +515,11 @@ fn last_price_tag(c: &mut dyn Canvas, s: &Scene<'_>) -> Option<Tag> {
 }
 
 /// Draws crosshair lines; returns its price-axis tag and time-axis tag.
-fn crosshair(c: &mut dyn Canvas, s: &Scene<'_>, p: Pos2, bar: Option<usize>) -> (Tag, Option<Tag>) {
+fn crosshair(c: &mut dyn Canvas, s: &Scene<'_>, p: Pos2, slot: Option<i64>) -> (Tag, Option<Tag>) {
     let ppp = c.pixels_per_point();
     let col = s.theme.crosshair;
     // Snap the vertical line to the hovered bar's center.
-    let x = crisp(bar.map_or(p.x, |i| s.vp.x_of(i as f32)), ppp);
+    let x = crisp(slot.map_or(p.x, |i| s.vp.x_of(i as f32)), ppp);
     let y = crisp(p.y, ppp);
     c.set_clip(s.plot);
     c.dashed_line(
@@ -547,8 +551,9 @@ fn crosshair(c: &mut dyn Canvas, s: &Scene<'_>, p: Pos2, bar: Option<usize>) -> 
     };
     let price_tag = price_axis_tag(s, y, vec![label], s.theme.crosshair_label_bg);
 
-    let time_tag = bar.map(|i| {
-        let text = format_full_time(s.display.open_times()[i], s.bar_interval_ms);
+    let slots = time_axis::SlotTimes::new(s.display.open_times(), s.bar_interval_ms);
+    let time_tag = slot.and_then(|i| slots.time_at(i)).map(|t| {
+        let text = format_full_time(t, s.bar_interval_ms);
         let size = c.text_size(&text, s.style.font_size) + vec2(16.0, 8.0);
         let mut rect = Align2::CENTER_CENTER.anchor_size(pos2(x, s.time_axis.center().y), size);
         // Keep it inside the time axis.
