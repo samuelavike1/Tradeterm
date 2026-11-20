@@ -44,6 +44,8 @@ struct Cache {
     study: Option<Study>,
     version: u64,
     len: usize,
+    /// Last bar when computed: unchanged series ⇒ nothing to do.
+    last: Option<tt_core::Candle>,
     outputs: Vec<Vec<f64>>,
 }
 
@@ -102,7 +104,11 @@ impl Indicator {
     /// or history changed, otherwise only the last bar(s).
     pub fn sync(&mut self, src: &CandleSeries) {
         let c = &mut self.cache;
-        let full = c.study.as_ref() != Some(&self.study)
+        let same_study = c.study.as_ref() == Some(&self.study);
+        if same_study && c.version == src.version() && c.len == src.len() && c.last == src.last() {
+            return;
+        }
+        let full = !same_study
             || c.version != src.version()
             || src.len() < c.len
             || self.study.recompute_fully();
@@ -113,17 +119,29 @@ impl Indicator {
         c.study = Some(self.study.clone());
         c.version = src.version();
         c.len = src.len();
+        c.last = src.last();
     }
 
     /// (min, max) of the drawn outputs over `range` (histograms include 0).
     pub fn extent(&self, range: Range<usize>) -> Option<(f64, f64)> {
+        self.extent_sampled(range, 1)
+    }
+
+    /// [`Self::extent`] over every `stride`-th bar (aligned to multiples of
+    /// `stride`, plus the last one), i.e. the points actually drawn when
+    /// zoomed far out. Keeps auto-fit O(pixels) instead of O(bars).
+    pub fn extent_sampled(&self, range: Range<usize>, stride: usize) -> Option<(f64, f64)> {
+        let stride = stride.max(1);
         let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
         for (k, (out, (_, plot))) in self.outputs().iter().zip(self.study.outputs()).enumerate() {
             if !self.output_enabled(k) {
                 continue;
             }
             let end = range.end.min(out.len());
-            for &v in &out[range.start.min(end)..end] {
+            let start = range.start.min(end) / stride * stride;
+            let last = end.checked_sub(1);
+            for i in (start..end).step_by(stride).chain(last) {
+                let v = out[i];
                 if v.is_finite() {
                     lo = lo.min(v);
                     hi = hi.max(v);
@@ -198,6 +216,23 @@ mod tests {
         };
         ind.sync(&s);
         assert!(ind.outputs()[0][8].is_nan() && ind.outputs()[0][9].is_finite());
+    }
+
+    #[test]
+    fn unchanged_series_is_not_recomputed() {
+        let s = series(50);
+        let mut ind = Indicator::new(StudyKind::Rsi.default_study());
+        ind.sync(&s);
+        // Poison the cache: a real recompute would overwrite it.
+        ind.cache.outputs[0][49] = -1.0;
+        ind.sync(&s);
+        assert_eq!(ind.outputs()[0][49], -1.0, "no change, no recompute");
+        let mut s2 = s.clone();
+        let mut last = s2.last().unwrap();
+        last.close += 1.0;
+        s2.upsert(last);
+        ind.sync(&s2);
+        assert_ne!(ind.outputs()[0][49], -1.0, "a tick recomputes");
     }
 
     #[test]
