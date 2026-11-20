@@ -1,6 +1,7 @@
 //! The tradeterm window: title bar with chart tabs, toolbar, the active
 //! chart, status bar.
 
+use crate::indicators::{IndicatorSettingsPanel, IndicatorsPanel};
 use crate::search::{self, SymbolSearch};
 use crate::source::TabSource;
 use crate::ui::{self, lucide};
@@ -57,7 +58,7 @@ enum Wake {
     After(Duration),
 }
 
-type TabChart = Entity<Chart<TabSource>>;
+pub type TabChart = Entity<Chart<TabSource>>;
 
 pub struct TradeTerm {
     shared: Shared,
@@ -183,7 +184,7 @@ impl TradeTerm {
         ui::apply_theme(dark, window, cx);
         for (i, t) in settings.tabs.iter().enumerate() {
             let synthetic = (i == settings.active_tab).then_some(synthetic).flatten();
-            let chart = app.make_chart(t, synthetic, cx);
+            let chart = app.make_chart(t, synthetic, window, cx);
             app.tabs.push(chart);
         }
         app.active = app.active.min(app.tabs.len().saturating_sub(1));
@@ -200,6 +201,7 @@ impl TradeTerm {
         &mut self,
         t: &TabSettings,
         synthetic: Option<usize>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> TabChart {
         let id = self.next_tab_id;
@@ -213,10 +215,16 @@ impl TradeTerm {
         source.refresh_title();
         let theme = self.theme.clone();
         let chart = cx.new(|cx| Chart::new(ChartState::new(source, theme), cx));
-        let sub = cx.subscribe(&chart, |app, _chart, ev: &ChartEvent, cx| match ev {
-            ChartEvent::OpenIndicatorSettings(_id) => {}
-            ChartEvent::Changed => app.persist(cx),
-        });
+        let sub = cx.subscribe_in(
+            &chart,
+            window,
+            |app, chart, ev: &ChartEvent, window, cx| match ev {
+                ChartEvent::OpenIndicatorSettings(id) => {
+                    app.open_indicator_settings(chart.clone(), *id, window, cx)
+                }
+                ChartEvent::Changed => app.persist(cx),
+            },
+        );
         self._subscriptions.push(sub);
         chart
     }
@@ -308,12 +316,12 @@ impl TradeTerm {
 
     // ---- actions -----------------------------------------------------------
 
-    fn new_tab(&mut self, cx: &mut Context<Self>) {
+    fn new_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let settings = self
             .tab_chart()
             .map(|c| c.read(cx).state.read(cx).source.tab.settings())
             .unwrap_or_default();
-        let chart = self.make_chart(&settings, None, cx);
+        let chart = self.make_chart(&settings, None, window, cx);
         self.active = (self.active + 1).min(self.tabs.len());
         self.tabs.insert(self.active, chart);
         self.persist(cx);
@@ -409,6 +417,78 @@ impl TradeTerm {
         });
     }
 
+    /// "Indicators, metrics, and strategies" (toolbar button or "/").
+    pub fn open_indicators(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let app = cx.entity().downgrade();
+        let (theme, favorites) = (self.theme.clone(), self.favorite_indicators.clone());
+        let panel = cx.new(|cx| IndicatorsPanel::new(app, theme, favorites, window, cx));
+        let focus_once = std::cell::Cell::new(true);
+        window.open_dialog(cx, move |dialog, window, cx| {
+            if focus_once.replace(false) {
+                IndicatorsPanel::focus_input(&panel, window, cx);
+            }
+            dialog
+                .title("Indicators, metrics, and strategies")
+                .w(px(780.))
+                .entrance(DialogEntrance::FadeSlide)
+                .child(panel.clone())
+        });
+    }
+
+    pub fn add_indicator(&mut self, kind: tt_core::StudyKind, cx: &mut Context<Self>) {
+        self.with_tab(cx, |s, _| {
+            s.tab
+                .chart
+                .indicators
+                .push(tt_chart::Indicator::new(kind.default_study()))
+        });
+    }
+
+    pub fn set_favorite_indicators(
+        &mut self,
+        favorites: Vec<tt_core::StudyKind>,
+        cx: &mut Context<Self>,
+    ) {
+        self.favorite_indicators = favorites;
+        self.persist(cx);
+    }
+
+    /// Settings of one indicator (legend gear or double-click).
+    fn open_indicator_settings(
+        &mut self,
+        chart: TabChart,
+        id: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let exists = chart
+            .read(cx)
+            .state
+            .read(cx)
+            .source
+            .tab
+            .chart
+            .indicators
+            .iter()
+            .any(|i| i.id == id);
+        if !exists {
+            return;
+        }
+        let theme = self.theme.clone();
+        let panel = cx.new(|cx| {
+            IndicatorSettingsPanel::new(chart, id, theme, window, cx)
+                .expect("indicator checked above")
+        });
+        let title = panel.read(cx).title();
+        window.open_dialog(cx, move |dialog, _, _| {
+            dialog
+                .title(title.clone())
+                .w(px(460.))
+                .entrance(DialogEntrance::FadeSlide)
+                .child(panel.clone())
+        });
+    }
+
     fn set_timeframe(&mut self, tf: Timeframe, cx: &mut Context<Self>) {
         self.with_tab(cx, |s, shared| s.tab.set_timeframe(tf, shared));
     }
@@ -448,7 +528,7 @@ impl TradeTerm {
                             .small()
                             .icon(IconName::Plus)
                             .tooltip("New tab (Ctrl+T)")
-                            .on_click(cx.listener(|this, _, _, cx| this.new_tab(cx))),
+                            .on_click(cx.listener(|this, _, window, cx| this.new_tab(window, cx))),
                     ),
                 )
                 .child(
@@ -661,7 +741,8 @@ impl TradeTerm {
                             .child(lucide(lucide_icons::Icon::SquareFunction, 17.))
                             .child("Indicators"),
                     )
-                    .tooltip("Indicators, metrics, and strategies (/)"),
+                    .tooltip("Indicators, metrics, and strategies (/)")
+                    .on_click(cx.listener(|this, _, window, cx| this.open_indicators(window, cx))),
             )
             .child(div().flex_1())
             .child(scales)
@@ -771,12 +852,17 @@ impl Render for TradeTerm {
                     return;
                 }
                 let text = k.key_char.clone().unwrap_or_else(|| k.key.clone());
+                if text == "/" {
+                    this.open_indicators(window, cx);
+                    cx.stop_propagation();
+                    return;
+                }
                 if text.chars().count() == 1 && text.chars().all(|c| c.is_ascii_alphanumeric()) {
                     this.open_search(&text, window, cx);
                     cx.stop_propagation();
                 }
             }))
-            .on_action(cx.listener(|this, _: &NewTab, _, cx| this.new_tab(cx)))
+            .on_action(cx.listener(|this, _: &NewTab, window, cx| this.new_tab(window, cx)))
             .on_action(cx.listener(|this, _: &CloseTab, _, cx| this.close_tab(this.active, cx)))
             .on_action(cx.listener(|this, _: &NextTab, _, cx| {
                 let n = this.tabs.len();

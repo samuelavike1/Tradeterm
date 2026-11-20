@@ -1,6 +1,7 @@
 //! tradeterm on gpui (migration in progress; the egui app is `tradeterm`).
 
 mod app;
+mod indicators;
 mod search;
 mod source;
 mod ui;
