@@ -4,9 +4,11 @@
 //! back over a channel and appear in a popup under the box. ↑/↓ choose,
 //! Enter or a click applies, Esc or clicking elsewhere cancels.
 
+use crate::toolbar::{pill_fill, search_icon};
 use crossbeam_channel::{Receiver, Sender};
-use egui::{Key, Rect, RichText, TextEdit};
+use egui::{FontId, Frame, Key, Margin, Rect, RichText, Stroke, StrokeKind, TextEdit, vec2};
 use tt_core::SymbolInfo;
+use tt_theme::Theme;
 
 /// Result of a search request: (query, results or error message).
 pub type SearchReply = (String, Result<Vec<SymbolInfo>, String>);
@@ -73,14 +75,48 @@ impl SymbolSearch {
     pub fn ui(
         &mut self,
         ui: &mut egui::Ui,
+        theme: &Theme,
         request: impl FnOnce(String, Sender<SearchReply>),
     ) -> Option<SearchOutcome> {
-        let edit = ui.add(
-            TextEdit::singleline(&mut self.input)
-                .desired_width(120.0)
-                .hint_text("Symbol")
-                .char_limit(20),
+        // A rounded "pill" with a magnifier, like TradingView's symbol box.
+        let pill = Frame::new()
+            .fill(pill_fill(theme))
+            .corner_radius(14)
+            .inner_margin(Margin {
+                left: 28,
+                right: 12,
+                top: 5,
+                bottom: 5,
+            })
+            .show(ui, |ui| {
+                // Size the field to the text so it sits centered in the pill.
+                ui.spacing_mut().interact_size.y = 18.0;
+                ui.add(
+                    TextEdit::singleline(&mut self.input)
+                        .frame(Frame::NONE)
+                        .desired_width(92.0)
+                        .hint_text("Symbol")
+                        .char_limit(20)
+                        .font(FontId::proportional(14.0))
+                        .text_color(theme.text),
+                )
+            });
+        let edit = pill.inner;
+        let pill_rect = pill.response.rect;
+        let p = ui.painter();
+        search_icon(
+            p,
+            pill_rect.left_center() + vec2(15.0, 0.0),
+            theme.text_muted,
         );
+        if edit.has_focus() {
+            p.rect_stroke(
+                pill_rect,
+                14.0,
+                Stroke::new(1.0, theme.text_muted),
+                StrokeKind::Inside,
+            );
+        }
         if edit.changed() {
             self.input = self
                 .input
@@ -154,7 +190,7 @@ impl SymbolSearch {
         if self.open {
             let area = egui::Area::new(ui.make_persistent_id("symbol_search_popup"))
                 .order(egui::Order::Foreground)
-                .fixed_pos(edit.rect.left_bottom() + egui::vec2(0.0, 4.0))
+                .fixed_pos(pill_rect.left_bottom() + egui::vec2(0.0, 4.0))
                 .show(ui.ctx(), |ui| {
                     egui::Frame::popup(ui.style())
                         .show(ui, |ui| {

@@ -5,6 +5,7 @@ use crate::search::SearchOutcome;
 use crate::settings::{AppSettings, SettingsStore};
 use crate::synthetic;
 use crate::tab::{ChartTab, MAX_HISTORY_BARS, Shared};
+use crate::toolbar;
 use egui::{
     Align, Color32, Key, KeyboardShortcut, Layout, Modifiers, RichText, Sense, Stroke, vec2,
 };
@@ -12,7 +13,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use tracing::warn;
 use tt_brokers::{BinanceSource, MarketDataSource};
-use tt_chart::{ChartData, ChartType, ScaleMode};
+use tt_chart::{ChartData, ScaleMode};
 use tt_core::{ConnectionStatus, Symbol, Timeframe};
 use tt_theme::{Theme, ThemeMode, ThemeOverrides};
 
@@ -281,11 +282,14 @@ impl TradeTermApp {
 
     fn toolbar(&mut self, ui: &mut egui::Ui) {
         let shared = self.shared.clone();
+        let theme = self.theme.clone();
         let tab = &mut self.tabs[self.active];
+        toolbar::apply_style(ui, &theme);
         ui.horizontal(|ui| {
+            ui.set_height(toolbar::TOOLBAR_HEIGHT);
             tab.search.poll();
             let reply_shared = shared.clone();
-            let outcome = tab.search.ui(ui, move |query, reply| {
+            let outcome = tab.search.ui(ui, &theme, move |query, reply| {
                 let source = reply_shared.source.clone();
                 let ctx = reply_shared.ctx.clone();
                 reply_shared.handle.spawn(async move {
@@ -303,37 +307,38 @@ impl TradeTermApp {
                 None => {}
             }
 
-            ui.separator();
+            toolbar::divider(ui, &theme);
             for tf in Timeframe::ALL {
-                if ui
-                    .selectable_label(tab.timeframe == tf, tf.label())
-                    .clicked()
-                {
+                let text = RichText::new(tf.label()).size(13.5);
+                if ui.selectable_label(tab.timeframe == tf, text).clicked() {
                     tab.set_timeframe(tf, &shared);
                 }
             }
 
-            ui.separator();
-            egui::ComboBox::from_id_salt("chart_type")
-                .selected_text(tab.chart.chart_type.label())
-                .width(130.0)
-                .show_ui(ui, |ui| {
-                    for t in ChartType::ALL {
-                        ui.selectable_value(&mut tab.chart.chart_type, t, t.label());
-                    }
-                });
-            ui.toggle_value(&mut tab.chart.show_volume, "Vol")
-                .on_hover_text("Show the volume pane");
+            toolbar::divider(ui, &theme);
+            toolbar::chart_type_picker(ui, &mut tab.chart.chart_type, &theme);
+            toolbar::divider(ui, &theme);
 
-            ui.separator();
-            for mode in ScaleMode::ALL {
-                ui.selectable_value(&mut tab.chart.scale_mode, mode, mode.label())
-                    .on_hover_text(match mode {
-                        ScaleMode::Linear => "Linear price scale",
-                        ScaleMode::Logarithmic => "Logarithmic price scale",
-                        ScaleMode::Percent => "Percent change from the first visible bar",
-                    });
-            }
+            // Display options on the right, like TradingView's chart settings.
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                for mode in [
+                    ScaleMode::Percent,
+                    ScaleMode::Logarithmic,
+                    ScaleMode::Linear,
+                ] {
+                    let text = RichText::new(mode.label()).size(13.5);
+                    ui.selectable_value(&mut tab.chart.scale_mode, mode, text)
+                        .on_hover_text(match mode {
+                            ScaleMode::Linear => "Linear price scale",
+                            ScaleMode::Logarithmic => "Logarithmic price scale",
+                            ScaleMode::Percent => "Percent change from the first visible bar",
+                        });
+                }
+                toolbar::divider(ui, &theme);
+                let vol = RichText::new("Volume").size(13.5);
+                ui.toggle_value(&mut tab.chart.show_volume, vol)
+                    .on_hover_text("Show the volume pane");
+            });
         });
     }
 
@@ -536,8 +541,9 @@ impl TradeTermApp {
             .bar_frame()
             .stroke(Stroke::NONE)
             .inner_margin(egui::Margin::symmetric(10, 5));
+        let toolbar_frame = bar.inner_margin(egui::Margin::symmetric(8, 4));
         egui::Panel::top("toolbar")
-            .frame(bar)
+            .frame(toolbar_frame)
             .show_separator_line(true)
             .show(ui, |ui| self.toolbar(ui));
 

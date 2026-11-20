@@ -8,6 +8,7 @@ mod search;
 mod settings;
 mod synthetic;
 mod tab;
+mod toolbar;
 
 use app::TradeTermApp;
 use runtime::BackgroundRuntime;
