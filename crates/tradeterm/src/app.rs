@@ -1,35 +1,55 @@
 use crate::perf::PerfStats;
 use crate::runtime::BackgroundRuntime;
+use crate::search::{SearchOutcome, SymbolSearch};
 use crate::settings::{AppSettings, SettingsStore};
 use crossbeam_channel::Receiver;
-use egui::{
-    Align, Color32, Key, KeyboardShortcut, Layout, Modifiers, RichText, Sense, TextEdit, vec2,
-};
+use egui::{Align, Color32, Key, KeyboardShortcut, Layout, Modifiers, RichText, Sense, vec2};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::task::JoinHandle;
-use tracing::{error, info};
+use tracing::{error, info, warn};
+use tt_brokers::binance::MAX_KLINES;
 use tt_brokers::{BinanceSource, MarketDataSource};
 use tt_chart::{ChartData, ChartType, ChartView, ScaleMode};
-use tt_core::{CandleSeries, ConnectionStatus, EventSink, MarketEvent, Symbol, Timeframe};
+use tt_core::{
+    CandleSeries, ConnectionStatus, EventSink, MarketEvent, Symbol, SymbolInfo, Timeframe,
+};
 use tt_theme::{Theme, ThemeMode, ThemeOverrides};
 
 const TOGGLE_THEME: KeyboardShortcut =
     KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::T);
+/// Backfill stops once this many bars are loaded, so zooming far out can't
+/// page through years of 1m data.
+const MAX_HISTORY_BARS: usize = 250_000;
+/// Wait before retrying a failed backfill request.
+const BACKFILL_RETRY: Duration = Duration::from_secs(5);
+
+/// Loading of older history when the user scrolls back.
+#[derive(Debug, Default)]
+struct Backfill {
+    loading: bool,
+    /// The venue has no bars older than what we hold.
+    exhausted: bool,
+    retry_at: Option<Instant>,
+}
 
 pub struct TradeTermApp {
     ctx: egui::Context,
-    // Declared before `runtime` so the task handle is dropped first.
+    // Declared before `runtime` so task handles are dropped first.
     stream: Option<JoinHandle<()>>,
     source: Arc<BinanceSource>,
     rx: Receiver<MarketEvent>,
+    /// Sink of the current stream, for side requests (symbol info, backfill).
+    sink: Option<EventSink>,
 
     symbol: Symbol,
-    symbol_input: String,
+    symbol_info: Option<SymbolInfo>,
+    search: SymbolSearch,
     timeframe: Timeframe,
 
     series: CandleSeries,
     status: ConnectionStatus,
+    backfill: Backfill,
     chart: ChartView,
 
     theme_mode: ThemeMode,
@@ -63,16 +83,28 @@ impl TradeTermApp {
         chart.show_volume = settings.show_volume;
         tt_theme::install(&ctx, theme_mode, overrides);
         let theme = tt_theme::current(&ctx, overrides);
+
+        // Warm the symbol list so the first search is instant.
+        let warm = source.clone();
+        runtime.handle().spawn(async move {
+            if let Err(e) = warm.search_symbols("").await {
+                warn!("could not preload symbol list: {e:#}");
+            }
+        });
+
         let mut app = Self {
             ctx,
             stream: None,
             source,
             rx,
-            symbol_input: symbol.to_string(),
+            sink: None,
+            search: SymbolSearch::new(symbol.as_str()),
             symbol,
+            symbol_info: None,
             timeframe: settings.last_timeframe,
             series: CandleSeries::new(),
             status: ConnectionStatus::Connecting,
+            backfill: Backfill::default(),
             chart,
             theme_mode,
             overrides,
@@ -91,19 +123,34 @@ impl TradeTermApp {
             task.abort();
         }
         // A fresh channel per stream: dropping the old receiver makes any
-        // in-flight sends from the old task fail, so stale data can't leak in.
+        // in-flight sends from old tasks fail, so stale data can't leak in.
         let (tx, rx) = crossbeam_channel::unbounded();
         self.rx = rx;
         self.series.clear();
         self.status = ConnectionStatus::Connecting;
+        self.backfill = Backfill::default();
+        self.symbol_info = None;
         self.chart.reset_view();
 
         let ctx = self.ctx.clone();
         let sink = EventSink::new(tx, move || ctx.request_repaint());
-        let source = self.source.clone();
+        self.sink = Some(sink.clone());
         let (symbol, tf) = (self.symbol.clone(), self.timeframe);
-        info!(%symbol, %tf, source = source.name(), "starting stream");
+        info!(%symbol, %tf, source = self.source.name(), "starting stream");
 
+        // Metadata in parallel with the stream; the chart works without it.
+        let source = self.source.clone();
+        let (info_sink, info_symbol) = (sink.clone(), symbol.clone());
+        self.runtime.handle().spawn(async move {
+            match source.symbol_info(&info_symbol).await {
+                Ok(info) => {
+                    info_sink.send(MarketEvent::SymbolInfo(info));
+                }
+                Err(e) => warn!(symbol = %info_symbol, "symbol info unavailable: {e:#}"),
+            }
+        });
+
+        let source = self.source.clone();
         self.stream = Some(self.runtime.handle().spawn(async move {
             if let Err(e) = source.run(symbol, tf, sink).await {
                 error!("market data stream failed: {e:#}");
@@ -112,17 +159,65 @@ impl TradeTermApp {
         self.ctx.request_repaint();
     }
 
+    /// Requests the page of bars before the oldest one we hold.
+    fn request_backfill(&mut self) {
+        let b = &self.backfill;
+        let cooling = b.retry_at.is_some_and(|t| Instant::now() < t);
+        if b.loading || b.exhausted || cooling || self.series.len() >= MAX_HISTORY_BARS {
+            return;
+        }
+        let (Some(sink), Some(&oldest)) = (self.sink.clone(), self.series.open_times().first())
+        else {
+            return;
+        };
+        self.backfill.loading = true;
+        let source = self.source.clone();
+        let (symbol, tf) = (self.symbol.clone(), self.timeframe);
+        info!(%symbol, %tf, before = oldest, "loading older history");
+        self.runtime.handle().spawn(async move {
+            let event = match source
+                .fetch_history(&symbol, tf, Some(oldest), MAX_KLINES)
+                .await
+            {
+                Ok(candles) => MarketEvent::OlderHistory {
+                    exhausted: candles.len() < MAX_KLINES,
+                    candles,
+                },
+                Err(e) => {
+                    warn!("backfill failed: {e:#}");
+                    MarketEvent::OlderHistory {
+                        candles: Vec::new(),
+                        exhausted: false,
+                    }
+                }
+            };
+            sink.send(event);
+        });
+    }
+
     /// Applies every pending event. Called once per frame; never blocks.
     fn drain_events(&mut self) {
         let mut count = 0;
         for event in self.rx.try_iter() {
             count += 1;
             match event {
-                MarketEvent::History(candles) => self.series.set_history(candles),
+                // Reconnects deliver recent history; keep backfilled bars before it.
+                MarketEvent::History(candles) => self.series.replace_tail(candles),
                 MarketEvent::CandleUpdate { candle, .. } => {
                     self.series.upsert(candle);
                 }
                 MarketEvent::Status(s) => self.status = s,
+                MarketEvent::SymbolInfo(info) => self.symbol_info = Some(info),
+                MarketEvent::OlderHistory { candles, exhausted } => {
+                    self.backfill.loading = false;
+                    if candles.is_empty() && !exhausted {
+                        self.backfill.retry_at = Some(Instant::now() + BACKFILL_RETRY);
+                        self.ctx.request_repaint_after(BACKFILL_RETRY);
+                    } else {
+                        let added = self.series.prepend(candles);
+                        self.backfill.exhausted = exhausted || added == 0;
+                    }
+                }
             }
         }
         self.perf.events.add(Instant::now(), count);
@@ -207,37 +302,36 @@ impl TradeTermApp {
         ctx.request_repaint();
     }
 
-    fn apply_symbol_input(&mut self) {
-        let sym = Symbol::new(&self.symbol_input);
-        if sym.is_valid() && sym != self.symbol {
-            self.symbol = sym;
-            self.restart_stream();
-        }
-        self.symbol_input = self.symbol.to_string();
-    }
-
     fn top_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.label(RichText::new("tradeterm").strong());
             ui.separator();
 
-            let edit = ui.add(
-                TextEdit::singleline(&mut self.symbol_input)
-                    .desired_width(110.0)
-                    .hint_text("Symbol")
-                    .char_limit(20),
-            );
-            if edit.changed() {
-                self.symbol_input = self
-                    .symbol_input
-                    .chars()
-                    .filter(char::is_ascii_alphanumeric)
-                    .map(|c| c.to_ascii_uppercase())
-                    .collect();
-            }
-            // Enter (or clicking away) applies the symbol; invalid input reverts.
-            if edit.lost_focus() {
-                self.apply_symbol_input();
+            self.search.poll();
+            let source = self.source.clone();
+            let handle = self.runtime.handle().clone();
+            let ctx = self.ctx.clone();
+            let outcome = self.search.ui(ui, move |query, reply| {
+                handle.spawn(async move {
+                    let result = source
+                        .search_symbols(&query)
+                        .await
+                        .map_err(|e| format!("{e:#}"));
+                    let _ = reply.send((query, result));
+                    ctx.request_repaint();
+                });
+            });
+            match outcome {
+                Some(SearchOutcome::Submit(text)) => {
+                    let sym = Symbol::new(&text);
+                    if sym.is_valid() && sym != self.symbol {
+                        self.symbol = sym;
+                        self.restart_stream();
+                    }
+                    self.search.input = self.symbol.to_string();
+                }
+                Some(SearchOutcome::Cancel) => self.search.input = self.symbol.to_string(),
+                None => {}
             }
 
             ui.separator();
@@ -307,6 +401,16 @@ impl TradeTermApp {
         }
     }
 
+    fn price_precision(&self) -> usize {
+        match &self.symbol_info {
+            Some(i) => i.price_precision,
+            None => self
+                .series
+                .last()
+                .map_or(2, |c| tt_chart::scale::price_decimals(c.close)),
+        }
+    }
+
     fn status_bar(&self, ui: &mut egui::Ui) {
         let t = &self.theme;
         ui.horizontal(|ui| {
@@ -324,7 +428,7 @@ impl TradeTermApp {
             ui.separator();
             match self.series.last() {
                 Some(c) => {
-                    let d = tt_chart::scale::price_decimals(c.close);
+                    let d = self.price_precision();
                     let color = if c.is_bullish() { t.up } else { t.down };
                     ui.label(RichText::new("Last").weak());
                     ui.label(
@@ -341,9 +445,27 @@ impl TradeTermApp {
             ui.separator();
             ui.label(RichText::new("Bars").weak());
             ui.label(RichText::new(self.series.len().to_string()).monospace());
+            if self.backfill.loading {
+                ui.label(RichText::new("loading older…").weak());
+            } else if self.backfill.exhausted {
+                ui.label(RichText::new("(full history)").weak());
+            } else if self.series.len() >= MAX_HISTORY_BARS {
+                ui.label(RichText::new("(history limit)").weak());
+            }
 
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.label(RichText::new(format!("{} · UTC", self.source.name())).weak());
+                let tz = self
+                    .symbol_info
+                    .as_ref()
+                    .map_or("UTC", |i| i.timezone.as_str());
+                ui.label(RichText::new(format!("{} · {tz}", self.source.name())).weak());
+                if let Some(i) = &self.symbol_info {
+                    ui.separator();
+                    ui.label(
+                        RichText::new(format!("{}/{}  tick {}", i.base, i.quote, i.tick_size))
+                            .weak(),
+                    );
+                }
             });
         });
     }
@@ -409,14 +531,20 @@ impl eframe::App for TradeTermApp {
             self.source.name()
         );
         let theme = self.theme.clone();
-        egui::CentralPanel::no_frame().show(ui, |ui| {
-            let data = ChartData {
-                series: &self.series,
-                title: &title,
-                tick_size: None,
-            };
-            self.chart.show(ui, data, &theme);
-        });
+        let tick_size = self.symbol_info.as_ref().map(|i| i.tick_size);
+        let out = egui::CentralPanel::no_frame()
+            .show(ui, |ui| {
+                let data = ChartData {
+                    series: &self.series,
+                    title: &title,
+                    tick_size,
+                };
+                self.chart.show(ui, data, &theme)
+            })
+            .inner;
+        if out.needs_older_history {
+            self.request_backfill();
+        }
         self.perf
             .chart
             .push(self.chart.stats().draw_time.as_secs_f32() * 1000.0);

@@ -30,19 +30,7 @@ pub fn ticks(lo: f64, hi: f64, step: f64) -> impl Iterator<Item = f64> {
     (first..=last.max(first - 1)).map(move |k| k as f64 * step)
 }
 
-/// Number of decimals implied by a tick size: `0.01` → 2, `0.5` → 1, `1` → 0.
-pub fn precision_from_tick_size(tick_size: f64) -> usize {
-    if !(tick_size > 0.0 && tick_size.is_finite()) {
-        return 2;
-    }
-    for d in 0..=12usize {
-        let scaled = tick_size * 10f64.powi(d as i32);
-        if (scaled - scaled.round()).abs() < 1e-9 * scaled.max(1.0) {
-            return d;
-        }
-    }
-    12
-}
+pub use tt_core::precision_from_tick_size;
 
 /// Fallback decimals when no tick size is known, from the price magnitude.
 pub fn price_decimals(price: f64) -> usize {
@@ -285,17 +273,6 @@ mod tests {
         let t: Vec<f64> = ticks(3.0, 27.0, 10.0).collect();
         assert_eq!(t, [10.0, 20.0]);
         assert_eq!(ticks(1.0, 2.0, 10.0).count(), 0);
-    }
-
-    #[test]
-    fn precision_from_tick() {
-        assert_eq!(precision_from_tick_size(0.01), 2);
-        assert_eq!(precision_from_tick_size(0.00001), 5);
-        assert_eq!(precision_from_tick_size(1.0), 0);
-        assert_eq!(precision_from_tick_size(0.5), 1);
-        assert_eq!(precision_from_tick_size(0.25), 2);
-        assert_eq!(precision_from_tick_size(1e-8), 8);
-        assert_eq!(precision_from_tick_size(0.0), 2);
     }
 
     #[test]

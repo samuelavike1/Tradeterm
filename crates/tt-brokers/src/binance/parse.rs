@@ -3,7 +3,7 @@
 use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
 use serde_json::Value;
-use tt_core::{Candle, Timeframe};
+use tt_core::{Candle, Symbol, SymbolInfo, Timeframe, precision_from_tick_size};
 
 /// Binance interval string for a timeframe.
 pub fn interval(tf: Timeframe) -> &'static str {
@@ -138,6 +138,113 @@ pub fn parse_ws_kline(text: &str) -> Result<Option<KlineUpdate>> {
     }))
 }
 
+#[derive(Deserialize)]
+struct ExchangeInfo {
+    #[serde(default)]
+    timezone: String,
+    symbols: Vec<RawSymbol>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawSymbol {
+    symbol: String,
+    status: String,
+    base_asset: String,
+    quote_asset: String,
+    #[serde(default)]
+    filters: Vec<Value>,
+}
+
+/// Parses `GET /api/v3/exchangeInfo`. With `only_trading`, halted/delisted
+/// symbols are dropped.
+pub fn parse_exchange_info(body: &str, only_trading: bool) -> Result<Vec<SymbolInfo>> {
+    let info: ExchangeInfo = match serde_json::from_str(body) {
+        Ok(i) => i,
+        Err(e) => {
+            if let Ok(err) = serde_json::from_str::<ApiError>(body) {
+                bail!("Binance error {}: {}", err.code, err.msg);
+            }
+            return Err(e).context("invalid exchangeInfo response");
+        }
+    };
+    let tz = if info.timezone.is_empty() {
+        "UTC".to_owned()
+    } else {
+        info.timezone
+    };
+    Ok(info
+        .symbols
+        .into_iter()
+        .filter(|s| !only_trading || s.status == "TRADING")
+        .map(|s| {
+            let tick_size = s
+                .filters
+                .iter()
+                .find(|f| f.get("filterType").and_then(Value::as_str) == Some("PRICE_FILTER"))
+                .and_then(|f| f.get("tickSize"))
+                .and_then(|t| num(t).ok())
+                .filter(|t| *t > 0.0)
+                .unwrap_or(0.01);
+            SymbolInfo {
+                symbol: Symbol::new(&s.symbol),
+                tick_size,
+                price_precision: precision_from_tick_size(tick_size),
+                timezone: tz.clone(),
+                base: s.base_asset,
+                quote: s.quote_asset,
+                session: None,
+            }
+        })
+        .collect())
+}
+
+/// Ranks symbols for a search box: exact match, then symbol prefix, then
+/// base-asset prefix, then substring; within a rank USDT/USDC/BTC/FDUSD
+/// quotes first, then shorter symbols.
+pub fn rank_symbols(all: &[SymbolInfo], query: &str, limit: usize) -> Vec<SymbolInfo> {
+    let q = query.trim().to_ascii_uppercase();
+    if q.is_empty() {
+        return Vec::new();
+    }
+    let mut hits: Vec<(u8, &SymbolInfo)> = all
+        .iter()
+        .filter_map(|s| {
+            let sym = s.symbol.as_str();
+            let rank = if sym == q {
+                0
+            } else if sym.starts_with(&q) {
+                1
+            } else if s.base.starts_with(&q) {
+                2
+            } else if sym.contains(&q) {
+                3
+            } else {
+                return None;
+            };
+            Some((rank, s))
+        })
+        .collect();
+    // Within a rank, prefer the most liquid quote currencies, then shorter names.
+    let quote_rank = |s: &SymbolInfo| match s.quote.as_str() {
+        "USDT" => 0,
+        "USDC" => 1,
+        "BTC" => 2,
+        "FDUSD" => 3,
+        _ => 4,
+    };
+    hits.sort_by(|a, b| {
+        a.0.cmp(&b.0)
+            .then(quote_rank(a.1).cmp(&quote_rank(b.1)))
+            .then(a.1.symbol.as_str().len().cmp(&b.1.symbol.as_str().len()))
+            .then(a.1.symbol.cmp(&b.1.symbol))
+    });
+    hits.into_iter()
+        .take(limit)
+        .map(|(_, s)| s.clone())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -233,6 +340,81 @@ mod tests {
         assert!(parse_ws_kline("{").is_err());
         let bad = WS_SAMPLE.replace(r#""o": "0.0010""#, r#""o": "abc""#);
         assert!(parse_ws_kline(&bad).is_err());
+    }
+
+    const EXCHANGE_INFO: &str = r#"{
+      "timezone": "UTC", "serverTime": 1, "rateLimits": [], "exchangeFilters": [],
+      "symbols": [
+        {"symbol": "BTCUSDT", "status": "TRADING", "baseAsset": "BTC", "quoteAsset": "USDT",
+         "baseAssetPrecision": 8, "quotePrecision": 8,
+         "filters": [
+           {"filterType": "PRICE_FILTER", "minPrice": "0.01000000",
+            "maxPrice": "1000000.00000000", "tickSize": "0.01000000"},
+           {"filterType": "LOT_SIZE", "minQty": "0.00001000", "stepSize": "0.00001000"}
+         ]},
+        {"symbol": "ETHBTC", "status": "TRADING", "baseAsset": "ETH", "quoteAsset": "BTC",
+         "filters": [{"filterType": "PRICE_FILTER", "tickSize": "0.00001000"}]},
+        {"symbol": "OLDCOINBTC", "status": "BREAK", "baseAsset": "OLDCOIN", "quoteAsset": "BTC",
+         "filters": []}
+      ]
+    }"#;
+
+    #[test]
+    fn parses_exchange_info() {
+        let all = parse_exchange_info(EXCHANGE_INFO, false).unwrap();
+        assert_eq!(all.len(), 3);
+        let btc = &all[0];
+        assert_eq!(btc.symbol.as_str(), "BTCUSDT");
+        assert_eq!(btc.tick_size, 0.01);
+        assert_eq!(btc.price_precision, 2);
+        assert_eq!((btc.base.as_str(), btc.quote.as_str()), ("BTC", "USDT"));
+        assert_eq!(btc.timezone, "UTC");
+        assert_eq!(all[1].price_precision, 5);
+        // Missing PRICE_FILTER falls back to a sane tick size.
+        assert_eq!(all[2].tick_size, 0.01);
+
+        let trading = parse_exchange_info(EXCHANGE_INFO, true).unwrap();
+        assert_eq!(trading.len(), 2);
+    }
+
+    #[test]
+    fn exchange_info_error_is_reported() {
+        let e = parse_exchange_info(r#"{"code":-1121,"msg":"Invalid symbol."}"#, true).unwrap_err();
+        assert!(e.to_string().contains("Invalid symbol"));
+    }
+
+    #[test]
+    fn ranks_search_results() {
+        let mk = |sym: &str, base: &str, quote: &str| SymbolInfo {
+            base: base.into(),
+            quote: quote.into(),
+            ..SymbolInfo::fallback(Symbol::new(sym))
+        };
+        let all = vec![
+            mk("WBTCUSDT", "WBTC", "USDT"),
+            mk("BTCEUR", "BTC", "EUR"),
+            mk("BTCUSDT", "BTC", "USDT"),
+            mk("BTCDOMUSDT", "BTCDOM", "USDT"),
+            mk("ETHBTC", "ETH", "BTC"),
+            mk("ETHU", "ETHU", "SDT"),
+            mk("ETHUSDT", "ETH", "USDT"),
+            mk("SOLUSDT", "SOL", "USDT"),
+        ];
+        let names = |q: &str| -> Vec<String> {
+            rank_symbols(&all, q, 10)
+                .iter()
+                .map(|s| s.symbol.to_string())
+                .collect()
+        };
+        assert_eq!(
+            names("btc"),
+            ["BTCUSDT", "BTCDOMUSDT", "BTCEUR", "WBTCUSDT", "ETHBTC"]
+        );
+        assert_eq!(names("eth"), ["ETHUSDT", "ETHBTC", "ETHU"]);
+        assert_eq!(names("btcusdt")[0], "BTCUSDT");
+        assert_eq!(names("sol"), ["SOLUSDT"]);
+        assert!(names("").is_empty());
+        assert_eq!(rank_symbols(&all, "usdt", 2).len(), 2);
     }
 
     #[test]

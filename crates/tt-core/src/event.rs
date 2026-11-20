@@ -1,4 +1,4 @@
-use crate::Candle;
+use crate::{Candle, SymbolInfo};
 use crossbeam_channel::Sender;
 use std::fmt;
 use std::sync::Arc;
@@ -38,6 +38,15 @@ pub enum MarketEvent {
         closed: bool,
     },
     Status(ConnectionStatus),
+    /// Instrument metadata (tick size etc.).
+    SymbolInfo(SymbolInfo),
+    /// Older bars requested by scrolling back. `exhausted` means there is no
+    /// more history before these bars. An empty, non-exhausted batch means the
+    /// request failed and may be retried later.
+    OlderHistory {
+        candles: Vec<Candle>,
+        exhausted: bool,
+    },
 }
 
 /// Where a data source sends its events.

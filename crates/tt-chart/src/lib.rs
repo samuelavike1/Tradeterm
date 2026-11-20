@@ -22,4 +22,4 @@ pub mod viewport;
 
 pub use kind::{ChartType, ScaleMode};
 pub use style::ChartStyle;
-pub use view::{ChartData, ChartOutput, ChartStats, ChartView};
+pub use view::{BACKFILL_MARGIN_BARS, ChartData, ChartOutput, ChartStats, ChartView};

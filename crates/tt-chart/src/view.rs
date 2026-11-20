@@ -18,6 +18,8 @@ const MIN_SPACING: f32 = 0.0005;
 const MAX_SPACING: f32 = 80.0;
 /// Fraction of the visible price span added above and below when auto-fitting.
 const Y_PADDING: f64 = 0.08;
+/// Zoom sensitivity: scale factor exponent per scrolled point.
+const WHEEL_ZOOM_PER_POINT: f32 = 0.006;
 /// Share of the plot height used by the volume pane.
 const VOLUME_PANE_FRACTION: f32 = 0.2;
 
@@ -46,7 +48,14 @@ pub struct ChartData<'a> {
 pub struct ChartOutput {
     /// Interaction response of the plot area.
     pub response: Response,
+    /// The view is within [`BACKFILL_MARGIN_BARS`] of the oldest loaded bar;
+    /// the caller should load older history (and prepend it) if available.
+    pub needs_older_history: bool,
 }
+
+/// How close (in bars) to the oldest bar the view may get before
+/// [`ChartOutput::needs_older_history`] is raised.
+pub const BACKFILL_MARGIN_BARS: usize = 200;
 
 /// Interactive chart widget.
 ///
@@ -236,7 +245,10 @@ impl ChartView {
         } else {
             plot_resp.on_hover_cursor(CursorIcon::Crosshair)
         };
-        ChartOutput { response }
+        ChartOutput {
+            response,
+            needs_older_history: n > 0 && range.start < BACKFILL_MARGIN_BARS,
+        }
     }
 
     /// Splits the widget into plot, price axis (right) and time axis (bottom).
@@ -283,7 +295,8 @@ impl ChartView {
             if scroll.x != 0.0 {
                 self.right_offset += scroll.x / self.bar_spacing;
             }
-            let factor = zoom * (scroll.y * 0.002).exp();
+            // ~11% per wheel notch (egui reports ~20 points per notch).
+            let factor = zoom * (scroll.y * WHEEL_ZOOM_PER_POINT).exp();
             if factor != 1.0 {
                 let anchor_x = plot_resp
                     .hover_pos()

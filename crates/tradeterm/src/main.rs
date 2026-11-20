@@ -3,6 +3,7 @@
 mod app;
 mod perf;
 mod runtime;
+mod search;
 mod settings;
 
 use app::TradeTermApp;

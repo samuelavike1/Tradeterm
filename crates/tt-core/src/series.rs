@@ -64,18 +64,11 @@ impl CandleSeries {
     /// Replaces the whole series. Input is sorted by open time and, for
     /// duplicate open times, the last occurrence wins.
     pub fn set_history(&mut self, candles: impl IntoIterator<Item = Candle>) {
-        let mut candles: Vec<Candle> = candles.into_iter().collect();
-        // Stable sort keeps arrival order for equal keys, so "last wins" below is well defined.
-        candles.sort_by_key(|c| c.open_time_ms);
-
+        let candles = sorted_unique(candles);
         self.clear();
         self.reserve(candles.len());
-        for c in candles {
-            if self.open_time_ms.last() == Some(&c.open_time_ms) {
-                self.set_last(&c);
-            } else {
-                self.push(&c);
-            }
+        for c in &candles {
+            self.push(c);
         }
     }
 
@@ -94,6 +87,60 @@ impl CandleSeries {
                 self.push(&c);
                 UpsertOutcome::Appended
             }
+        }
+    }
+
+    /// Adds bars older than the current first bar (backfill). Bars that are
+    /// not older are ignored. Returns how many bars were added.
+    ///
+    /// Indices of existing bars shift by the returned count; views anchored to
+    /// the newest bar (like the chart's viewport) don't move.
+    pub fn prepend(&mut self, candles: impl IntoIterator<Item = Candle>) -> usize {
+        let first = self.open_time_ms.first().copied();
+        let older = sorted_unique(
+            candles
+                .into_iter()
+                .filter(|c| first.is_none_or(|f| c.open_time_ms < f)),
+        );
+        if older.is_empty() {
+            return 0;
+        }
+        self.version += 1;
+        let n = older.len();
+        fn splice<T: Copy>(v: &mut Vec<T>, head: impl Iterator<Item = T>, cap: usize) {
+            let mut out = Vec::with_capacity(cap);
+            out.extend(head);
+            out.extend_from_slice(v);
+            *v = out;
+        }
+        let cap = n + self.len();
+        splice(
+            &mut self.open_time_ms,
+            older.iter().map(|c| c.open_time_ms),
+            cap,
+        );
+        splice(&mut self.open, older.iter().map(|c| c.open), cap);
+        splice(&mut self.high, older.iter().map(|c| c.high), cap);
+        splice(&mut self.low, older.iter().map(|c| c.low), cap);
+        splice(&mut self.close, older.iter().map(|c| c.close), cap);
+        splice(&mut self.volume, older.iter().map(|c| c.volume), cap);
+        n
+    }
+
+    /// Replaces every bar at or after the first given candle's open time with
+    /// `candles`, keeping older bars. Used when a reconnect delivers fresh
+    /// recent history but earlier backfilled bars should survive.
+    pub fn replace_tail(&mut self, candles: impl IntoIterator<Item = Candle>) {
+        let candles = sorted_unique(candles);
+        let Some(t0) = candles.first().map(|c| c.open_time_ms) else {
+            return;
+        };
+        let keep = self.open_time_ms.partition_point(|t| *t < t0);
+        self.truncate(keep);
+        self.version += 1;
+        self.reserve(candles.len());
+        for c in &candles {
+            self.push(c);
         }
     }
 
@@ -194,6 +241,21 @@ impl CandleSeries {
     }
 }
 
+/// Sorts by open time; for duplicate times the last occurrence wins.
+fn sorted_unique(candles: impl IntoIterator<Item = Candle>) -> Vec<Candle> {
+    let mut v: Vec<Candle> = candles.into_iter().collect();
+    // Stable sort keeps arrival order for equal keys, so "last wins" is well defined.
+    v.sort_by_key(|c| c.open_time_ms);
+    let mut out: Vec<Candle> = Vec::with_capacity(v.len());
+    for c in v {
+        match out.last_mut() {
+            Some(last) if last.open_time_ms == c.open_time_ms => *last = c,
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -270,6 +332,40 @@ mod tests {
         for col in [s.opens(), s.highs(), s.lows(), s.closes(), s.volumes()] {
             assert_eq!(col.len(), n);
         }
+    }
+
+    #[test]
+    fn prepend_adds_only_older_bars() {
+        let mut s = CandleSeries::new();
+        s.set_history([candle(300, 3.0), candle(400, 4.0)]);
+        let v = s.version();
+        let added = s.prepend([
+            candle(100, 1.0),
+            candle(200, 2.0),
+            candle(300, 99.0), // not older: ignored
+            candle(100, 1.5),  // duplicate: last wins
+        ]);
+        assert_eq!(added, 2);
+        assert_eq!(s.open_times(), &[100, 200, 300, 400]);
+        assert_eq!(s.closes(), &[1.5, 2.0, 3.0, 4.0]);
+        assert_ne!(s.version(), v);
+        assert_eq!(s.prepend([candle(400, 0.0)]), 0);
+        // Prepending into an empty series behaves like set_history.
+        let mut e = CandleSeries::new();
+        assert_eq!(e.prepend([candle(2, 2.0), candle(1, 1.0)]), 2);
+        assert_eq!(e.open_times(), &[1, 2]);
+    }
+
+    #[test]
+    fn replace_tail_keeps_older_bars() {
+        let mut s = CandleSeries::new();
+        s.set_history((1..=5).map(|t| candle(t * 100, t as f64)));
+        // Reconnect delivers 300.. with revised values and a new bar.
+        s.replace_tail([candle(300, 30.0), candle(400, 40.0), candle(600, 60.0)]);
+        assert_eq!(s.open_times(), &[100, 200, 300, 400, 600]);
+        assert_eq!(s.closes(), &[1.0, 2.0, 30.0, 40.0, 60.0]);
+        s.replace_tail(std::iter::empty());
+        assert_eq!(s.len(), 5);
     }
 
     #[test]
