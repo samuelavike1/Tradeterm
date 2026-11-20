@@ -7,6 +7,7 @@
 //!   legends. Moving the mouse repaints only this.
 
 use crate::canvas::{CanvasFonts, GpuiCanvas};
+use crate::motion::{DragVelocity, ViewMotion};
 use emath::{Pos2, Rect, pos2, vec2};
 use gpui_kit::*;
 use std::time::{Duration, Instant};
@@ -188,6 +189,12 @@ pub struct Chart<S: ChartSource> {
     overlay: Entity<OverlayLayer<S>>,
     drag: Option<(Drag, Pos2)>,
     cursor: CursorStyle,
+    /// Eased wheel zoom/scroll and fling momentum.
+    motion: ViewMotion,
+    drag_velocity: DragVelocity,
+    /// A next-frame callback is driving `motion`.
+    animating: bool,
+    last_frame: Option<Instant>,
 }
 
 impl<S: ChartSource> EventEmitter<ChartEvent> for Chart<S> {}
@@ -223,6 +230,10 @@ impl<S: ChartSource> Chart<S> {
             overlay,
             drag: None,
             cursor: CursorStyle::Crosshair,
+            motion: ViewMotion::default(),
+            drag_velocity: DragVelocity::default(),
+            animating: false,
+            last_frame: None,
         }
     }
 
@@ -260,6 +271,8 @@ impl<S: ChartSource> Chart<S> {
 
     fn mouse_down(&mut self, e: &MouseDownEvent, cx: &mut Context<Self>) {
         let p = pos(e.position);
+        self.motion.stop_momentum();
+        self.drag_velocity.reset();
         let hit = self.state.read(cx).source.view().hit_test(p);
         let double = e.click_count >= 2;
         match hit {
@@ -294,6 +307,7 @@ impl<S: ChartSource> Chart<S> {
                 Drag::Divider(k) => v.drag_pane_divider(k, d.y),
             });
             if drag == Drag::Plot {
+                self.drag_velocity.record(d.x, Instant::now());
                 self.set_pointer(None, cx);
             }
             return;
@@ -306,13 +320,89 @@ impl<S: ChartSource> Chart<S> {
         self.set_pointer(Some(p), cx);
     }
 
-    fn mouse_up(&mut self, e: &MouseUpEvent, cx: &mut Context<Self>) {
+    fn mouse_up(&mut self, e: &MouseUpEvent, window: &mut Window, cx: &mut Context<Self>) {
         if let Some((Drag::Divider(_), _)) = self.drag {
             cx.emit(ChartEvent::Changed);
+        }
+        if let Some((Drag::Plot, _)) = self.drag
+            && !cx.reduce_motion()
+        {
+            // Released while moving: keep gliding with friction.
+            self.motion
+                .fling(self.drag_velocity.release(Instant::now()));
+            self.animate(window, cx);
         }
         self.drag = None;
         self.set_pointer(Some(pos(e.position)), cx);
     }
+}
+
+impl<S: ChartSource> Chart<S> {
+    /// Mouse wheel / trackpad. Wheel notches are eased; trackpad pixel
+    /// deltas (already smooth) and reduced motion apply directly.
+    fn scroll(&mut self, e: &ScrollEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let x = f32::from(e.position.x);
+        match e.delta {
+            ScrollDelta::Lines(lines) if !cx.reduce_motion() => {
+                // Same scale as `ChartView::wheel`: ~20 points per notch.
+                let (dx, dy) = (lines.x * 20.0, lines.y * 20.0);
+                self.motion
+                    .add_zoom(dy * tt_chart_wheel_zoom_per_point(), x);
+                self.motion.add_pan(-dx);
+                self.animate(window, cx);
+            }
+            _ => {
+                let d = e.delta.pixel_delta(px(20.));
+                self.view_mut(cx, |v| v.wheel(vec2(f32::from(d.x), f32::from(d.y)), x));
+            }
+        }
+    }
+
+    /// Starts the per-frame motion loop if it isn't running.
+    fn animate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.animating || !self.motion.active() {
+            return;
+        }
+        self.animating = true;
+        self.last_frame = Some(Instant::now());
+        let this = cx.entity().downgrade();
+        window.on_next_frame(move |window, cx| Self::frame(this, window, cx));
+    }
+
+    /// One motion frame; reschedules itself while anything is moving.
+    fn frame(this: WeakEntity<Self>, window: &mut Window, cx: &mut App) {
+        let Some(chart) = this.upgrade() else { return };
+        let again = chart.update(cx, |c, cx| {
+            let now = Instant::now();
+            let dt = c.last_frame.map_or(0.0, |t| (now - t).as_secs_f32());
+            c.last_frame = Some(now);
+            let step = c.motion.step(dt);
+            c.view_mut(cx, |v| {
+                if step.zoom != 0.0 {
+                    let plot = v.last_layout().plot;
+                    let x = if plot.x_range().contains(step.anchor_x) {
+                        step.anchor_x
+                    } else {
+                        plot.right()
+                    };
+                    v.zoom(step.zoom.exp(), x, plot.right());
+                }
+                if step.pan != 0.0 {
+                    v.pan(step.pan);
+                }
+            });
+            c.animating = c.motion.active();
+            c.animating
+        });
+        if again {
+            window.on_next_frame(move |window, cx| Self::frame(this, window, cx));
+        }
+    }
+}
+
+/// `ChartView::wheel`'s zoom sensitivity (ln factor per scrolled point).
+fn tt_chart_wheel_zoom_per_point() -> f32 {
+    tt_chart::WHEEL_ZOOM_PER_POINT
 }
 
 impl<S: ChartSource> Render for Chart<S> {
@@ -334,17 +424,13 @@ impl<S: ChartSource> Render for Chart<S> {
             )
             .on_mouse_up(
                 MouseButton::Left,
-                cx.listener(|this, e: &MouseUpEvent, _, cx| this.mouse_up(e, cx)),
+                cx.listener(|this, e: &MouseUpEvent, window, cx| this.mouse_up(e, window, cx)),
             )
             .on_mouse_up_out(
                 MouseButton::Left,
-                cx.listener(|this, e: &MouseUpEvent, _, cx| this.mouse_up(e, cx)),
+                cx.listener(|this, e: &MouseUpEvent, window, cx| this.mouse_up(e, window, cx)),
             )
-            .on_scroll(cx.listener(|this, e: &ScrollEvent, _, cx| {
-                let d = e.delta.pixel_delta(px(20.));
-                let x = f32::from(e.position.x);
-                this.view_mut(cx, |v| v.wheel(vec2(f32::from(d.x), f32::from(d.y)), x));
-            }))
+            .on_scroll(cx.listener(|this, e: &ScrollEvent, window, cx| this.scroll(e, window, cx)))
             .child(
                 self.base
                     .clone()

@@ -33,5 +33,5 @@ pub use kind::{ChartType, ScaleMode};
 pub use style::ChartStyle;
 pub use view::{
     BACKFILL_MARGIN_BARS, ChartData, ChartHit, ChartLayout, ChartStats, ChartView, RenderInput,
-    RenderOutput,
+    RenderOutput, WHEEL_ZOOM_PER_POINT,
 };

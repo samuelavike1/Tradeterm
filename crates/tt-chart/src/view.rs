@@ -23,8 +23,9 @@ const MAX_SPACING: f32 = 80.0;
 const Y_PADDING: f64 = 0.08;
 /// Below this bar width (physical pixels) bars are drawn decimated.
 const DECIMATE_BELOW_PX: f32 = 2.0;
-/// Zoom sensitivity: scale factor exponent per scrolled point.
-const WHEEL_ZOOM_PER_POINT: f32 = 0.006;
+/// Zoom sensitivity: scale factor exponent per scrolled point (~20 points
+/// per wheel notch, so ~12% per notch).
+pub const WHEEL_ZOOM_PER_POINT: f32 = 0.006;
 /// Share of the price pane used by Volume overlays (TradingView: bottom quarter).
 const VOLUME_OVERLAY_FRACTION: f32 = 0.25;
 /// Relative height of the price pane; indicator panes default to 1.

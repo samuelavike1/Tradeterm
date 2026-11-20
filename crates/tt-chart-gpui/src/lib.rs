@@ -6,6 +6,7 @@
 
 mod canvas;
 mod chart;
+pub mod motion;
 
 pub use canvas::{CanvasFonts, GpuiCanvas, hsla};
 pub use chart::{Chart, ChartEvent, ChartSource, ChartState, LayerStats, SeriesSource};
