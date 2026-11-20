@@ -1,6 +1,7 @@
 //! tradeterm — native desktop charting.
 
 mod app;
+mod perf;
 mod runtime;
 mod settings;
 

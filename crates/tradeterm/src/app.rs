@@ -1,3 +1,4 @@
+use crate::perf::PerfStats;
 use crate::runtime::BackgroundRuntime;
 use crate::settings::{AppSettings, SettingsStore};
 use crossbeam_channel::Receiver;
@@ -37,6 +38,7 @@ pub struct TradeTermApp {
     theme: Theme,
 
     settings_store: SettingsStore,
+    perf: PerfStats,
     runtime: BackgroundRuntime,
 }
 
@@ -76,6 +78,7 @@ impl TradeTermApp {
             overrides,
             theme,
             settings_store,
+            perf: PerfStats::default(),
             runtime,
         };
         app.restart_stream();
@@ -111,7 +114,9 @@ impl TradeTermApp {
 
     /// Applies every pending event. Called once per frame; never blocks.
     fn drain_events(&mut self) {
+        let mut count = 0;
         for event in self.rx.try_iter() {
+            count += 1;
             match event {
                 MarketEvent::History(candles) => self.series.set_history(candles),
                 MarketEvent::CandleUpdate { candle, .. } => {
@@ -120,6 +125,7 @@ impl TradeTermApp {
                 MarketEvent::Status(s) => self.status = s,
             }
         }
+        self.perf.events.add(Instant::now(), count);
     }
 
     /// Current persisted state, derived from the live app state.
@@ -152,6 +158,53 @@ impl TradeTermApp {
             };
             self.set_theme(next, self.overrides);
         }
+        if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::F12)) {
+            self.perf.visible = !self.perf.visible;
+        }
+    }
+
+    fn perf_overlay(&mut self, ctx: &egui::Context) {
+        if !self.perf.visible {
+            return;
+        }
+        let stats = self.chart.stats();
+        let eps = self.perf.events.per_second(Instant::now());
+        let p = &self.perf;
+        let frame = egui::Frame::popup(&ctx.global_style()).fill(self.theme.panel_alt);
+        egui::Area::new(egui::Id::unique("perf_overlay"))
+            .anchor(egui::Align2::RIGHT_TOP, vec2(-90.0, 52.0))
+            .interactable(false)
+            .show(ctx, |ui| {
+                frame.show(ui, |ui| {
+                    ui.label(RichText::new("Performance (F12)").strong());
+                    egui::Grid::new("perf_grid").num_columns(2).show(ui, |ui| {
+                        let ms = |s: &crate::perf::Samples| {
+                            format!("{:6.2} avg  {:6.2} max ms", s.avg(), s.max())
+                        };
+                        let row = |ui: &mut egui::Ui, k: &str, v: String| {
+                            ui.label(RichText::new(k).weak());
+                            ui.label(RichText::new(v).monospace());
+                            ui.end_row();
+                        };
+                        row(ui, "Frame CPU", ms(&p.frame));
+                        row(ui, "UI build", ms(&p.ui));
+                        row(ui, "Chart draw", ms(&p.chart));
+                        row(ui, "Visible bars", stats.visible_bars.to_string());
+                        row(ui, "Total bars", stats.total_bars.to_string());
+                        row(ui, "Events/s", eps.to_string());
+                    });
+                    ui.label(
+                        RichText::new(format!(
+                            "last {} frames; repainting continuously",
+                            p.frame.len()
+                        ))
+                        .small()
+                        .weak(),
+                    );
+                });
+            });
+        // Keep measuring while the overlay is open.
+        ctx.request_repaint();
     }
 
     fn apply_symbol_input(&mut self) {
@@ -311,7 +364,11 @@ impl eframe::App for TradeTermApp {
         }
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        let ui_started = Instant::now();
+        if let Some(cpu) = frame.info().cpu_usage {
+            self.perf.frame.push(cpu * 1000.0);
+        }
         let bar = self.theme.bar_frame();
         egui::Panel::top("top_bar")
             .frame(bar)
@@ -333,6 +390,15 @@ impl eframe::App for TradeTermApp {
         egui::CentralPanel::no_frame().show(ui, |ui| {
             self.chart.show(ui, &self.series, &theme, &title);
         });
+        self.perf
+            .chart
+            .push(self.chart.stats().draw_time.as_secs_f32() * 1000.0);
+
+        let ctx = ui.ctx().clone();
+        self.perf_overlay(&ctx);
+        self.perf
+            .ui
+            .push(ui_started.elapsed().as_secs_f32() * 1000.0);
     }
 }
 

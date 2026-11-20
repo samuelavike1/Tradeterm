@@ -17,4 +17,4 @@ pub mod viewport;
 
 pub use kind::{ChartType, ScaleMode};
 pub use style::ChartStyle;
-pub use view::ChartView;
+pub use view::{ChartStats, ChartView};

@@ -3,6 +3,7 @@ use crate::scale::price_decimals;
 use crate::viewport::{PlotRect, Viewport, padded_price_range, visible_range};
 use crate::{ChartStyle, ChartType, ScaleMode};
 use egui::{CursorIcon, Rect, Response, Sense, Ui, pos2};
+use std::time::{Duration, Instant};
 use tt_core::CandleSeries;
 use tt_theme::Theme;
 
@@ -12,6 +13,16 @@ const MIN_SPACING: f32 = 1.0;
 const MAX_SPACING: f32 = 80.0;
 /// Fraction of the visible price span added above and below.
 const Y_PADDING: f64 = 0.08;
+
+/// Per-frame numbers for performance overlays.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct ChartStats {
+    pub visible_bars: usize,
+    pub total_bars: usize,
+    /// CPU time to lay out and record the chart's draw commands
+    /// (excludes egui tessellation and GPU work).
+    pub draw_time: Duration,
+}
 
 /// Interactive candlestick chart.
 ///
@@ -26,6 +37,7 @@ pub struct ChartView {
     pub chart_type: ChartType,
     pub scale_mode: ScaleMode,
     pub show_volume: bool,
+    stats: ChartStats,
     bar_spacing: f32,
     right_offset: f32,
 }
@@ -43,9 +55,15 @@ impl ChartView {
             chart_type: ChartType::default(),
             scale_mode: ScaleMode::default(),
             show_volume: true,
+            stats: ChartStats::default(),
             bar_spacing: DEFAULT_SPACING,
             right_offset: DEFAULT_RIGHT_OFFSET,
         }
+    }
+
+    /// Statistics from the most recent [`Self::show`] call.
+    pub fn stats(&self) -> ChartStats {
+        self.stats
     }
 
     /// Returns to the default zoom, scrolled to the latest bar.
@@ -62,6 +80,7 @@ impl ChartView {
         theme: &Theme,
         title: &str,
     ) -> Response {
+        let started = Instant::now();
         let (full, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
 
         let decimals = series.last().map_or(2, |c| price_decimals(c.close));
@@ -106,6 +125,11 @@ impl ChartView {
             title,
         };
         paint::paint(&ui.painter_at(full), &frame);
+        self.stats = ChartStats {
+            visible_bars: vp.visible_range().len(),
+            total_bars: n,
+            draw_time: started.elapsed(),
+        };
 
         if response.dragged() {
             response.on_hover_cursor(CursorIcon::Grabbing)
