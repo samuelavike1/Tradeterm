@@ -16,7 +16,6 @@ use gpui_kit::*;
 use std::time::Duration;
 use tt_chart::ChartType;
 use tt_chart_gpui::hsla;
-use tt_core::{TimeUnit, Timeframe};
 use tt_theme::{Theme, mix, with_alpha};
 
 pub const UI_FONT: &str = if cfg!(target_os = "windows") {
@@ -201,23 +200,22 @@ pub fn tab_pill(
         .text_color(cx.theme().foreground)
 }
 
-/// Section of the interval menu a timeframe belongs to.
-pub fn timeframe_section(t: Timeframe) -> &'static str {
-    match t.unit() {
-        TimeUnit::Second => "SECONDS",
-        TimeUnit::Minute => "MINUTES",
-        TimeUnit::Hour => "HOURS",
-        _ => "DAYS",
-    }
-}
-
-/// Lucide icon for a chart type (toolbar button).
+/// Lucide icon for a chart type (toolbar button, menu rows).
 pub fn chart_type_icon(t: ChartType) -> lucide_icons::Icon {
     use lucide_icons::Icon;
     match t {
-        ChartType::Line | ChartType::LineWithMarkers | ChartType::StepLine => Icon::ChartSpline,
+        ChartType::Bars => Icon::ChartNoAxesGantt,
+        ChartType::Candles | ChartType::HollowCandles | ChartType::HeikinAshi => {
+            Icon::ChartCandlestick
+        }
+        ChartType::VolumeCandles => Icon::ChartBarStacked,
+        ChartType::Line => Icon::ChartLine,
+        ChartType::LineWithMarkers => Icon::ChartScatter,
+        ChartType::StepLine => Icon::ChartNoAxesCombined,
         ChartType::Area | ChartType::HlcArea | ChartType::Baseline => Icon::ChartArea,
-        ChartType::Columns | ChartType::HighLow => Icon::ChartColumn,
-        _ => Icon::ChartCandlestick,
+        ChartType::Columns => Icon::ChartColumn,
+        ChartType::HighLow => Icon::ChartColumnBig,
+        ChartType::Renko => Icon::Blocks,
+        ChartType::LineBreak => Icon::ChartColumnStacked,
     }
 }

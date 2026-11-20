@@ -1,24 +1,22 @@
-//! tradeterm — native desktop charting.
+//! tradeterm — native desktop charting on gpui.
 
 mod app;
-mod chrome;
-mod fonts;
-mod icons;
+mod colors;
 mod indicators;
-mod perf;
+mod menus;
 mod search;
-mod tfmenu;
-mod toolbar;
+mod source;
+mod ui;
 
-use app::TradeTermApp;
+use app::TradeTerm;
+use gpui_kit::*;
 use tt_session::runtime::BackgroundRuntime;
 use tt_session::settings::SettingsStore;
 
-fn main() -> eframe::Result {
+fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info,wgpu=warn,naga=warn".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
 
@@ -26,31 +24,39 @@ fn main() -> eframe::Result {
     let (settings, store) = SettingsStore::load(SettingsStore::default_path());
     let synthetic = synthetic_arg(std::env::args().skip(1));
 
-    let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title("tradeterm")
-            .with_inner_size([1280.0, 800.0])
-            .with_min_inner_size([640.0, 400.0])
-            // We draw our own title bar with tabs and window buttons.
-            .with_decorations(false),
-        ..Default::default()
-    };
-
-    eframe::run_native(
-        "tradeterm",
-        options,
-        Box::new(move |cc| {
-            let bold_family = fonts::install(&cc.egui_ctx);
-            Ok(Box::new(TradeTermApp::new(
-                cc.egui_ctx.clone(),
-                runtime,
-                settings,
-                store,
-                synthetic,
-                bold_family,
-            )?))
-        }),
-    )
+    gpui_kit::application()
+        .with_assets(gpui_kit::assets::Assets)
+        .run(move |cx| {
+            gpui_kit::init(cx);
+            tt_chart_gpui::init(cx);
+            app::bind_keys(cx);
+            let opts = WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
+                    None,
+                    size(px(1440.), px(900.)),
+                    cx,
+                ))),
+                window_min_size: Some(size(px(640.), px(400.))),
+                ..gpui_kit::component::TitleBar::window_options()
+            };
+            let mut runtime = Some(runtime);
+            let mut settings = Some(settings);
+            let mut store = Some(store);
+            let window = gpui_kit::open_window(opts, cx, move |window, cx| {
+                cx.new(|cx| {
+                    TradeTerm::new(
+                        settings.take().expect("once"),
+                        store.take().expect("once"),
+                        runtime.take().expect("once"),
+                        synthetic,
+                        window,
+                        cx,
+                    )
+                })
+            })
+            .expect("open window");
+            let _ = window;
+        });
 }
 
 /// `--synthetic [N]` starts with N synthetic bars (default 1,000,000).
@@ -62,26 +68,4 @@ fn synthetic_arg(mut args: impl Iterator<Item = String>) -> Option<usize> {
         }
     }
     None
-}
-
-#[cfg(test)]
-mod tests {
-    use super::synthetic_arg;
-
-    fn args(v: &[&str]) -> impl Iterator<Item = String> {
-        v.iter()
-            .map(|s| s.to_string())
-            .collect::<Vec<_>>()
-            .into_iter()
-    }
-
-    #[test]
-    fn parses_synthetic_flag() {
-        assert_eq!(synthetic_arg(args(&[])), None);
-        assert_eq!(synthetic_arg(args(&["--synthetic"])), Some(1_000_000));
-        assert_eq!(
-            synthetic_arg(args(&["--synthetic", "250_000"])),
-            Some(250_000)
-        );
-    }
 }

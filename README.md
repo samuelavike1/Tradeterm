@@ -1,19 +1,20 @@
 # tradeterm
 
-A native desktop trading/charting app written in Rust. Rendering is
-[egui](https://github.com/emilk/egui)/eframe on wgpu. It uses no web technology
-(no Tauri, Electron or WebView).
+A native desktop trading/charting app written in Rust, built to be the fastest,
+smoothest charting and execution app around. The UI is
+[gpui](https://www.gpui.rs) (Zed's GPU-accelerated UI framework) with
+[gpui-component](https://github.com/longbridge/gpui-kit) via `gpui-kit`. It uses no
+web technology (no Tauri, Electron or WebView).
 
 It streams live Binance spot candles from public, key-less endpoints and draws them
 with a custom chart widget built to handle a million bars.
 
 ## Features
 
-- **Custom window chrome:** the OS title bar is replaced by our own. It has a tab
-  strip (symbol badge, symbol, 24h change %, close button, "+" for a new tab), a
-  settings menu, and minimize/maximize/close buttons. Drag empty space in it to move
-  the window (OS snapping works), double-click it to maximize or restore, and drag
-  any window edge to resize.
+- **Custom window chrome:** the title bar (gpui-component's `TitleBar`) holds a tab
+  strip (symbol badge, symbol, 24h change %, close on hover or middle-click, "+" for a
+  new tab), a theme toggle, a settings menu and native-style window buttons. Dragging,
+  double-click to maximize and OS snapping work as usual.
 - **Tabs:** each tab is an independent chart with its own live stream, so background
   tabs stay current. Open tabs, their order and the active tab are restored on the
   next launch.
@@ -39,8 +40,7 @@ with a custom chart widget built to handle a million bars.
   thousands separators; precision from the symbol's tick size. The last-price tag spans
   the axis in the candle color and shows a countdown to the bar close; tick labels under
   the last-price or crosshair tags are hidden.
-- **Grid:** dotted (1 px on, 3 px off) at every price and time label, drawn as one
-  textured quad per line.
+- **Grid:** dashed lines at every price and time label, one GPU quad each.
 - **Indicators (TradingView-style):** the **Indicators** button (or **/**) opens
   "Indicators, metrics, and strategies": search (keeps the last query; matches in
   blue), a Favorites / Technicals sidebar, and an alphabetical list with stars.
@@ -89,8 +89,8 @@ with a custom chart widget built to handle a million bars.
   missed. Reconnects use exponential backoff (500 ms → 30 s) and reload history while
   keeping backfilled bars.
 - **Large data:** below about 2 px per bar, bars are drawn decimated as one min/max
-  column per pixel, built from a precomputed pyramid. 1,000,000 visible bars draw in
-  well under a millisecond (see [Performance](#performance)).
+  column per pixel, built from a precomputed pyramid. 1,000,000 visible bars keep
+  60 fps while panning (see [Performance](#performance)).
 - **Resampling:** `tt-core` builds higher timeframes from lower ones (1m → 5m, 15m,
   1h, 4h, 1D) with buckets aligned to the UTC clock. It works in batch and
   incrementally.
@@ -99,12 +99,18 @@ with a custom chart widget built to handle a million bars.
   #089981 / #f23645),
   and a System mode that follows the OS. Up/down colors can be overridden. The whole
   UI (panels, widgets, rounding, spacing) uses the tokens.
-- **Icons:** [Lucide](https://lucide.dev) (ISC) via the `lucide-icons` crate's bundled
-  icon font, drawn as glyphs in theme colors. The title bar has a Sun/Moon quick theme
-  toggle. Chart-type pictograms are custom-drawn because Lucide has no hollow-candle,
-  OHLC-bar or Heikin Ashi icons.
-- **Native fonts:** the UI and chart use the OS UI font (Segoe UI, SF/Helvetica, Noto/DejaVu
-  Sans) instead of egui's thin built-in font, with egui's fonts as fallbacks.
+- **Icons:** [Lucide](https://lucide.dev) (ISC): gpui-component's icon set plus the
+  `lucide-icons` font for chart-type and toolbar glyphs, in theme colors.
+- **Native text:** gpui shapes text with the OS font stack (Segoe UI on Windows, the
+  system font elsewhere).
+- **Motion, kept snappy:** menus, popovers and dialogs use gpui-kit motion at about
+  two-thirds of gpui-component's default durations (90 / 130 / 200 ms); dialogs fade in
+  and settle; the active tab's background eases in over 120 ms; the "connecting" dot
+  breathes. Hover feedback is instant, and prices, charts and the crosshair are never
+  animated. The OS "reduce motion" setting (Windows: *Animation effects* off) turns it
+  all off.
+- **Performance overlay (F12):** per-second paint counts and CPU time of the chart's
+  base and overlay layers, primitives drawn, and data events per second.
 - **Settings persistence:** theme, colors, and every tab (symbol, timeframe, chart type,
   scale mode, indicators with their inputs, colors and pane sizes) plus the active
   tab and favorite indicators are saved as JSON, 750 ms after the last
@@ -133,38 +139,47 @@ with a custom chart widget built to handle a million bars.
 | Drag the time axis | Zoom horizontally |
 | Double-click the plot | Reset the view |
 
-The **⚙** menu in the title bar has the theme selector, up/down color pickers, the performance
-overlay toggle and the synthetic-data command. You can also start with synthetic data
+The **⚙** menu in the title bar has the theme selector (Dark / Light / System),
+**Chart colors…** (rising/falling bar colors, applied live) and the synthetic-data
+command. You can also start with synthetic data
 from the command line: `tradeterm --synthetic [N]`.
 
 ## Architecture
 
 ```
 crates/
-  tt-core/     Domain types, no UI or network. Symbol, Timeframe, Candle,
-               PriceTicks, SymbolInfo, CandleSeries (structure of arrays, with a
-               structural version counter), MarketEvent, EventSink, Heikin Ashi,
-               resampling, and indicator math (studies.rs: Study inputs,
-               outputs, incremental compute).
-  tt-theme/    Semantic color tokens (Theme), Dark/Light palettes, ThemeMode, and
-               applying the tokens to egui styles.
-  tt-brokers/  MarketDataSource trait + Binance adapter (tokio, tokio-tungstenite
-               with rustls, reqwest).
-  tt-chart/    The chart widget.
+  tt-core/       Domain types, no UI or network. Symbol, Timeframe, Candle,
+                 PriceTicks, SymbolInfo, CandleSeries (structure of arrays, with a
+                 structural version counter), MarketEvent, EventSink, Heikin Ashi,
+                 resampling, and indicator math (studies.rs: Study inputs,
+                 outputs, incremental compute).
+  tt-theme/      Semantic color tokens (Theme), Dark/Light palettes, ThemeMode.
+  tt-brokers/    MarketDataSource trait + Binance adapter (tokio, tokio-tungstenite
+                 with rustls, reqwest).
+  tt-chart/      The chart, independent of the UI toolkit.
      viewport.rs   Pure coordinate math: index_to_x, x_to_index, price_to_y,
                    y_to_price, visible_range, in linear/log/percent modes.
      scale.rs      Nice price ticks, precision, formatting, UTC dates.
      time_axis.rs  Index-based time ticks with weighted, non-overlapping labels.
      bars.rs       The per-frame DrawBar list (one per bar, or one per pixel column).
      lod.rs        Min/max pyramid used for decimation.
-     draw.rs       Builds the picture from Canvas primitives only.
-     render/       Canvas trait (the backend boundary) + EguiCanvas.
+     draw.rs       Builds the picture from Canvas primitives only, in two layers:
+                   draw_base (everything static) and draw_overlay (crosshair,
+                   readout, legends).
+     render/       Canvas trait (the backend boundary), plus EguiCanvas used by the
+                   headless draw benchmark.
      indicators.rs Indicator: a Study + colors/visibility, with cached outputs.
-     view.rs       ChartView: input, panes, legend clicks, caches, per-frame
-                   orchestration.
-  tradeterm/   eframe app. chrome.rs: custom title bar, tabs, window buttons,
-               resize edges. tab.rs: one chart session per tab. Also the toolbar,
-               symbol search, status bar, settings, perf overlay and synthetic data.
+     view.rs       ChartView: render_base / render_overlay, hit testing and input
+                   (pan, zoom, axis and divider drags, legend buttons), caches.
+  tt-chart-gpui/ Canvas on gpui (instanced quads, merged triangle paths, shaped
+                 text) and the Chart view: a cached base layer plus a pointer
+                 overlay, so moving the mouse never repaints bars or indicators.
+  tt-session/    UI-independent app state: chart tabs with their live streams and
+                 backfill, settings persistence, the background runtime, synthetic
+                 data.
+  tradeterm/     The gpui app: title bar and tabs, toolbar, menus (intervals, chart
+                 types), symbol search, indicator dialogs, chart colors, status bar,
+                 performance overlay, hotkeys.
 ```
 
 **Why a separate `tt-theme` crate:** the tokens style both the chart and the rest of
@@ -175,25 +190,28 @@ without pulling in chart code.
 **Data flow:**
 
 ```
-tokio thread (background)                 UI thread (eframe)
-BinanceSource::run ── EventSink ──► crossbeam channel ──► drained once per frame
-  1. connect WebSocket                    │                  └─► CandleSeries ─► ChartView
-  2. GET klines (1000) → History          └─ wake() = ctx.request_repaint()
+tokio thread (background)                 UI thread (gpui)
+BinanceSource::run ── EventSink ──► crossbeam channel ──► drained in one update
+  1. connect WebSocket                    │                  per burst of events
+  2. GET klines (1000) → History          └─ wake() ──► futures channel ──► gpui task
   3. live klines → CandleUpdate
 symbol_info / fetch_history(before) / search_symbols ── side requests on the same runtime
 ```
 
 The UI thread never blocks on network I/O. It repaints only on input or when an
-adapter sends an event (or continuously while the perf overlay is open). Each stream
+adapter sends an event; a burst of ticks is coalesced into one update, and only the
+charts whose data changed repaint their base layer. Each stream
 gets its own channel, so after a symbol or timeframe switch, stale events from the old
 stream are dropped.
 
 **Rendering boundary:** chart code draws only through `render::Canvas`: rects,
 lines, dashed lines, polylines, gradient area fills and text, all in screen points.
-`EguiCanvas` implements it on `egui::Painter`, merging consecutive rects and
-axis-aligned lines into a single mesh. A custom wgpu renderer would implement the same
-trait (for example inside an `egui_wgpu::Callback`); viewport math, ticks, decimation
-and interaction stay as they are.
+`tt-chart-gpui`'s `GpuiCanvas` implements it on gpui: rects become instanced quads,
+lines and fills become triangle paths (consecutive same-color triangles merged), and
+quads and text are painted inside gpui layers so gpui skips its per-primitive
+draw-order bookkeeping. A different backend (for example a custom GPU renderer) would
+implement the same trait; viewport math, ticks, decimation and interaction stay as
+they are.
 
 **Caches stay incremental:** `CandleSeries::version()` changes only on structural
 edits (history load, prepend, clear). The Heikin Ashi cache and the decimation pyramid
@@ -202,29 +220,20 @@ version changes.
 
 ## Performance
 
-These numbers come from `cargo run --release -p tt-chart --example bench_draw`, on a
-2019 laptop with a Core i7-9750H and Quadro T2000, Windows 11. The setup: a 1,600 × 900
-plot, the pointer over the chart (so the crosshair is drawn), and a live update to the
-forming bar every frame.
+`cargo run -p tt-chart-gpui --release --example bench -- <hover|pan|static|empty>`
+drives a 1920×1040 chart with 1,000,000 synthetic 1m bars and Volume, EMA 21, BB 20,
+RSI 14 and MACD every frame (Windows 11, 60 Hz):
 
-| Bars visible (of 1,000,000) | Chart draw avg / max | egui tessellation avg / max |
-|---|---|---|
-| 1,000,000 (fully zoomed out) | 0.42 / 0.96 ms | 0.15 / 1.5 ms |
-| 200,000 | 0.36 / 1.05 ms | 0.16 / 0.32 ms |
-| 20,000 | 0.64 / 1.12 ms | 0.22 / 0.72 ms |
-| 1,000 | 0.25 / 0.48 ms | 0.06 / 0.10 ms |
-| 150 | 0.12 / 0.40 ms | 0.05 / 0.16 ms |
-| Heikin Ashi, 1,000,000 | 0.48 / 0.92 ms | 0.17 / 0.53 ms |
-| Area, 1,000,000 | 0.39 / 0.80 ms | 0.35 / 0.85 ms |
+| Scenario | fps | Base layer | Overlay | Process CPU / frame |
+|---|---|---|---|---|
+| Empty window (floor) | 60 | – | – | 2.2 ms |
+| Hover (crosshair moves) | 60 | never repainted | 0.83 ms | 6.3 ms |
+| Static chart, redrawn every frame | 60 | never repainted | 0.56 ms | 5.9 ms |
+| Pan (half the time over all 1M bars) | 58.9 | 5.2 ms per frame | 0.81 ms | 11.5 ms |
 
-These are the in-app F12 overlay readings with all 1M synthetic bars visible:
-
-| Build | Chart draw avg / max | Frame CPU avg / max (whole UI + tessellation) |
-|---|---|---|
-| release | 0.36 / 1.31 ms | 1.82 / 4.37 ms |
-| debug (deps at opt-level 2) | 2.95 / 3.83 ms | 6.51 / 8.72 ms |
-
-"Chart draw" covers the chart's layout and command recording. GPU time isn't included.
+Profiling notes are in [crates/tt-chart-gpui/README.md](crates/tt-chart-gpui/README.md).
+`cargo run --release -p tt-chart --example bench_draw` measures the toolkit-free chart
+code headlessly.
 
 ## Setup
 
@@ -236,7 +245,7 @@ built with Rust 1.99 on edition 2024.
 1. Install the **Visual Studio Build Tools** with the *Desktop development with C++*
    workload (this provides the MSVC linker and Windows SDK).
 2. Install Rust: download and run `rustup-init.exe` from <https://rustup.rs>.
-3. Use an up-to-date GPU driver. wgpu uses DirectX 12 or Vulkan.
+3. Use an up-to-date GPU driver. gpui renders with DirectX 11.
 
 ### macOS
 
@@ -245,13 +254,12 @@ xcode-select --install
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 
-wgpu renders through Metal, so you don't need anything else.
+gpui renders through Metal, so you don't need anything else.
 
 ### Linux
 
-Install a C toolchain, the X11/Wayland/keyboard development headers that winit and
-eframe need, and a Vulkan driver for wgpu (wgpu falls back to OpenGL ES if Vulkan isn't
-available).
+Install a C toolchain, the X11/Wayland/keyboard/font development headers gpui needs
+(the same as for building Zed), and a Vulkan driver.
 
 **Debian / Ubuntu**
 
@@ -294,12 +302,14 @@ cargo run -p tradeterm --release -- --synthetic   # start with 1,000,000 synthet
 cargo build                                       # debug build (dependencies at opt-level 2)
 cargo test                                        # unit tests
 cargo clippy --all-targets -- -D warnings         # lints
+cargo run --release -p tt-chart-gpui --example bench -- hover   # gpui chart benchmark
 cargo run --release -p tt-chart --example bench_draw     # headless chart benchmark
 cargo run -p tt-brokers --example stream -- ETHUSDT 5m 20  # live API smoke test
 ```
 
 The release profile uses thin LTO with `codegen-units = 1`. Logging is controlled by
-`RUST_LOG`, e.g. `RUST_LOG=debug,wgpu=warn`.
+`RUST_LOG`, e.g. `RUST_LOG=debug`. The first build compiles gpui and takes a while
+(about 15 minutes for a cold debug build); incremental builds take seconds.
 
 Settings are stored at:
 
@@ -312,7 +322,6 @@ use a different file (portable installs, test runs).
 
 ### Window chrome notes
 
-The window is created without OS decorations. On Windows a maximized borderless
-window extends about 8 px past each screen edge, so the app insets its content by
-that amount while maximized. macOS and Linux get the same Windows-style buttons on the
-right (native traffic lights aren't used).
+The window has no OS decorations; gpui-component's `TitleBar` draws the title bar and
+handles moving, double-click maximize and snapping. On macOS the native traffic
+lights are kept; Windows and Linux get Windows-style buttons on the right.
