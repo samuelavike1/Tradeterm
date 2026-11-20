@@ -51,6 +51,20 @@ pub struct Backfill {
     retry_at: Option<Instant>,
 }
 
+/// Series this tab showed recently, so switching back is instant.
+struct CachedSeries {
+    symbol: Symbol,
+    timeframe: Timeframe,
+    series: CandleSeries,
+    info: Option<SymbolInfo>,
+    at: Instant,
+}
+
+/// Recently shown series kept per tab.
+const CACHE_ENTRIES: usize = 6;
+/// Cached bars older than this are not shown (history would leave a gap).
+const CACHE_MAX_AGE: Duration = Duration::from_secs(10 * 60);
+
 pub struct ChartTab {
     /// Stable id for UI element ids (survives reordering).
     pub id: u64,
@@ -69,6 +83,12 @@ pub struct ChartTab {
     pub status: ConnectionStatus,
     pub backfill: Backfill,
     pub chart: ChartView,
+    /// What `series` currently holds (live data), for the cache.
+    loaded: Option<(Symbol, Timeframe)>,
+    cache: Vec<CachedSeries>,
+    /// When the current stream started, and whether first bars were logged.
+    restarted_at: Instant,
+    first_bars_logged: bool,
 }
 
 impl ChartTab {
@@ -97,6 +117,10 @@ impl ChartTab {
             status: ConnectionStatus::Connecting,
             backfill: Backfill::default(),
             chart,
+            loaded: None,
+            cache: Vec::new(),
+            restarted_at: Instant::now(),
+            first_bars_logged: false,
         };
         tab.restart(shared);
         tab
@@ -205,11 +229,45 @@ impl ChartTab {
         // in-flight sends from old tasks fail, so stale data can't leak in.
         let (tx, rx) = crossbeam_channel::unbounded();
         self.rx = rx;
-        self.series.clear();
         self.status = ConnectionStatus::Connecting;
         self.backfill = Backfill::default();
-        self.symbol_info = None;
         self.chart.reset_view();
+        self.restarted_at = Instant::now();
+        self.first_bars_logged = false;
+
+        // Keep what we were showing; show the new key's bars right away if we
+        // saw them recently (fresh history and the stream merge in).
+        let previous = std::mem::take(&mut self.series);
+        let previous_info = self.symbol_info.take();
+        if let Some((symbol, timeframe)) = self.loaded.take()
+            && !previous.is_empty()
+        {
+            self.cache
+                .retain(|c| !(c.symbol == symbol && c.timeframe == timeframe));
+            self.cache.push(CachedSeries {
+                symbol,
+                timeframe,
+                series: previous,
+                info: previous_info,
+                at: Instant::now(),
+            });
+            if self.cache.len() > CACHE_ENTRIES {
+                self.cache.remove(0);
+            }
+        }
+        if self.synthetic.is_none()
+            && let Some(i) = self.cache.iter().position(|c| {
+                c.symbol == self.symbol
+                    && c.timeframe == self.timeframe
+                    && c.at.elapsed() < CACHE_MAX_AGE
+            })
+        {
+            let cached = self.cache.remove(i);
+            self.series = cached.series;
+            self.symbol_info = cached.info;
+            self.loaded = Some((self.symbol.clone(), self.timeframe));
+            info!(symbol = %self.symbol, tf = %self.timeframe, bars = self.series.len(), "showing cached bars");
+        }
 
         let wake = shared.wake.clone();
         let sink = EventSink::new(tx, move || wake());
@@ -302,7 +360,21 @@ impl ChartTab {
             count += 1;
             match event {
                 // Reconnects deliver recent history; keep backfilled bars before it.
-                MarketEvent::History(candles) => self.series.replace_tail(candles),
+                MarketEvent::History(candles) => {
+                    self.series.replace_tail(candles);
+                    if self.synthetic.is_none() {
+                        self.loaded = Some((self.symbol.clone(), self.timeframe));
+                    }
+                    if !self.first_bars_logged {
+                        self.first_bars_logged = true;
+                        info!(
+                            symbol = %self.symbol,
+                            tf = %self.timeframe,
+                            elapsed_ms = self.restarted_at.elapsed().as_millis() as u64,
+                            "history on screen"
+                        );
+                    }
+                }
                 MarketEvent::CandleUpdate { candle, .. } => {
                     self.series.upsert(candle);
                 }

@@ -218,17 +218,26 @@ impl BinanceSource {
         );
         debug!(%url, "connecting websocket");
 
-        // Connect the stream *first* so that bars produced while history is
-        // downloading are buffered on the socket instead of being lost.
-        let (mut ws, _) = timeout(
-            CONNECT_TIMEOUT,
-            tokio_tungstenite::connect_async(url.as_str()),
-        )
-        .await
-        .context("websocket connect timed out")?
-        .context("websocket connect failed")?;
-
-        let (history, seed) = self.history_for(symbol, tf, None, MAX_KLINES).await?;
+        // Connect the stream and download history *concurrently*: two network
+        // round trips in parallel instead of one after the other, which is
+        // most of the wait when switching symbol or timeframe. Updates that
+        // arrive while history downloads are buffered on the socket. A kline
+        // message always carries the forming bar's full state, so the stream
+        // catches up with whatever history missed.
+        let started = std::time::Instant::now();
+        let ws_url = url.clone();
+        // Aborted if this session is dropped first (symbol/timeframe switch).
+        let mut connect = AbortOnDrop(tokio::spawn(async move {
+            timeout(
+                CONNECT_TIMEOUT,
+                tokio_tungstenite::connect_async(ws_url.as_str()),
+            )
+            .await
+        }));
+        let (history, seed) = match self.history_for(symbol, tf, None, MAX_KLINES).await {
+            Ok(h) => h,
+            Err(e) => return Err(e),
+        };
         info!(%symbol, %tf, base = %stream_tf, bars = history.len(), "history loaded");
         let mut resampler = if stream_tf == tf {
             None
@@ -241,9 +250,18 @@ impl BinanceSource {
             }
             Some(r)
         };
+        // Bars on screen as soon as history arrives; the stream attaches
+        // when its socket is ready.
         if !sink.send(MarketEvent::History(history)) {
             return Ok(SessionEnd::SinkClosed);
         }
+        debug!(elapsed = ?started.elapsed(), "history on screen");
+        let (mut ws, _) = (&mut connect.0)
+            .await
+            .context("websocket connect task")?
+            .context("websocket connect timed out")?
+            .context("websocket connect failed")?;
+        debug!(elapsed = ?started.elapsed(), "stream attached");
         if !sink.send(MarketEvent::Status(ConnectionStatus::Connected)) {
             return Ok(SessionEnd::SinkClosed);
         }
@@ -289,6 +307,15 @@ impl BinanceSource {
                 _ => {}
             }
         }
+    }
+}
+
+/// Aborts a spawned task when dropped.
+struct AbortOnDrop<T>(tokio::task::JoinHandle<T>);
+
+impl<T> Drop for AbortOnDrop<T> {
+    fn drop(&mut self) {
+        self.0.abort();
     }
 }
 
