@@ -14,7 +14,7 @@ impl ChartSettingsPanel {
                 |s, v| s.status_line.title_format = v,
                 cx,
             )
-            .width(tokens::W_FIELD_SELECT + tokens::S6 * 2.0);
+            .width(W_SELECT_WIDE);
         let mut rows = vec![
             section("Symbol"),
             check!(self, cx, "st.logo", "Logo", status_line.logo).into_any_element(),

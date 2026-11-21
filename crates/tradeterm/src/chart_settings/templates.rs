@@ -8,7 +8,7 @@
 use super::*;
 use gpui_kit::component::input::Input;
 use tt_session::templates::validate_name;
-use tt_ui::MenuRow;
+use tt_ui::{Menu, MenuRow};
 
 /// Builds the menu each time it opens (the saved list can change).
 pub(super) fn menu(panel: &Entity<ChartSettingsPanel>, menu: Menu, cx: &mut App) -> Menu {

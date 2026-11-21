@@ -802,7 +802,7 @@ impl ChartSettingsPanel {
                 |s, v| s.symbol.data.time_zone = v,
                 cx,
             )
-            .width(tokens::W_FIELD_SELECT + tokens::S6 * 2.0);
+            .width(W_SELECT_WIDE);
         rows.push(Self::row("Time zone").control(sel).into_any_element());
     }
 }

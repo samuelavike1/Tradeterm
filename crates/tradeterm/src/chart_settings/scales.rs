@@ -83,7 +83,8 @@ impl ChartSettingsPanel {
             sc.currency_label,
             |s, v| s.scales.currency_label = v,
             cx,
-        );
+        )
+        .width(W_SELECT_WIDE);
         rows.push(
             Self::row("Currency and unit")
                 .control(sel)
@@ -95,7 +96,8 @@ impl ChartSettingsPanel {
             sc.scale_buttons,
             |s, v| s.scales.scale_buttons = v,
             cx,
-        );
+        )
+        .width(W_SELECT_WIDE);
         rows.push(
             Self::row("Scale modes (A and L)")
                 .control(sel)
@@ -184,10 +186,11 @@ impl ChartSettingsPanel {
                 |s, v| s.scales.symbol_value_mode = v,
                 cx,
             )
-            .width(tokens::W_FIELD_SELECT + tokens::S4);
+            .width(W_SELECT_WIDE);
+        rows.push(Self::row("Symbol").control(mode).into_any_element());
         rows.push(
-            Self::row("Symbol")
-                .control(mode)
+            Self::row("Symbol last value")
+                .indent()
                 .control(value_mode)
                 .into_any_element(),
         );

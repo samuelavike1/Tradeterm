@@ -638,6 +638,8 @@ impl TradeTerm {
         if let Some(chart) = self.tab_by_id(tab, cx) {
             self.set_tab_style(&chart, own, cx);
             self.refresh_ui_theme(cx);
+            // A save during the preview may have written the draft.
+            self.persist(cx);
             cx.notify();
         }
     }

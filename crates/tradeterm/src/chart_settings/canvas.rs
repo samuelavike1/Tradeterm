@@ -22,7 +22,7 @@ impl ChartSettingsPanel {
             )
             .width(W_SELECT_SM);
         let bg = color!(self, window, cx, "cv.bg", canvas.background, |_, t| t.bg);
-        let mut row = Self::row("Background").control(kind).control(bg);
+        let mut row = Self::row("Background").control(bg);
         if cv.background_kind == BackgroundKind::Gradient {
             let bottom = color!(
                 self,
@@ -34,6 +34,7 @@ impl ChartSettingsPanel {
             );
             row = row.control(bottom);
         }
+        let row = row.control(kind);
         rows.push(row.into_any_element());
 
         let grid = self.select(
@@ -214,7 +215,8 @@ impl ChartSettingsPanel {
             cv.nav_buttons,
             |s, v| s.canvas.nav_buttons = v,
             cx,
-        );
+        )
+        .width(W_SELECT_WIDE);
         rows.push(Self::row("Navigation").control(nav).into_any_element());
         let pane = self.select(
             "cv.pane_buttons",
@@ -222,7 +224,8 @@ impl ChartSettingsPanel {
             cv.pane_buttons,
             |s, v| s.canvas.pane_buttons = v,
             cx,
-        );
+        )
+        .width(W_SELECT_WIDE);
         rows.push(Self::row("Pane").control(pane).into_any_element());
 
         rows.push(section("Margins"));

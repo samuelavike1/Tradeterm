@@ -62,6 +62,8 @@ const SIZE: DialogSize = DialogSize::Lg;
 /// Narrow selects inside multi-control rows (width, line style).
 const W_SELECT_XS: f32 = 76.0;
 const W_SELECT_SM: f32 = 104.0;
+/// Selects with long option labels ("Visible on mouse over").
+const W_SELECT_WIDE: f32 = tokens::W_FIELD_SELECT + tokens::S6 * 2.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Page {
