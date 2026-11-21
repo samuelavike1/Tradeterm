@@ -77,7 +77,11 @@ fn group_tools(g: ToolGroup) -> Vec<DrawingTool> {
             .filter(|t| toolbar_group(*t) == g)
             .collect()
     } else {
-        listed.iter().copied().filter(|t| t.is_available()).collect()
+        listed
+            .iter()
+            .copied()
+            .filter(|t| t.is_available())
+            .collect()
     }
 }
 
