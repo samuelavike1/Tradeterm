@@ -134,7 +134,17 @@ impl RenderOnce for FormRow {
             .items_center()
             .text_size(px(TEXT_BODY))
             .text_color(hsla(t.text))
-            .child(div().flex_none().w(px(label_w)).child(label))
+            // A row without controls (a lone checkbox) lets its label use
+            // the whole row, so long labels stay on one line.
+            .child(if self.controls.is_empty() && self.unit.is_none() {
+                div()
+                    .flex_1()
+                    .min_w(px(label_w))
+                    .whitespace_nowrap()
+                    .child(label)
+            } else {
+                div().flex_none().w(px(label_w)).child(label)
+            })
             .children(self.controls)
             .when_some(self.unit, |d, u| {
                 d.child(div().text_color(hsla(t.text_muted)).child(u))

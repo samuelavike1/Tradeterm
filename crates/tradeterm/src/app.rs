@@ -16,9 +16,12 @@ use tt_chart_gpui::{Chart, ChartEvent, ChartState, hsla};
 use tt_core::{Symbol, Timeframe};
 use tt_session::fsutil::Poll;
 use tt_session::runtime::BackgroundRuntime;
-use tt_session::settings::{AppSettings, RecentSymbol, SettingsStore, TabSettings};
+use tt_session::settings::{
+    AppSettings, RecentSymbol, SettingsStore, TabSettings, tab_style_override,
+};
 use tt_session::synthetic;
 use tt_session::tab::{ChartTab, Shared};
+use tt_session::templates::TemplateStore;
 use tt_theme::{Theme, ThemeMode, ThemeOverrides};
 
 actions!(
@@ -79,10 +82,14 @@ pub struct TradeTerm {
     next_tab_id: u64,
     pub(crate) theme_mode: ThemeMode,
     overrides: ThemeOverrides,
-    /// Chart palette for the current appearance.
+    /// UI palette for the current appearance, with the active tab's up /
+    /// down colors (tab strip, status bar).
     pub(crate) theme: Theme,
-    /// Chart settings shared by all charts (TradingView's Settings dialog).
+    /// The user default chart settings (TradingView's Settings dialog): new
+    /// tabs start from it, tabs without their own style follow it.
     pub(crate) chart_style: tt_chart::ChartStyle,
+    /// Saved chart-settings templates (`chart-templates.json`).
+    pub(crate) templates: TemplateStore,
     store: SettingsStore,
     pub(crate) recent: Vec<RecentSymbol>,
     pub(crate) favorite_timeframes: Vec<Timeframe>,
@@ -186,6 +193,7 @@ impl TradeTerm {
             ThemeMode::Light => false,
             ThemeMode::System => window.appearance() == WindowAppearance::Dark,
         };
+        let templates = TemplateStore::load(store.path().map(TemplateStore::path_next_to));
         let mut app = Self {
             shared,
             tabs: Vec::new(),
@@ -195,6 +203,7 @@ impl TradeTerm {
             overrides: style_overrides(&style),
             theme: Theme::for_dark(dark).with_overrides(style_overrides(&style)),
             chart_style: style.clone(),
+            templates,
             store,
             recent: settings.recent_symbols.clone(),
             favorite_timeframes: settings.favorite_timeframes.clone(),
@@ -217,6 +226,7 @@ impl TradeTerm {
             app.tabs.push(chart);
         }
         app.active = app.active.min(app.tabs.len().saturating_sub(1));
+        app.refresh_ui_theme(cx);
         let quit = cx.on_app_quit(|app, cx| {
             app.flush_settings(cx);
             async {}
@@ -242,7 +252,7 @@ impl TradeTerm {
             shared: self.shared.clone(),
         };
         source.refresh_title();
-        let theme = self.theme.clone();
+        let theme = self.chart_theme(&source.tab.chart.style);
         let chart = cx.new(|cx| Chart::new(ChartState::new(source, theme), cx));
         let sub = cx.subscribe_in(
             &chart,
@@ -252,8 +262,14 @@ impl TradeTerm {
                     app.open_indicator_settings(chart.clone(), *id, window, cx)
                 }
                 ChartEvent::Changed => app.persist(cx),
-                ChartEvent::StyleChanged(style) => app.set_chart_style((**style).clone(), true, cx),
-                ChartEvent::OpenSettings => app.open_chart_settings(window, cx),
+                ChartEvent::StyleChanged(style) => {
+                    let id = chart.read(cx).state.read(cx).source.tab.id;
+                    app.commit_tab_style(id, (**style).clone(), cx)
+                }
+                // The price-scale gear's "More settings…".
+                ChartEvent::OpenSettings => {
+                    app.open_chart_settings_page(crate::chart_settings::Page::Scales, window, cx)
+                }
                 ChartEvent::DrawingsChanged => app.drawings_changed(chart, cx),
                 // The drawing settings dialog is slice A.
                 ChartEvent::OpenDrawingSettings(_) => {}
@@ -396,13 +412,16 @@ impl TradeTerm {
     // ---- actions -----------------------------------------------------------
 
     pub(crate) fn new_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let settings = self
+        let mut settings = self
             .tab_chart()
             .map(|c| c.read(cx).state.read(cx).source.tab.settings())
             .unwrap_or_default();
+        // New tabs start from the user default style.
+        settings.style = None;
         let chart = self.make_chart(&settings, None, window, cx);
         self.active = (self.active + 1).min(self.tabs.len());
         self.tabs.insert(self.active, chart);
+        self.refresh_ui_theme(cx);
         self.persist(cx);
         cx.notify();
     }
@@ -415,6 +434,7 @@ impl TradeTerm {
         if self.active > index || self.active >= self.tabs.len() {
             self.active = self.active.saturating_sub(1);
         }
+        self.refresh_ui_theme(cx);
         self.persist(cx);
         cx.notify();
     }
@@ -428,6 +448,7 @@ impl TradeTerm {
             self.tabs[index].update(cx, |c, cx| {
                 c.update_state(cx, |s| s.source.tab.load_drawings(&shared))
             });
+            self.refresh_ui_theme(cx);
             self.persist(cx);
             cx.notify();
         }
@@ -447,8 +468,8 @@ impl TradeTerm {
         };
         self.theme = Theme::for_dark(dark).with_overrides(self.overrides);
         ui::apply_theme(&self.theme, cx);
-        for chart in &self.tabs {
-            let theme = self.theme.clone();
+        for chart in self.tabs.clone() {
+            let theme = self.chart_theme(&chart.read(cx).state.read(cx).source.tab.chart.style);
             chart.update(cx, |chart, cx| chart.update_state(cx, |s| s.theme = theme));
         }
         self.persist(cx);
@@ -525,33 +546,156 @@ impl TradeTerm {
         }
     }
 
-    /// Applies chart settings to every chart (and new tabs); saves them if
-    /// `persist` (the dialog previews without saving).
-    pub fn set_chart_style(
-        &mut self,
-        style: tt_chart::ChartStyle,
-        persist: bool,
-        cx: &mut Context<Self>,
-    ) {
-        self.overrides = style_overrides(&style);
-        self.theme = Theme::for_dark(self.theme.dark).with_overrides(self.overrides);
-        self.shared.chart_style = style.clone();
-        self.chart_style = style.clone();
+    // ---- chart styles (per tab, user default) -------------------------------
+
+    /// A chart's palette: the base theme with `style`'s up / down colors.
+    fn chart_theme(&self, style: &tt_chart::ChartStyle) -> Theme {
+        Theme::for_dark(self.theme.dark).with_overrides(style_overrides(style))
+    }
+
+    /// The UI follows the active tab's up / down colors.
+    fn refresh_ui_theme(&mut self, cx: &mut Context<Self>) {
+        let Some(chart) = self.tab_chart() else {
+            return;
+        };
+        let overrides = style_overrides(&chart.read(cx).state.read(cx).source.tab.chart.style);
+        if overrides == self.overrides {
+            return;
+        }
+        self.overrides = overrides;
+        self.theme = Theme::for_dark(self.theme.dark).with_overrides(overrides);
         if &self.theme != tt_ui::ActiveUiTheme::ui(&**cx) {
             ui::apply_theme(&self.theme, cx);
         }
-        for chart in &self.tabs {
-            let (style, theme) = (style.clone(), self.theme.clone());
-            chart.update(cx, |chart, cx| {
-                chart.update_state(cx, |s| {
-                    s.theme = theme;
-                    s.source.tab.chart.style = style;
-                })
-            });
-        }
-        if persist {
+    }
+
+    fn tab_by_id(&self, id: u64, cx: &App) -> Option<TabChart> {
+        self.tabs
+            .iter()
+            .find(|c| c.read(cx).state.read(cx).source.tab.id == id)
+            .cloned()
+    }
+
+    /// Sets a tab's style: `own` = its own, `None` = follow the user default.
+    fn set_tab_style(
+        &mut self,
+        chart: &TabChart,
+        own: Option<tt_chart::ChartStyle>,
+        cx: &mut Context<Self>,
+    ) {
+        let theme = self.chart_theme(own.as_ref().unwrap_or(&self.chart_style));
+        let default = self.chart_style.clone();
+        chart.update(cx, |chart, cx| {
+            chart.update_state(cx, |s| {
+                s.theme = theme;
+                s.source.tab.set_style(own, &default);
+            })
+        });
+    }
+
+    /// The active tab for the Settings dialog: (tab id, chart type, its own
+    /// style or None, the style it draws with).
+    pub(crate) fn active_tab_style(
+        &self,
+        cx: &App,
+    ) -> Option<(
+        u64,
+        ChartType,
+        Option<tt_chart::ChartStyle>,
+        tt_chart::ChartStyle,
+    )> {
+        let tab = &self.tab_chart()?.read(cx).state.read(cx).source.tab;
+        let own = tab.own_style.then(|| tab.chart.style.clone());
+        Some((tab.id, tab.chart.chart_type, own, tab.chart.style.clone()))
+    }
+
+    /// Live preview of the dialog's draft on one tab (not saved).
+    pub(crate) fn preview_tab_style(
+        &mut self,
+        tab: u64,
+        style: tt_chart::ChartStyle,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(chart) = self.tab_by_id(tab, cx) else {
+            return;
+        };
+        let theme = self.chart_theme(&style);
+        chart.update(cx, |chart, cx| {
+            chart.update_state(cx, |s| {
+                s.theme = theme;
+                s.source.tab.chart.style = style;
+            })
+        });
+        self.refresh_ui_theme(cx);
+        cx.notify();
+    }
+
+    /// Cancel: the tab's style as it was when the dialog opened.
+    pub(crate) fn restore_tab_style(
+        &mut self,
+        tab: u64,
+        own: Option<tt_chart::ChartStyle>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(chart) = self.tab_by_id(tab, cx) {
+            self.set_tab_style(&chart, own, cx);
+            self.refresh_ui_theme(cx);
+            // A save during the preview may have written the draft.
             self.persist(cx);
+            cx.notify();
         }
+    }
+
+    /// Ok (or a price-scale menu toggle): `style` becomes the tab's style.
+    /// A style equal to the user default makes the tab follow the default.
+    pub(crate) fn commit_tab_style(
+        &mut self,
+        tab: u64,
+        style: tt_chart::ChartStyle,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(chart) = self.tab_by_id(tab, cx) {
+            let own = tab_style_override(&style, &self.chart_style);
+            self.set_tab_style(&chart, own, cx);
+            self.refresh_ui_theme(cx);
+            self.persist(cx);
+            cx.notify();
+        }
+    }
+
+    /// "Save as default": the user default; tabs that follow it update.
+    pub(crate) fn set_default_style(
+        &mut self,
+        style: tt_chart::ChartStyle,
+        cx: &mut Context<Self>,
+    ) {
+        self.shared.chart_style = style.clone();
+        self.chart_style = style;
+        for chart in self.tabs.clone() {
+            let own = chart.read(cx).state.read(cx).source.tab.own_style;
+            if !own {
+                self.set_tab_style(&chart, None, cx);
+            }
+        }
+        self.refresh_ui_theme(cx);
+        self.persist(cx);
+        cx.notify();
+    }
+
+    /// "Apply to all tabs": `style` becomes the user default and every tab
+    /// follows it.
+    pub(crate) fn apply_style_to_all_tabs(
+        &mut self,
+        style: tt_chart::ChartStyle,
+        cx: &mut Context<Self>,
+    ) {
+        self.shared.chart_style = style.clone();
+        self.chart_style = style;
+        for chart in self.tabs.clone() {
+            self.set_tab_style(&chart, None, cx);
+        }
+        self.refresh_ui_theme(cx);
+        self.persist(cx);
         cx.notify();
     }
 
