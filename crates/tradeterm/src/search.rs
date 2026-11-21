@@ -20,47 +20,6 @@ use tt_ui::tokens::*;
 
 const QUOTES: [&str; 7] = ["All", "USDT", "USDC", "FDUSD", "BTC", "ETH", "BNB"];
 
-/// Rows a PageUp / PageDown moves (about one screen of 48 px rows).
-const PAGE: usize = 7;
-
-/// Keyboard selection over a list of `len` rows, kept in view through the
-/// list's [`ScrollHandle`] (row `i` must be the list's child `i`).
-#[derive(Default)]
-struct ListNav {
-    selected: Option<usize>,
-    scroll: ScrollHandle,
-}
-
-impl ListNav {
-    fn reset(&mut self) {
-        self.selected = None;
-    }
-
-    /// Applies a navigation key; returns whether it was one. Moves clamp at
-    /// the ends; from no selection, down / page down start at the top and
-    /// up / page up at the bottom. Home / End only act once a row is
-    /// selected, so they still move the caret while typing.
-    fn key(&mut self, key: &str, len: usize) -> bool {
-        let last = len.saturating_sub(1);
-        let next = match (key, self.selected) {
-            ("down" | "pagedown", None) => 0,
-            ("up" | "pageup", None) => last,
-            ("down", Some(i)) => (i + 1).min(last),
-            ("up", Some(i)) => i.saturating_sub(1),
-            ("pagedown", Some(i)) => (i + PAGE).min(last),
-            ("pageup", Some(i)) => i.saturating_sub(PAGE),
-            ("home", Some(_)) => 0,
-            ("end", Some(_)) => last,
-            _ => return false,
-        };
-        if len > 0 {
-            self.selected = Some(next);
-            self.scroll.scroll_to_item(next);
-        }
-        true
-    }
-}
-
 pub struct SymbolSearch {
     app: WeakEntity<TradeTerm>,
     input: Entity<InputState>,
@@ -132,7 +91,7 @@ impl SymbolSearch {
             searching: false,
             error: None,
             quote: quote.min(QUOTES.len() - 1),
-            nav: ListNav::default(),
+            nav: ListNav::new(),
             enter_pending: false,
             previewing: false,
             _sub,
@@ -218,14 +177,15 @@ impl SymbolSearch {
 
     /// A navigation key; returns whether it was one.
     fn nav_key(&mut self, key: &str, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let before = self.nav.selected;
-        if !self.nav.key(key, self.rows().len()) {
+        // Enter stays with the field (`InputEvent::PressEnter`).
+        let k = self.nav.key(key, self.rows().len());
+        if !k.is_nav() {
             return false;
         }
-        if self.nav.selected == before {
+        if !k.changed() {
             return true;
         }
-        if let Some(i) = self.nav.selected {
+        if let Some(i) = self.nav.selected() {
             // Preview the highlighted symbol in the field (no new search).
             if let Some(sym) = self.rows().get(i).map(|s| s.symbol.to_string()) {
                 self.previewing = true;
@@ -249,12 +209,12 @@ impl SymbolSearch {
 
     fn enter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let _ = window;
-        if self.searching && self.nav.selected.is_none() {
+        if self.searching && self.nav.selected().is_none() {
             // Like TradingView: open the top result once it arrives.
             self.enter_pending = true;
             return;
         }
-        match self.nav.selected {
+        match self.nav.selected() {
             Some(i) => {
                 if let Some(s) = self.rows().get(i).map(|s| (*s).clone()) {
                     self.choose(s, cx);
@@ -346,48 +306,27 @@ impl SymbolSearch {
             .font_weight(FontWeight::MEDIUM)
             .text_color(hsla(t.text_on_accent))
             .child(initial);
-        let text = v_flex()
-            .flex_1()
-            .min_w_0()
-            .overflow_hidden()
-            .child(
-                div()
-                    .text_size(px(TEXT_BODY))
-                    .whitespace_nowrap()
-                    .child(highlighted(s.symbol.to_string(), &self.query, active)),
-            )
-            .child(
-                h_flex()
-                    .gap(px(S1_5))
-                    .text_size(px(TEXT_SMALL))
-                    .text_color(muted)
-                    .whitespace_nowrap()
-                    .child(highlighted(
-                        format!("{} / {}", s.base, s.quote),
-                        &self.query,
-                        active,
-                    ))
-                    .child(Tag::new("SPOT")),
-            );
-        // ListRow's primary / secondary are plain strings; the highlighted
-        // texts ride in the leading slot, which takes (almost) all of the
-        // width from the row's empty text column.
-        let leading = h_flex()
-            .flex_1()
-            .min_w_0()
-            .gap(px(S3))
-            .map(|mut d| {
-                d.style().flex_grow = Some(1000.);
-                d
-            })
-            .child(badge)
-            .child(text);
+        let primary =
+            div()
+                .whitespace_nowrap()
+                .child(highlighted(s.symbol.to_string(), &self.query, active));
+        let secondary = h_flex()
+            .gap(px(S1_5))
+            .whitespace_nowrap()
+            .child(highlighted(
+                format!("{} / {}", s.base, s.quote),
+                &self.query,
+                active,
+            ))
+            .child(Tag::new("SPOT"));
         let info = s.clone();
         let this = cx.entity().downgrade();
         ListRow::new(("result", i))
             .tall()
-            .selected(self.nav.selected == Some(i))
-            .leading(leading)
+            .selected(self.nav.selected() == Some(i))
+            .leading(badge)
+            .primary_el(primary)
+            .secondary_el(secondary)
             .trailing(
                 div()
                     .flex_none()

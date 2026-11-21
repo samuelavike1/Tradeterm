@@ -9,10 +9,13 @@ use ecolor::Color32;
 use emath::{Align2, Pos2, Rect, pos2, vec2};
 use lucide_icons::Icon;
 use tt_core::Placement;
+use tt_theme::metrics::{CONTROL_XS, ICON_XS, R_SM, S0_5, S1, S1_5, S2};
 use tt_theme::with_alpha;
 
-const LEGEND_ICON: f32 = 15.0;
-const LEGEND_BUTTON: f32 = 20.0;
+/// Legend buttons match the kit's xs controls (ui-guidelines L1): 20 px
+/// with a 14 px icon (3 px inset), radius `R_SM`.
+const LEGEND_ICON: f32 = ICON_XS;
+const LEGEND_BUTTON: f32 = CONTROL_XS;
 
 /// Legends: price-pane indicators under the OHLC readout (collapsible), and
 /// each pane's indicator at its top left. Values are for `bar`.
@@ -41,20 +44,21 @@ pub(super) fn legends(c: &mut dyn Canvas, s: &Scene<'_>, bar: Option<usize>) -> 
         let text_w = if count.is_empty() {
             0.0
         } else {
-            c.text_size(&count, s.style.scales.text_size).x + 6.0
+            c.text_size(&count, s.style.scales.text_size).x + S1_5
         };
         let rect = Rect::from_min_size(
-            pos - vec2(4.0, 2.0),
+            pos - vec2(S1, S0_5),
             vec2(LEGEND_BUTTON + text_w, LEGEND_BUTTON),
         );
+        // Same states as kit buttons: `hover` fill under the pointer.
         let hovered = s.legend_hover == Some(0);
         let bg = if hovered {
-            s.theme.selection
+            s.theme.hover
         } else {
             with_alpha(s.theme.bg, 0.85)
         };
-        c.fill_rounded_rect(rect, 4.0, bg);
-        c.stroke_rect(rect, 1.0, s.theme.border);
+        c.fill_rounded_rect(rect, R_SM, bg);
+        c.stroke_rounded_rect(rect, R_SM, 1.0, s.theme.border);
         let icon = if s.legend_collapsed {
             Icon::ChevronDown
         } else {
@@ -68,7 +72,7 @@ pub(super) fn legends(c: &mut dyn Canvas, s: &Scene<'_>, bar: Option<usize>) -> 
         );
         if !count.is_empty() {
             c.text(
-                pos2(ic.right() + 2.0, rect.center().y),
+                pos2(ic.right() + S0_5, rect.center().y),
                 Align2::LEFT_CENTER,
                 &count,
                 s.style.scales.text_size,
@@ -146,11 +150,11 @@ fn legend_row(
     }
     if hovered {
         let r = name.expand2(vec2(5.0, 3.0));
-        c.fill_rounded_rect(r, 3.0, with_alpha(t.bg, 0.85));
-        c.stroke_rect(r, 1.0, t.border);
+        c.fill_rounded_rect(r, R_SM, with_alpha(t.bg, 0.85));
+        c.stroke_rounded_rect(r, R_SM, 1.0, t.border);
     }
     c.text(pos, Align2::LEFT_TOP, &title, size, name_color);
-    let mut x = name.right() + 8.0;
+    let mut x = name.right() + S2;
     let eye = if ind.visible { Icon::Eye } else { Icon::EyeOff };
     let shown: &[(LegendButton, Icon)] = if hovered {
         &[
@@ -169,14 +173,22 @@ fn legend_row(
             pos2(x, name.center().y - LEGEND_BUTTON / 2.0),
             vec2(LEGEND_BUTTON, LEGEND_BUTTON),
         );
-        cover(c, r.right() + 2.0);
-        c.fill_rounded_rect(r, 3.0, with_alpha(t.bg, 0.85));
-        c.icon(r.center(), char::from(*icon), LEGEND_ICON, name_color);
+        cover(c, r.right() + S0_5);
+        // Kit button states (L3): `hover` fill and full-strength icon under
+        // the pointer, a backdrop otherwise (levels must not run through).
+        let over = s.legend_hover_button == Some((ind.id, *button));
+        let (fill, fg) = if over {
+            (t.hover, t.text)
+        } else {
+            (with_alpha(t.bg, 0.85), name_color)
+        };
+        c.fill_rounded_rect(r, R_SM, fill);
+        c.icon(r.center(), char::from(*icon), LEGEND_ICON, fg);
         buttons.push((*button, r));
-        x = r.right() + 2.0;
+        x = r.right() + S0_5;
     }
     if !shown.is_empty() {
-        x += 6.0;
+        x += S1_5;
     }
     if ind.visible
         && st.indicator_values
@@ -198,7 +210,7 @@ fn legend_row(
                 cover(c, x + w + 4.0);
             }
             let r = c.text(pos2(x, pos.y), Align2::LEFT_TOP, &text, size, color);
-            x = r.right() + 8.0;
+            x = r.right() + S2;
         }
     }
     // Hover area covers where the buttons appear, so they don't flicker.

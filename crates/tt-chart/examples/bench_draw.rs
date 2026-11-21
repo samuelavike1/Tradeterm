@@ -136,6 +136,7 @@ fn run(
     let input = RenderInput {
         crosshair: Some(full.center()),
         legend_hover: None,
+        ..Default::default()
     };
     let (mut base, mut overlay, mut prims) = (Vec::new(), Vec::new(), 0);
     for frame in 0..(FRAMES + 5) {

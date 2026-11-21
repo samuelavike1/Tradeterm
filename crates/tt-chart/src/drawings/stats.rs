@@ -339,7 +339,7 @@ pub(crate) fn draw_box(
     let size_v = vec2(width + 16.0, line_h * lines.len() as f32 + 8.0);
     let r = align.anchor_size(at, size_v);
     if let Some(bg) = bg {
-        c.fill_rounded_rect(r, 4.0, bg);
+        c.fill_rounded_rect(r, tt_theme::metrics::R_SM, bg);
     }
     for (i, l) in lines.iter().enumerate() {
         c.text_styled(
