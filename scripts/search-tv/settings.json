@@ -1,0 +1,18 @@
+{
+  "theme_mode": "Dark",
+  "tabs": [
+    { "symbol": "BTCUSDT", "timeframe": "1h", "chart_type": "Candles" }
+  ],
+  "active_tab": 0,
+  "recent_symbols": [
+    { "symbol": "BTCUSDT", "base": "BTC", "quote": "USDT" },
+    { "symbol": "ETHUSDT", "base": "ETH", "quote": "USDT" },
+    { "symbol": "SOLUSDT", "base": "SOL", "quote": "USDT" },
+    { "symbol": "BNBUSDT", "base": "BNB", "quote": "USDT" }
+  ],
+  "favorite_indicators": ["Volume", "Rsi", "Ema"],
+  "chart_style": {
+    "version": 2,
+    "canvas": { "watermark": { "visible": true } }
+  }
+}

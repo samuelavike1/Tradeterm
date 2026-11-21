@@ -12,7 +12,7 @@ impl TradeTerm {
     /// Opens the symbol search, optionally with text already typed.
     pub fn open_search(&mut self, initial: &str, window: &mut Window, cx: &mut Context<Self>) {
         let app = cx.entity().downgrade();
-        let (source, handle) = (self.shared.source.clone(), self.shared.handle.clone());
+        let (symbols, handle) = (self.shared.symbols.clone(), self.shared.handle.clone());
         let assets = self.shared.assets.clone();
         let recent = search::recent_rows(&self.recent);
         // Opened from the ticker: the current symbol, selected.
@@ -27,12 +27,15 @@ impl TradeTerm {
         let quote = self.search_quote;
         let panel = cx.new(|cx| {
             SymbolSearch::new(
-                app, source, handle, assets, recent, &initial, quote, select_all, window, cx,
+                app, symbols, handle, assets, recent, &initial, quote, select_all, window, cx,
             )
         });
         let focus = panel.clone();
-        // Picker dialog: no footer, Enter picks (§3.6).
+        // Picker dialog: no footer, Enter picks (§3.6). TradingView's has no
+        // title row: the search field is the header; Esc closes.
         let opts = tt_ui::DialogOpts::new("Symbol search", tt_ui::DialogSize::Md)
+            .bare()
+            .width(tt_ui::tokens::SS_W_DIALOG)
             .on_open(move |window, cx| SymbolSearch::focus_input(&focus, window, cx));
         tt_ui::open_dialog(window, cx, opts, panel);
     }
@@ -48,6 +51,7 @@ impl TradeTerm {
         let opts =
             tt_ui::DialogOpts::new("Indicators, metrics, and strategies", tt_ui::DialogSize::Lg)
                 .comfortable()
+                .radius(tt_ui::tokens::PICKER_R_DIALOG)
                 .width(crate::indicators::W_PICKER)
                 .on_open(move |window, cx| IndicatorsPanel::focus_input(&focus, window, cx));
         tt_ui::open_dialog(window, cx, opts, panel);

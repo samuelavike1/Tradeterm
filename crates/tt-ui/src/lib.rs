@@ -21,6 +21,7 @@ pub mod menu;
 pub mod motion;
 pub mod overlay;
 pub mod picker;
+pub mod search;
 pub mod side_nav;
 pub mod slider;
 pub mod theme;
@@ -44,6 +45,7 @@ pub use picker::{
     LineStyleButton, LineValue, LineWidthButton, TV_PALETTE, TextStyleBar, TextStyleValue,
     ToggleSquare, line_preview,
 };
+pub use search::{FilterPill, SearchField};
 pub use side_nav::{SectionTitle, SideNavFrame, sub_row};
 pub use slider::{RangeField, RangeSlider};
 pub use theme::{ActiveUiTheme, UiTheme, hsla};
@@ -70,6 +72,7 @@ pub mod prelude {
         ColorBarButton, ColorSwatchButton, LineDash, LinePicker, LineStyleButton, LineValue,
         LineWidthButton, TextStyleBar, TextStyleValue, ToggleSquare,
     };
+    pub use crate::search::{FilterPill, SearchField};
     pub use crate::slider::{RangeField, RangeSlider};
     pub use crate::theme::{ActiveUiTheme, hsla};
     pub use crate::tokens::{self, PxExt};

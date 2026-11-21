@@ -6,7 +6,7 @@
 
 use crate::app::TradeTerm;
 use crate::search::match_ranges;
-use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -21,7 +21,6 @@ use tt_ui::tokens::*;
 pub const W_PICKER: f32 = 840.0;
 /// The body under the header: search 40 + lists 530.
 const H_PICKER_BODY: f32 = 570.0;
-const H_PICKER_SEARCH: f32 = 40.0;
 /// The left nav column (items 200 wide after the 20 px inset).
 const W_PICKER_NAV: f32 = 230.0;
 const H_PICKER_NAV: f32 = 40.0;
@@ -217,7 +216,8 @@ impl IndicatorsPanel {
             .justify_center()
             .rounded(px(R_SM))
             .cursor_pointer()
-            .when(fav, |d| d.text_color(hsla(t.favorite)))
+            // TradingView's filled stars here are the text color.
+            .when(fav, |d| d.text_color(hsla(t.text)))
             .when(!fav && !selected, |d| {
                 d.invisible()
                     .group_hover(group.clone(), |s| s.visible())
@@ -371,7 +371,7 @@ impl Render for IndicatorsPanel {
         };
         // Searching groups results under "Technicals", like TradingView.
         let header = if self.query.trim().is_empty() {
-            "Script name"
+            "Name"
         } else {
             "Technicals"
         };
@@ -381,10 +381,10 @@ impl Render for IndicatorsPanel {
             .pl(px(C_PAD_X))
             .pr(px(LIST_INSET))
             .pt(px(S2))
-            .child(caption("Personal", H_PICKER_CAPTION, muted))
+            .child(caption("Personal", H_PICKER_CAPTION, muted).pl(px(S3)))
             .child(self.nav_item(Section::Favorites, "Favorites", Glyph::STAR, cx))
             .child(div().h(px(S2)))
-            .child(caption("Built-in", H_PICKER_CAPTION, muted))
+            .child(caption("Built-in", H_PICKER_CAPTION, muted).pl(px(S3)))
             .child(self.nav_item(
                 Section::Technicals,
                 "Technicals",
@@ -411,20 +411,10 @@ impl Render for IndicatorsPanel {
                 }
             }))
             .child(
-                div().flex_none().px(px(C_PAD_X)).child(
-                    Input::new(&self.input)
-                        .prefix(
-                            div()
-                                .size(px(W_NAV_ICON))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .child(glyph(Glyph::SEARCH, ICON_LG).color(muted)),
-                        )
-                        .cleanable(true)
-                        .map(|i| Styled::h(i, px(H_PICKER_SEARCH)))
-                        .rounded(px(C_R_CONTROL)),
-                ),
+                div()
+                    .flex_none()
+                    .px(px(C_PAD_X))
+                    .child(SearchField::boxed(&self.input)),
             )
             .child(
                 h_flex()

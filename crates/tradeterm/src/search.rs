@@ -1,33 +1,41 @@
-//! Symbol search dialog, TradingView-style: a search field, quote filter
-//! chips, results with the match highlighted, recent symbols when empty.
+//! Symbol search dialog, TradingView's (measured, tokens `SS_*`): the search
+//! field as the header with a "Clear" button, quote filter pills, 58 px
+//! result rows (logo, symbol and pair name with the match in blue, type
+//! badge, exchange with its logo), recent symbols when empty.
 //! ↑/↓ and PageUp/PageDown move the selection (Home/End too once a row is
 //! selected) and preview it in the field, Enter opens it (if a search is
 //! still running, the top result once it arrives), Esc closes.
+//!
+//! Searches run against [`SymbolList`], read from its disk cache at
+//! startup, so even the first one is instant.
 
 use crate::app::TradeTerm;
 use crate::ui::{badge_color, logo_or_badge};
-use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::{WindowExt as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use std::ops::Range;
-use std::sync::Arc;
-use tt_brokers::{BinanceSource, MarketDataSource};
 use tt_core::{Symbol, SymbolInfo};
 use tt_session::assets::AssetCache;
+use tt_session::symbols::SymbolList;
 use tt_ui::hsla;
 use tt_ui::prelude::*;
 use tt_ui::tokens::*;
 
-/// Logo / badge diameter in result rows.
-const BADGE: f32 = 28.;
-
 const QUOTES: [&str; 7] = ["All", "USDT", "USDC", "FDUSD", "BTC", "ETH", "BNB"];
+
+/// The exchange's name and the asset whose logo stands for it (Binance's
+/// mark is BNB's).
+const EXCHANGE: &str = "Binance";
+const EXCHANGE_LOGO_ASSET: &str = "BNB";
+/// Binance yellow, for the letter badge until the logo is on disk.
+const EXCHANGE_COLOR: u32 = 0xF0B90B;
 
 pub struct SymbolSearch {
     app: WeakEntity<TradeTerm>,
     input: Entity<InputState>,
-    source: Arc<BinanceSource>,
+    symbols: SymbolList,
     handle: tokio::runtime::Handle,
     /// Full names and logos of assets.
     assets: AssetCache,
@@ -52,7 +60,7 @@ impl SymbolSearch {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         app: WeakEntity<TradeTerm>,
-        source: Arc<BinanceSource>,
+        symbols: SymbolList,
         handle: tokio::runtime::Handle,
         assets: AssetCache,
         recent: Vec<SymbolInfo>,
@@ -62,7 +70,8 @@ impl SymbolSearch {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Symbol, e.g. BTCUSDT"));
+        let input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Symbol or asset, e.g. BTCUSDT"));
         let _sub = cx.subscribe_in(
             &input,
             window,
@@ -89,7 +98,7 @@ impl SymbolSearch {
         let mut this = Self {
             app,
             input,
-            source,
+            symbols,
             handle,
             assets,
             recent,
@@ -140,16 +149,20 @@ impl SymbolSearch {
             return;
         }
         self.searching = true;
-        let (source, q) = (self.source.clone(), query.clone());
-        let task = self
-            .handle
-            .spawn(async move { source.search_symbols(&q).await });
+        let (symbols, q) = (self.symbols.clone(), query.clone());
+        let t0 = std::time::Instant::now();
+        let task = self.handle.spawn(async move { symbols.search(&q).await });
         cx.spawn(async move |this, cx| {
             let result = task.await;
             this.update(cx, |this, cx| {
                 if this.query != query {
                     return; // a newer search is running
                 }
+                tracing::debug!(
+                    query = %query,
+                    ms = t0.elapsed().as_secs_f64() * 1e3,
+                    "symbol search"
+                );
                 this.searching = false;
                 match result {
                     Ok(Ok(rows)) => {
@@ -290,10 +303,31 @@ fn highlighted(text: String, needle: &str, accent: Hsla) -> StyledText {
     }))
 }
 
+/// A round logo of `size`, or a letter badge in `bg` until it is on disk.
+fn logo(assets: &AssetCache, code: &str, size: f32, bg: Hsla, fg: Hsla) -> AnyElement {
+    let initial = SharedString::from(code.chars().next().unwrap_or('?').to_string());
+    logo_or_badge(assets.logo(code), px(size), move || {
+        div()
+            .size(px(size))
+            .flex_none()
+            .rounded(px(R_FULL))
+            .bg(bg)
+            .flex()
+            .items_center()
+            .justify_center()
+            .text_size(px((size * 0.44).round()))
+            .font_weight(FontWeight::BOLD)
+            .text_color(fg)
+            .child(initial.clone())
+            .into_any_element()
+    })
+}
+
 impl SymbolSearch {
-    /// One result: logo (or initial badge), symbol and the pair's full name
-    /// ("Bitcoin / TetherUS", else "BASE / QUOTE") with the query
-    /// highlighted, SPOT tag, exchange.
+    /// One result, TradingView's: 36 px logo, the symbol (16 px) and the
+    /// pair's full name ("Bitcoin / TetherUS", else "BASE / QUOTE", 13 px)
+    /// with the query in blue, the "SPOT CRYPTO" badge, the exchange name
+    /// and its 24 px logo at the right.
     fn row(&self, i: usize, s: &SymbolInfo, cx: &mut Context<Self>) -> ListRow {
         let t = cx.ui();
         let (active, muted) = (hsla(t.active), hsla(t.text_muted));
@@ -302,23 +336,21 @@ impl SymbolSearch {
         } else {
             s.base.clone()
         };
-        let initial = SharedString::from(key.chars().next().unwrap_or('?').to_string());
-        let (bg, fg) = (hsla(badge_color(t, &key)), hsla(t.text_on_accent));
-        let badge = logo_or_badge(self.assets.logo(&key), px(BADGE), move || {
-            div()
-                .size(px(BADGE))
-                .flex_none()
-                .rounded(px(R_FULL))
-                .bg(bg)
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_size(px(TEXT_SMALL))
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(fg)
-                .child(initial.clone())
-                .into_any_element()
-        });
+        let on_badge = hsla(t.text_on_accent);
+        let badge = logo(
+            &self.assets,
+            &key,
+            LOGO_LG,
+            hsla(badge_color(t, &key)),
+            on_badge,
+        );
+        let exchange = logo(
+            &self.assets,
+            EXCHANGE_LOGO_ASSET,
+            LOGO_EXCHANGE,
+            rgb(EXCHANGE_COLOR).into(),
+            on_badge,
+        );
         let pair = self
             .assets
             .pair_name(&s.base, &s.quote)
@@ -329,23 +361,38 @@ impl SymbolSearch {
                 .child(highlighted(s.symbol.to_string(), &self.query, active));
         let secondary = h_flex()
             .gap(px(S1_5))
+            .items_center()
             .whitespace_nowrap()
-            .child(highlighted(pair, &self.query, active))
-            .child(Tag::new("SPOT"));
+            .child(
+                div()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .child(highlighted(pair, &self.query, active)),
+            )
+            .child(Tag::badge("spot crypto"));
         let info = s.clone();
         let this = cx.entity().downgrade();
         ListRow::new(("result", i))
-            .tall()
+            .large()
             .selected(self.nav.selected() == Some(i))
             .leading(badge)
             .primary_el(primary)
             .secondary_el(secondary)
             .trailing(
-                div()
+                h_flex()
                     .flex_none()
-                    .text_size(px(TEXT_SMALL))
-                    .text_color(muted)
-                    .child("Binance"),
+                    .pl(px(S6))
+                    .gap(px(S2))
+                    .items_center()
+                    .child(
+                        div()
+                            .text_size(px(TEXT_ROW_LG_SECONDARY))
+                            .line_height(px(LINE_ROW_LG_SECONDARY))
+                            .text_color(muted)
+                            .child(EXCHANGE),
+                    )
+                    .child(exchange),
             )
             .on_click(move |_, _, cx| {
                 this.update(cx, |this, cx| this.choose(info.clone(), cx))
@@ -356,19 +403,27 @@ impl SymbolSearch {
 
 impl Render for SymbolSearch {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let muted = hsla(cx.ui().text_muted);
         let rows: Vec<SymbolInfo> = self.rows().into_iter().cloned().collect();
 
         let this = cx.entity().downgrade();
-        let chips = h_flex()
+        let pills = h_flex()
             .flex_none()
-            .gap(px(S1))
+            .px(px(C_PAD_X))
+            .pt(px(PILL_GAP))
+            .pb(px(SS_PILLS_BOTTOM))
+            .gap(px(PILL_GAP))
             .children(QUOTES.iter().enumerate().map(|(i, q)| {
-                let this = this.clone();
-                Chip::new(("quote-chip", i), *q)
+                let (pick, clear) = (this.clone(), this.clone());
+                FilterPill::new(("quote-pill", i), *q)
                     .selected(i == self.quote)
                     .on_click(move |_, _, cx| {
-                        this.update(cx, |this, cx| this.set_quote(i, cx)).ok();
+                        pick.update(cx, |this, cx| this.set_quote(i, cx)).ok();
+                    })
+                    // Like TradingView's "Crypto ×": back to all quotes.
+                    .when(i > 0, |p| {
+                        p.on_clear(move |_, _, cx| {
+                            clear.update(cx, |this, cx| this.set_quote(0, cx)).ok();
+                        })
                     })
             }));
 
@@ -379,7 +434,7 @@ impl Render for SymbolSearch {
                 if self.query.is_empty() {
                     "Type a symbol or asset, e.g. BTC, ETHUSDT, SOL"
                 } else if self.searching || self.results_for != self.query {
-                    "Searching… (the first search loads the symbol list)"
+                    "Searching…"
                 } else {
                     "No symbols match your criteria"
                 }
@@ -403,6 +458,8 @@ impl Render for SymbolSearch {
                     .id("search-results")
                     .flex_1()
                     .min_h_0()
+                    .px(px(LIST_LG_INSET))
+                    .pb(px(S1_5))
                     .overflow_y_scroll()
                     .track_scroll(&self.nav.scroll)
                     .children(list_rows)
@@ -410,28 +467,37 @@ impl Render for SymbolSearch {
             }
         };
 
-        DialogFrame::new(DialogSize::Md).id("symbol-search").body(
-            v_flex()
-                .size_full()
-                .gap(px(S2))
-                .capture_key_down(cx.listener(|this, e: &KeyDownEvent, window, cx| {
-                    let k = &e.keystroke;
-                    if k.modifiers.control || k.modifiers.alt || k.modifiers.shift {
-                        return;
-                    }
-                    if this.nav_key(k.key.as_str(), window, cx) {
-                        cx.stop_propagation();
-                    }
-                }))
-                .child(
-                    Input::new(&self.input)
-                        .prefix(glyph(Glyph::SEARCH, ICON_SM).color(muted))
-                        .cleanable(true),
+        v_flex()
+            .id("symbol-search")
+            .w_full()
+            .h(px(SS_H_DIALOG))
+            .capture_key_down(cx.listener(|this, e: &KeyDownEvent, window, cx| {
+                let k = &e.keystroke;
+                if k.modifiers.control || k.modifiers.alt || k.modifiers.shift {
+                    return;
+                }
+                if this.nav_key(k.key.as_str(), window, cx) {
+                    cx.stop_propagation();
+                }
+            }))
+            .child(
+                div()
+                    .flex_none()
+                    .px(px(C_PAD_X))
+                    .pt(px(SS_PAD_TOP))
+                    .pb(px(SS_PAD_BOTTOM))
+                    .child(SearchField::header(&self.input)),
+            )
+            .child(pills)
+            .when(recent_header, |d| {
+                d.child(
+                    div()
+                        .flex_none()
+                        .px(px(LIST_LG_INSET))
+                        .child(SectionHeader::new("Recent")),
                 )
-                .child(chips)
-                .when(recent_header, |d| d.child(SectionHeader::new("Recent")))
-                .child(body),
-        )
+            })
+            .child(body)
     }
 }
 

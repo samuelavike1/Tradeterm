@@ -13,9 +13,8 @@ pub use parse::{
 use crate::MarketDataSource;
 use anyhow::{Context, Result, bail};
 use futures_util::{SinkExt, StreamExt};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
-use tokio::sync::OnceCell;
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, info, warn};
@@ -48,8 +47,12 @@ pub struct BinanceSource {
     http: reqwest::Client,
     rest_base: String,
     ws_base: String,
-    /// All trading symbols, downloaded once on first search (~6 MB).
-    symbols: Arc<OnceCell<Arc<Vec<SymbolInfo>>>>,
+    /// All trading symbols: installed from a cache ([`Self::set_symbols`])
+    /// or downloaded on the first search (~6 MB).
+    symbols: Arc<RwLock<Option<Arc<Vec<SymbolInfo>>>>>,
+    /// Held while the list downloads, so concurrent searches share one
+    /// download.
+    symbols_fetch: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl BinanceSource {
@@ -70,7 +73,8 @@ impl BinanceSource {
             http,
             rest_base: rest_base.into().trim_end_matches('/').to_owned(),
             ws_base: ws_base.into().trim_end_matches('/').to_owned(),
-            symbols: Arc::new(OnceCell::new()),
+            symbols: Arc::new(RwLock::new(None)),
+            symbols_fetch: Arc::new(tokio::sync::Mutex::new(())),
         })
     }
 
@@ -133,20 +137,45 @@ impl BinanceSource {
         with_status(status, parse_rest_klines(&body))
     }
 
-    /// Full list of trading symbols, fetched once and cached.
-    async fn all_symbols(&self) -> Result<Arc<Vec<SymbolInfo>>> {
+    /// Downloads the full list of trading symbols (`exchangeInfo`, ~6 MB).
+    /// Nothing is kept: install it with [`Self::set_symbols`].
+    pub async fn fetch_symbol_list(&self) -> Result<Vec<SymbolInfo>> {
+        let query = [("symbolStatus", "TRADING".to_owned())];
+        let (status, body) = self
+            .get("/api/v3/exchangeInfo", &query, SYMBOL_LIST_TIMEOUT)
+            .await?;
+        let list = with_status(status, parse_exchange_info(&body, true))?;
+        info!(symbols = list.len(), "symbol list downloaded");
+        Ok(list)
+    }
+
+    /// Installs a symbol list (from a disk cache or a refresh): searches and
+    /// symbol lookups use it instead of downloading.
+    pub fn set_symbols(&self, list: Arc<Vec<SymbolInfo>>) {
+        *self.symbols.write().unwrap_or_else(|e| e.into_inner()) = Some(list);
+    }
+
+    /// The symbol list in memory, if any.
+    pub fn symbols(&self) -> Option<Arc<Vec<SymbolInfo>>> {
         self.symbols
-            .get_or_try_init(|| async {
-                let query = [("symbolStatus", "TRADING".to_owned())];
-                let (status, body) = self
-                    .get("/api/v3/exchangeInfo", &query, SYMBOL_LIST_TIMEOUT)
-                    .await?;
-                let list = with_status(status, parse_exchange_info(&body, true))?;
-                info!(symbols = list.len(), "symbol list loaded");
-                Ok::<_, anyhow::Error>(Arc::new(list))
-            })
-            .await
-            .cloned()
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Full list of trading symbols: the installed one, else downloaded
+    /// (once, however many searches wait for it).
+    async fn all_symbols(&self) -> Result<Arc<Vec<SymbolInfo>>> {
+        if let Some(list) = self.symbols() {
+            return Ok(list);
+        }
+        let _guard = self.symbols_fetch.lock().await;
+        if let Some(list) = self.symbols() {
+            return Ok(list);
+        }
+        let list = Arc::new(self.fetch_symbol_list().await?);
+        self.set_symbols(list.clone());
+        Ok(list)
     }
 
     /// Up to `total` native bars ending before `before` (or the latest),
@@ -360,7 +389,7 @@ impl MarketDataSource for BinanceSource {
 
     async fn symbol_info(&self, symbol: &Symbol) -> Result<SymbolInfo> {
         // Use the cached list if a search already loaded it.
-        if let Some(all) = self.symbols.get()
+        if let Some(all) = self.symbols()
             && let Some(s) = all.iter().find(|s| s.symbol == *symbol)
         {
             return Ok(s.clone());

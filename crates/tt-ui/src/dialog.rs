@@ -127,6 +127,8 @@ pub struct DialogOpts {
     width: Option<f32>,
     live_width: Option<Rc<std::cell::Cell<f32>>>,
     rename: Option<(SharedString, RenameHandler)>,
+    bare: bool,
+    radius: Option<f32>,
 }
 
 impl DialogOpts {
@@ -140,6 +142,8 @@ impl DialogOpts {
             width: None,
             live_width: None,
             rename: None,
+            bare: false,
+            radius: None,
         }
     }
 
@@ -150,6 +154,21 @@ impl DialogOpts {
     /// [`DialogOpts::width`] says otherwise.
     pub fn comfortable(mut self) -> Self {
         self.comfortable = true;
+        self
+    }
+
+    /// No title row and no close button, no padding: the panel draws
+    /// everything (TradingView's symbol search, whose search field is its
+    /// header). Esc still closes. Radius `C_R_DIALOG` unless
+    /// [`DialogOpts::radius`] says otherwise.
+    pub fn bare(mut self) -> Self {
+        self.bare = true;
+        self
+    }
+
+    /// Surface radius of a comfortable or bare dialog.
+    pub fn radius(mut self, r: f32) -> Self {
+        self.radius = Some(r);
         self
     }
 
@@ -208,10 +227,13 @@ pub fn open_dialog<P: Render>(
         width,
         live_width,
         rename,
+        bare,
+        radius,
     } = opts;
+    let radius = px(radius.unwrap_or(C_R_DIALOG));
     let on_open = RefCell::new(on_open);
     let drag = DialogDrag::default();
-    let header = comfortable.then(|| {
+    let header = (comfortable && !bare).then(|| {
         let (shown, on_rename) = match rename {
             Some((cur, f)) => (Some(cur), Some(f)),
             None => (None, None),
@@ -230,11 +252,12 @@ pub fn open_dialog<P: Render>(
             f(window, cx);
         }
         let dialog = match &header {
+            _ if bare => dialog.close_button(false).p(px(0.)).rounded(radius),
             Some(h) => dialog
                 .title(h.clone())
                 .close_button(false)
                 .p(px(0.))
-                .rounded(px(C_R_DIALOG)),
+                .rounded(radius),
             None => dialog.title(drag.handle(div().w_full().child(title.clone()))),
         };
         let width = live_width.as_ref().map_or(width, |w| w.get());
