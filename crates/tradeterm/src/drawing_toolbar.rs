@@ -13,7 +13,7 @@ use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::*;
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::v_flex;
+use gpui_kit::component::{WindowExt as _, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use lucide_icons::Icon;
@@ -33,8 +33,9 @@ pub struct DrawMode {
     pub keep_drawing: bool,
     pub locked: bool,
     pub hidden: bool,
-    /// Tool shown on the Lines / Measure group buttons (last picked).
+    /// Tool shown on the Lines / Fib / Measure group buttons (last picked).
     pub line_tool: DrawingTool,
+    pub fib_tool: DrawingTool,
     pub measure_tool: DrawingTool,
 }
 
@@ -47,23 +48,72 @@ impl Default for DrawMode {
             locked: false,
             hidden: false,
             line_tool: DrawingTool::TrendLine,
+            fib_tool: DrawingTool::FibRetracement,
             measure_tool: DrawingTool::DateAndPriceRange,
         }
     }
 }
 
-/// Tool for a TradingView shortcut (`Alt + key`, `Alt + Shift + R`).
-pub fn shortcut_tool(key: &str, shift: bool) -> Option<DrawingTool> {
-    Some(match (key, shift) {
-        ("t", false) => DrawingTool::TrendLine,
-        ("h", false) => DrawingTool::HorizontalLine,
-        ("j", false) => DrawingTool::HorizontalRay,
-        ("v", false) => DrawingTool::VerticalLine,
-        ("c", false) => DrawingTool::CrossLine,
-        ("f", false) => DrawingTool::FibRetracement,
-        ("r", true) => DrawingTool::Rectangle,
+actions!(
+    drawing,
+    [
+        PickTrendLine,
+        PickHorizontalLine,
+        PickHorizontalRay,
+        PickVerticalLine,
+        PickCrossLine,
+        PickFibRetracement,
+        PickRectangle,
+    ]
+);
+
+/// TradingView's drawing shortcuts (`Alt + key`, `Alt + Shift + R`), bound
+/// in the app's key context so tooltips can show them.
+pub fn key_bindings() -> Vec<KeyBinding> {
+    let ctx = Some(crate::app::KEY_CONTEXT);
+    vec![
+        KeyBinding::new("alt-t", PickTrendLine, ctx),
+        KeyBinding::new("alt-h", PickHorizontalLine, ctx),
+        KeyBinding::new("alt-j", PickHorizontalRay, ctx),
+        KeyBinding::new("alt-v", PickVerticalLine, ctx),
+        KeyBinding::new("alt-c", PickCrossLine, ctx),
+        KeyBinding::new("alt-f", PickFibRetracement, ctx),
+        KeyBinding::new("alt-shift-r", PickRectangle, ctx),
+    ]
+}
+
+/// The action that picks `tool`, if it has a shortcut.
+pub fn pick_action(tool: DrawingTool) -> Option<Box<dyn Action>> {
+    Some(match tool {
+        DrawingTool::TrendLine => Box::new(PickTrendLine),
+        DrawingTool::HorizontalLine => Box::new(PickHorizontalLine),
+        DrawingTool::HorizontalRay => Box::new(PickHorizontalRay),
+        DrawingTool::VerticalLine => Box::new(PickVerticalLine),
+        DrawingTool::CrossLine => Box::new(PickCrossLine),
+        DrawingTool::FibRetracement => Box::new(PickFibRetracement),
+        DrawingTool::Rectangle => Box::new(PickRectangle),
         _ => return None,
     })
+}
+
+/// Registers the pick-tool action handlers on the app root.
+pub fn on_pick_actions(root: Stateful<Div>, cx: &mut Context<TradeTerm>) -> Stateful<Div> {
+    fn pick<A: Action>(
+        root: Stateful<Div>,
+        tool: DrawingTool,
+        cx: &mut Context<TradeTerm>,
+    ) -> Stateful<Div> {
+        root.on_action(
+            cx.listener(move |this, _: &A, window, cx| this.on_pick_shortcut(tool, window, cx)),
+        )
+    }
+    let root = pick::<PickTrendLine>(root, DrawingTool::TrendLine, cx);
+    let root = pick::<PickHorizontalLine>(root, DrawingTool::HorizontalLine, cx);
+    let root = pick::<PickHorizontalRay>(root, DrawingTool::HorizontalRay, cx);
+    let root = pick::<PickVerticalLine>(root, DrawingTool::VerticalLine, cx);
+    let root = pick::<PickCrossLine>(root, DrawingTool::CrossLine, cx);
+    let root = pick::<PickFibRetracement>(root, DrawingTool::FibRetracement, cx);
+    pick::<PickRectangle>(root, DrawingTool::Rectangle, cx)
 }
 
 impl TradeTerm {
@@ -73,12 +123,27 @@ impl TradeTerm {
         if let Some(t) = self.draw.tool {
             if DrawingTool::LINES.contains(&t) {
                 self.draw.line_tool = t;
+            } else if DrawingTool::FIB.contains(&t) {
+                self.draw.fib_tool = t;
             } else if DrawingTool::MEASURERS.contains(&t) {
                 self.draw.measure_tool = t;
             }
         }
         self.apply_draw_mode(cx);
         cx.notify();
+    }
+
+    /// A drawing shortcut: like the old key handler, only while the chart
+    /// area has the keyboard (no dialog, app root focused).
+    fn on_pick_shortcut(&mut self, tool: DrawingTool, window: &mut Window, cx: &mut Context<Self>) {
+        if window.has_active_dialog(cx)
+            || !self.focus.is_focused(window)
+            || self.tab_chart().is_none()
+        {
+            cx.propagate();
+            return;
+        }
+        self.pick_tool(Some(tool), cx);
     }
 
     /// Picks a tool (picking the active one again returns to the cursor).
@@ -160,7 +225,7 @@ impl TradeTerm {
         let m = self.draw;
         let count = self.drawing_count(cx);
 
-        let tool_button = |id: &'static str, icon: Icon, active: bool, tip: String| {
+        let tool_button = |id: &'static str, icon: Icon, active: bool, tip: Tip| {
             let (bg, fg) = (hsla(t.selection), hsla(t.text));
             div()
                 .id(id)
@@ -174,18 +239,15 @@ impl TradeTerm {
                 .when(active, |d| d.bg(bg).text_color(hsla(ACTIVE)))
                 .hover(move |d| d.bg(bg))
                 .child(lucide(icon, 19.))
-                .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+                .tooltip(move |window, cx| tip.build(window, cx))
         };
-        let tip = |tool: DrawingTool| match tool.shortcut() {
-            Some(k) => format!("{} ({k})", tool.label()),
-            None => tool.label().to_owned(),
-        };
+        let tip = |tool: DrawingTool| Tip::Tool(tool);
 
         let cursor = tool_button(
             "dt-cursor",
             Icon::Crosshair,
             m.tool.is_none(),
-            "Cross".into(),
+            Tip::Text("Cross"),
         )
         .on_click(cx.listener(|this, _, _, cx| this.pick_tool(None, cx)));
 
@@ -214,17 +276,7 @@ impl TradeTerm {
         };
 
         let lines = group("dt-lines", m.line_tool, &DrawingTool::LINES, "LINES", cx);
-        let fib = tool_button(
-            "dt-fib",
-            DrawingTool::FibRetracement.icon(),
-            m.tool == Some(DrawingTool::FibRetracement),
-            tip(DrawingTool::FibRetracement),
-        )
-        .on_click(cx.listener(|this, _, _, cx| {
-            let pick = (this.draw.tool != Some(DrawingTool::FibRetracement))
-                .then_some(DrawingTool::FibRetracement);
-            this.pick_tool(pick, cx)
-        }));
+        let fib = group("dt-fib", m.fib_tool, &DrawingTool::FIB, "FIBONACCI", cx);
         let rect = tool_button(
             "dt-rect",
             DrawingTool::Rectangle.icon(),
@@ -248,14 +300,14 @@ impl TradeTerm {
             "dt-magnet",
             Icon::Magnet,
             m.magnet,
-            "Magnet: snap to bar open / high / low / close".into(),
+            Tip::Text("Magnet: snap to bar open / high / low / close"),
         )
         .on_click(cx.listener(|this, _, _, cx| this.set_draw_mode(|m| m.magnet = !m.magnet, cx)));
         let keep = tool_button(
             "dt-keep",
             Icon::PencilLine,
             m.keep_drawing,
-            "Keep drawing".into(),
+            Tip::Text("Keep drawing"),
         )
         .on_click(cx.listener(|this, _, _, cx| {
             this.set_draw_mode(|m| m.keep_drawing = !m.keep_drawing, cx)
@@ -264,24 +316,22 @@ impl TradeTerm {
             "dt-lock",
             if m.locked { Icon::Lock } else { Icon::LockOpen },
             m.locked,
-            if m.locked {
+            Tip::Text(if m.locked {
                 "Unlock all drawings"
             } else {
                 "Lock all drawings"
-            }
-            .into(),
+            }),
         )
         .on_click(cx.listener(|this, _, _, cx| this.set_draw_mode(|m| m.locked = !m.locked, cx)));
         let hide = tool_button(
             "dt-hide",
             if m.hidden { Icon::EyeOff } else { Icon::Eye },
             m.hidden,
-            if m.hidden {
+            Tip::Text(if m.hidden {
                 "Show all drawings"
             } else {
                 "Hide all drawings"
-            }
-            .into(),
+            }),
         )
         .on_click(cx.listener(|this, _, _, cx| this.set_draw_mode(|m| m.hidden = !m.hidden, cx)));
 
@@ -346,6 +396,30 @@ impl TradeTerm {
             .child(hide)
             .child(sep())
             .child(remove)
+    }
+}
+
+/// A tool button tooltip: plain text, or a tool's label with its bound key
+/// as a Kbd chip (from the action, so it always matches the binding).
+#[derive(Clone, Copy)]
+enum Tip {
+    Text(&'static str),
+    Tool(DrawingTool),
+}
+
+impl Tip {
+    fn build(self, window: &mut Window, cx: &mut App) -> AnyView {
+        match self {
+            Tip::Text(t) => Tooltip::new(t).build(window, cx),
+            Tip::Tool(tool) => {
+                let tooltip = Tooltip::new(tool.label());
+                match pick_action(tool) {
+                    Some(a) => tooltip.action(a.as_ref(), Some(crate::app::KEY_CONTEXT)),
+                    None => tooltip,
+                }
+                .build(window, cx)
+            }
+        }
     }
 }
 

@@ -572,6 +572,9 @@ pub struct RangeProps {
     pub label_background: Fill,
     pub text_style: TextStyle,
     pub text: TextLayout,
+    /// Hue used instead of the line / background / label colors (keeping
+    /// their opacities) when a price-measuring range measures down.
+    pub down_color: Rgba,
 }
 
 impl Default for RangeProps {
@@ -598,6 +601,7 @@ impl Default for RangeProps {
             label_background: Fill::new(true, BLUE, 0.9),
             text_style: TextStyle::default(),
             text: TextLayout::default(),
+            down_color: Rgba::opaque(super::model::RED),
         }
     }
 }
