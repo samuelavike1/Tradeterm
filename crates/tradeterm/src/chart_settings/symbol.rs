@@ -1,5 +1,6 @@
 //! The Symbol page: the style block of the chart's current type (each type
-//! keeps its own values), then Data modification.
+//! keeps its own values), then Data modification. Rows and order follow
+//! TradingView's page for that type (docs/specs/chart-settings-tv-ref.md).
 
 use super::*;
 use tt_chart::style::{
@@ -68,67 +69,61 @@ impl ChartSettingsPanel {
             ChartType::Candles
             | ChartType::HollowCandles
             | ChartType::VolumeCandles
-            | ChartType::HeikinAshi => self.candle_block(&mut rows, t, window, cx),
-            ChartType::Bars => self.bars_block(&mut rows, window, cx),
+            | ChartType::HeikinAshi => self.candle_block(&mut rows, t, cx),
+            ChartType::Bars => self.bars_block(&mut rows, cx),
             ChartType::Line | ChartType::LineWithMarkers | ChartType::StepLine => {
-                self.line_block(&mut rows, t, window, cx)
+                self.line_block(&mut rows, t, cx)
             }
-            ChartType::Area => self.area_block(&mut rows, window, cx),
-            ChartType::HlcArea => self.hlc_area_block(&mut rows, window, cx),
+            ChartType::Area => self.area_block(&mut rows, cx),
+            ChartType::HlcArea => self.hlc_area_block(&mut rows, cx),
             ChartType::Baseline => self.baseline_block(&mut rows, window, cx),
-            ChartType::Columns => self.columns_block(&mut rows, window, cx),
-            ChartType::HighLow => self.high_low_block(&mut rows, window, cx),
+            ChartType::Columns => self.columns_block(&mut rows, cx),
+            ChartType::HighLow => self.high_low_block(&mut rows, cx),
             ChartType::Renko => {
-                self.brick_colors(&mut rows, Bricks::Renko, window, cx);
+                self.brick_colors(&mut rows, Bricks::Renko, cx);
                 self.renko_inputs(&mut rows, window, cx);
             }
             ChartType::LineBreak => {
-                self.brick_colors(&mut rows, Bricks::LineBreak, window, cx);
+                self.brick_colors(&mut rows, Bricks::LineBreak, cx);
                 let lines = self.number(
                     "lb.lines",
                     |s| s.symbol.line_break.lines as f64,
                     |s, v| s.symbol.line_break.lines = v.round() as u32,
                     1.0,
                     100.0,
-                    1.0,
+                    W_FIELD,
                     window,
                     cx,
                 );
-                rows.push(
-                    Self::row("Number of lines")
-                        .control(lines)
-                        .into_any_element(),
-                );
+                rows.push(Self::row("Number of lines").control(lines).into());
             }
         }
         self.data_modification(&mut rows, cx);
         rows
     }
 
+    /// "Price source" (`w`: TradingView's 150, 100 on Columns).
     fn source(
         &self,
         id: &str,
         current: PriceSource,
         set: impl Fn(&mut ChartStyle, PriceSource) + 'static,
+        w: f32,
         cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let sel = self.select(
-            format!("{id}.source"),
-            PriceSource::ALL.iter().map(|p| (*p, p.label())),
-            current,
-            set,
-            cx,
-        );
-        Self::row("Price source").control(sel).into_any_element()
+    ) -> Item {
+        let sel = self
+            .select(
+                format!("{id}.source"),
+                PriceSource::ALL.iter().map(|p| (*p, p.label())),
+                current,
+                set,
+                cx,
+            )
+            .width(w);
+        Self::row("Price source").control(sel).into()
     }
 
-    fn candle_block(
-        &mut self,
-        rows: &mut Rows,
-        t: ChartType,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn candle_block(&mut self, rows: &mut Rows, t: ChartType, cx: &mut Context<Self>) {
         let k = format!("{t:?}");
         let c = *self.draft.symbol.candle(t);
         if t != ChartType::HollowCandles {
@@ -140,7 +135,7 @@ impl ChartSettingsPanel {
                     move |s, v| s.symbol.candle_mut(t).color_by_prev_close = v,
                     cx,
                 )
-                .into_any_element(),
+                .into(),
             );
         }
         let body_up = move |s: &ChartStyle, th: &Theme| resolve(s.symbol.candle(t).body_up, th.up);
@@ -151,7 +146,6 @@ impl ChartSettingsPanel {
             move |s| s.symbol.candle(t).body_up,
             move |s, v| s.symbol.candle_mut(t).body_up = v,
             |_, th| th.up,
-            window,
             cx,
         );
         let down = self.color(
@@ -159,7 +153,6 @@ impl ChartSettingsPanel {
             move |s| s.symbol.candle(t).body_down,
             move |s, v| s.symbol.candle_mut(t).body_down = v,
             |_, th| th.down,
-            window,
             cx,
         );
         rows.push(
@@ -172,14 +165,13 @@ impl ChartSettingsPanel {
             )
             .control(up)
             .control(down)
-            .into_any_element(),
+            .into(),
         );
         let up = self.color(
             format!("{k}.border_up"),
             move |s| s.symbol.candle(t).border_up,
             move |s, v| s.symbol.candle_mut(t).border_up = v,
             body_up,
-            window,
             cx,
         );
         let down = self.color(
@@ -187,7 +179,6 @@ impl ChartSettingsPanel {
             move |s| s.symbol.candle(t).border_down,
             move |s, v| s.symbol.candle_mut(t).border_down = v,
             body_down,
-            window,
             cx,
         );
         rows.push(
@@ -200,14 +191,13 @@ impl ChartSettingsPanel {
             )
             .control(up)
             .control(down)
-            .into_any_element(),
+            .into(),
         );
         let up = self.color(
             format!("{k}.wick_up"),
             move |s| s.symbol.candle(t).wick_up,
             move |s, v| s.symbol.candle_mut(t).wick_up = v,
             |_, th| th.up_wick,
-            window,
             cx,
         );
         let down = self.color(
@@ -215,7 +205,6 @@ impl ChartSettingsPanel {
             move |s| s.symbol.candle(t).wick_down,
             move |s, v| s.symbol.candle_mut(t).wick_down = v,
             |_, th| th.down_wick,
-            window,
             cx,
         );
         rows.push(
@@ -228,11 +217,11 @@ impl ChartSettingsPanel {
             )
             .control(up)
             .control(down)
-            .into_any_element(),
+            .into(),
         );
     }
 
-    fn bars_block(&mut self, rows: &mut Rows, window: &mut Window, cx: &mut Context<Self>) {
+    fn bars_block(&mut self, rows: &mut Rows, cx: &mut Context<Self>) {
         rows.push(
             check!(
                 self,
@@ -241,130 +230,92 @@ impl ChartSettingsPanel {
                 "Color bars based on previous close",
                 symbol.bars.color_by_prev_close
             )
-            .into_any_element(),
+            .into(),
         );
-        rows.push(check!(self, cx, "bars.hlc", "HLC bars", symbol.bars.hlc).into_any_element());
-        rows.push(check!(self, cx, "bars.thin", "Thin bars", symbol.bars.thin).into_any_element());
-        let up = color!(self, window, cx, "bars.up", symbol.bars.up, |_, t| t.up);
-        rows.push(Self::row("Up color").control(up).into_any_element());
-        let down = color!(self, window, cx, "bars.down", symbol.bars.down, |_, t| t
-            .down);
-        rows.push(Self::row("Down color").control(down).into_any_element());
+        rows.push(check!(self, cx, "bars.hlc", "HLC bars", symbol.bars.hlc).into());
+        let up = color!(self, cx, "bars.up", symbol.bars.up, |_, t| t.up);
+        rows.push(Self::row("Up color").control(up).into());
+        let down = color!(self, cx, "bars.down", symbol.bars.down, |_, t| t.down);
+        rows.push(Self::row("Down color").control(down).into());
+        rows.push(check!(self, cx, "bars.thin", "Thin bars", symbol.bars.thin).into());
     }
 
-    fn line_block(
-        &mut self,
-        rows: &mut Rows,
-        t: ChartType,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn line_block(&mut self, rows: &mut Rows, t: ChartType, cx: &mut Context<Self>) {
         let k = format!("{t:?}");
         let l = *self.draft.symbol.line(t);
         rows.push(self.source(
             &k,
             l.source,
             move |s, v| s.symbol.line_mut(t).source = v,
+            W_SELECT,
             cx,
         ));
-        let color = self.color(
-            format!("{k}.color"),
+        let line = self.line(
+            format!("{k}.line"),
             move |s| s.symbol.line(t).color,
             move |s, v| s.symbol.line_mut(t).color = v,
             palette0,
-            window,
+            Some((l.width, Rc::new(move |s, v| s.symbol.line_mut(t).width = v))),
+            Some((l.kind, Rc::new(move |s, v| s.symbol.line_mut(t).kind = v))),
             cx,
         );
-        let width = self.width(
-            format!("{k}.width"),
-            l.width,
-            move |s, v| s.symbol.line_mut(t).width = v,
-            cx,
-        );
-        let kind = self.line_kind(
-            format!("{k}.kind"),
-            l.kind,
-            move |s, v| s.symbol.line_mut(t).kind = v,
-            cx,
-        );
-        rows.push(
-            Self::row("Line")
-                .control(color)
-                .control(width)
-                .control(kind)
-                .into_any_element(),
-        );
+        rows.push(Self::row("Line").control(line).into());
     }
 
-    fn area_block(&mut self, rows: &mut Rows, window: &mut Window, cx: &mut Context<Self>) {
+    fn area_block(&mut self, rows: &mut Rows, cx: &mut Context<Self>) {
         let a = self.draft.symbol.area;
-        rows.push(self.source("area", a.source, |s, v| s.symbol.area.source = v, cx));
-        let line = |s: &ChartStyle, t: &Theme| resolve(s.symbol.area.line, t.series_palette[0]);
-        let color = color!(self, window, cx, "area.line", symbol.area.line, palette0);
-        let width = self.width("area.width", a.width, |s, v| s.symbol.area.width = v, cx);
-        let kind = self.line_kind("area.kind", a.kind, |s, v| s.symbol.area.kind = v, cx);
-        rows.push(
-            Self::row("Line")
-                .control(color)
-                .control(width)
-                .control(kind)
-                .into_any_element(),
-        );
-        let top = color!(
-            self,
-            window,
+        rows.push(self.source(
+            "area",
+            a.source,
+            |s, v| s.symbol.area.source = v,
+            W_SELECT,
             cx,
-            "area.top",
-            symbol.area.fill_top,
-            move |s, t| { alpha(line(s, t), 0.28) }
+        ));
+        let line_color =
+            |s: &ChartStyle, t: &Theme| resolve(s.symbol.area.line, t.series_palette[0]);
+        let line = self.line(
+            "area.line",
+            |s| s.symbol.area.line,
+            |s, v| s.symbol.area.line = v,
+            palette0,
+            Some((a.width, Rc::new(|s, v| s.symbol.area.width = v))),
+            Some((a.kind, Rc::new(|s, v| s.symbol.area.kind = v))),
+            cx,
         );
+        rows.push(Self::row("Line").control(line).into());
+        let top = color!(self, cx, "area.top", symbol.area.fill_top, move |s, t| {
+            alpha(line_color(s, t), 0.28)
+        });
         let bottom = color!(
             self,
-            window,
             cx,
             "area.bottom",
             symbol.area.fill_bottom,
-            move |s, t| alpha(line(s, t), 0.0)
+            move |s, t| alpha(line_color(s, t), 0.0)
         );
-        rows.push(
-            Self::row("Fill")
-                .control(top)
-                .control(bottom)
-                .into_any_element(),
-        );
+        rows.push(Self::row("Fill").control(top).control(bottom).into());
     }
 
-    fn hlc_area_block(&mut self, rows: &mut Rows, window: &mut Window, cx: &mut Context<Self>) {
+    fn hlc_area_block(&mut self, rows: &mut Rows, cx: &mut Context<Self>) {
         let h = self.draft.symbol.hlc_area;
         macro_rules! stroke {
             ($label:literal, $key:literal, $field:ident, $token:expr) => {{
-                let color = color!(
-                    self,
-                    window,
-                    cx,
-                    concat!("hlc.", $key, ".color"),
-                    symbol.hlc_area.$field.color,
-                    $token
-                );
-                let width = self.width(
-                    concat!("hlc.", $key, ".width"),
-                    h.$field.width,
-                    |s, v| s.symbol.hlc_area.$field.width = v,
-                    cx,
-                );
-                let kind = self.line_kind(
-                    concat!("hlc.", $key, ".kind"),
-                    h.$field.kind,
-                    |s, v| s.symbol.hlc_area.$field.kind = v,
+                let line = self.line(
+                    concat!("hlc.", $key),
+                    |s| s.symbol.hlc_area.$field.color,
+                    |s, v| s.symbol.hlc_area.$field.color = v,
+                    $token,
+                    Some((
+                        h.$field.width,
+                        Rc::new(|s: &mut ChartStyle, v| s.symbol.hlc_area.$field.width = v),
+                    )),
+                    Some((
+                        h.$field.kind,
+                        Rc::new(|s: &mut ChartStyle, v| s.symbol.hlc_area.$field.kind = v),
+                    )),
                     cx,
                 );
-                rows.push(
-                    Self::row($label)
-                        .control(color)
-                        .control(width)
-                        .control(kind)
-                        .into_any_element(),
-                );
+                rows.push(Self::row($label).control(line).into());
             }};
         }
         stroke!("High line", "high", high, |_, t| t.up);
@@ -372,22 +323,19 @@ impl ChartSettingsPanel {
         stroke!("Close line", "close", close, |_, t| t.text_muted);
         let hc = color!(
             self,
-            window,
             cx,
             "hlc.fill_hc",
             symbol.hlc_area.fill_high_close,
             |_, t| alpha(t.up, 0.2)
         );
-        rows.push(Self::row("Fill high–close").control(hc).into_any_element());
         let cl = color!(
             self,
-            window,
             cx,
             "hlc.fill_cl",
             symbol.hlc_area.fill_close_low,
             |_, t| alpha(t.down, 0.2)
         );
-        rows.push(Self::row("Fill close–low").control(cl).into_any_element());
+        rows.push(Self::row("Fill").control(hc).control(cl).into());
     }
 
     fn baseline_block(&mut self, rows: &mut Rows, window: &mut Window, cx: &mut Context<Self>) {
@@ -396,76 +344,37 @@ impl ChartSettingsPanel {
             "baseline",
             b.source,
             |s, v| s.symbol.baseline.source = v,
+            W_SELECT,
             cx,
         ));
-        let level = self.number(
-            "baseline.level",
-            |s| s.symbol.baseline.level_pct as f64,
-            |s, v| s.symbol.baseline.level_pct = v as f32,
-            0.0,
-            100.0,
-            1.0,
-            window,
-            cx,
-        );
-        rows.push(
-            Self::row("Base level")
-                .control(level)
-                .unit("%")
-                .into_any_element(),
-        );
-        let base = color!(
-            self,
-            window,
-            cx,
-            "baseline.base",
-            symbol.baseline.base_color,
-            |_, t| t.text_muted
-        );
-        rows.push(Self::row("Baseline").control(base).into_any_element());
-        let top = color!(
-            self,
-            window,
-            cx,
+        let top = self.line(
             "baseline.top",
-            symbol.baseline.top_line,
-            |_, t| t.up
-        );
-        let top_w = self.width(
-            "baseline.top_w",
-            b.top_width,
-            |s, v| s.symbol.baseline.top_width = v,
+            |s| s.symbol.baseline.top_line,
+            |s, v| s.symbol.baseline.top_line = v,
+            |_, t| t.up,
+            Some((
+                b.top_width,
+                Rc::new(|s: &mut ChartStyle, v| s.symbol.baseline.top_width = v),
+            )),
+            None,
             cx,
         );
-        rows.push(
-            Self::row("Top line")
-                .control(top)
-                .control(top_w)
-                .into_any_element(),
-        );
-        let bottom = color!(
-            self,
-            window,
-            cx,
+        rows.push(Self::row("Top line").control(top).into());
+        let bottom = self.line(
             "baseline.bottom",
-            symbol.baseline.bottom_line,
-            |_, t| t.down
-        );
-        let bottom_w = self.width(
-            "baseline.bottom_w",
-            b.bottom_width,
-            |s, v| s.symbol.baseline.bottom_width = v,
+            |s| s.symbol.baseline.bottom_line,
+            |s, v| s.symbol.baseline.bottom_line = v,
+            |_, t| t.down,
+            Some((
+                b.bottom_width,
+                Rc::new(|s: &mut ChartStyle, v| s.symbol.baseline.bottom_width = v),
+            )),
+            None,
             cx,
         );
-        rows.push(
-            Self::row("Bottom line")
-                .control(bottom)
-                .control(bottom_w)
-                .into_any_element(),
-        );
+        rows.push(Self::row("Bottom line").control(bottom).into());
         let f1 = color!(
             self,
-            window,
             cx,
             "baseline.tf1",
             symbol.baseline.top_fill_1,
@@ -473,21 +382,14 @@ impl ChartSettingsPanel {
         );
         let f2 = color!(
             self,
-            window,
             cx,
             "baseline.tf2",
             symbol.baseline.top_fill_2,
             |_, t| alpha(t.up, 0.05)
         );
-        rows.push(
-            Self::row("Top fill area")
-                .control(f1)
-                .control(f2)
-                .into_any_element(),
-        );
+        rows.push(Self::row("Fill top area").control(f1).control(f2).into());
         let f1 = color!(
             self,
-            window,
             cx,
             "baseline.bf1",
             symbol.baseline.bottom_fill_1,
@@ -495,23 +397,42 @@ impl ChartSettingsPanel {
         );
         let f2 = color!(
             self,
-            window,
             cx,
             "baseline.bf2",
             symbol.baseline.bottom_fill_2,
             |_, t| alpha(t.down, 0.28)
         );
-        rows.push(
-            Self::row("Bottom fill area")
-                .control(f1)
-                .control(f2)
-                .into_any_element(),
+        rows.push(Self::row("Fill bottom area").control(f1).control(f2).into());
+        let level = self.number(
+            "baseline.level",
+            |s| s.symbol.baseline.level_pct as f64,
+            |s, v| s.symbol.baseline.level_pct = v as f32,
+            0.0,
+            100.0,
+            W_FIELD,
+            window,
+            cx,
         );
+        rows.push(Self::row("Base level").control(level).unit("%").into());
+        let base = color!(
+            self,
+            cx,
+            "baseline.base",
+            symbol.baseline.base_color,
+            |_, t| t.text_muted
+        );
+        rows.push(Self::row("Baseline").control(base).into());
     }
 
-    fn columns_block(&mut self, rows: &mut Rows, window: &mut Window, cx: &mut Context<Self>) {
+    fn columns_block(&mut self, rows: &mut Rows, cx: &mut Context<Self>) {
         let c = self.draft.symbol.columns;
-        rows.push(self.source("columns", c.source, |s, v| s.symbol.columns.source = v, cx));
+        rows.push(self.source(
+            "columns",
+            c.source,
+            |s, v| s.symbol.columns.source = v,
+            W_SELECT_SM,
+            cx,
+        ));
         rows.push(
             check!(
                 self,
@@ -520,62 +441,37 @@ impl ChartSettingsPanel {
                 "Color bars based on previous close",
                 symbol.columns.color_by_prev_close
             )
-            .into_any_element(),
+            .into(),
         );
-        let up = color!(self, window, cx, "columns.up", symbol.columns.up, |_, t| {
+        let up = color!(self, cx, "columns.up", symbol.columns.up, |_, t| {
             alpha(t.up, 0.5)
         });
-        rows.push(Self::row("Up color").control(up).into_any_element());
-        let down = color!(
-            self,
-            window,
-            cx,
-            "columns.down",
-            symbol.columns.down,
-            |_, t| { alpha(t.down, 0.5) }
-        );
-        rows.push(Self::row("Down color").control(down).into_any_element());
+        rows.push(Self::row("Up color").control(up).into());
+        let down = color!(self, cx, "columns.down", symbol.columns.down, |_, t| {
+            alpha(t.down, 0.5)
+        });
+        rows.push(Self::row("Down color").control(down).into());
     }
 
-    fn high_low_block(&mut self, rows: &mut Rows, window: &mut Window, cx: &mut Context<Self>) {
-        let body = color!(self, window, cx, "hl.body", symbol.high_low.body, palette0);
-        rows.push(Self::row("Body").control(body).into_any_element());
-        let border = color!(
-            self,
-            window,
-            cx,
-            "hl.border",
-            symbol.high_low.border,
-            palette0
-        );
+    fn high_low_block(&mut self, rows: &mut Rows, cx: &mut Context<Self>) {
+        let body = color!(self, cx, "hl.body", symbol.high_low.body, palette0);
+        rows.push(Self::row("Body").control(body).into());
+        let border = color!(self, cx, "hl.border", symbol.high_low.border, palette0);
         rows.push(
             check!(self, cx, "hl.borders", "Borders", symbol.high_low.borders)
                 .control(border)
-                .into_any_element(),
+                .into(),
         );
-        let label = color!(
-            self,
-            window,
-            cx,
-            "hl.label",
-            symbol.high_low.label,
-            palette0
-        );
+        let label = color!(self, cx, "hl.label", symbol.high_low.label, palette0);
         rows.push(
             check!(self, cx, "hl.labels", "Labels", symbol.high_low.labels)
                 .control(label)
-                .into_any_element(),
+                .into(),
         );
     }
 
     /// Up / down / projection colors with their borders (Renko, Line break).
-    fn brick_colors(
-        &mut self,
-        rows: &mut Rows,
-        b: Bricks,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn brick_colors(&mut self, rows: &mut Rows, b: Bricks, cx: &mut Context<Self>) {
         let k = b.key();
         type Get = fn(&BrickColors) -> ColorSlot;
         type Set = fn(&mut BrickColors, ColorSlot);
@@ -644,7 +540,6 @@ impl ChartSettingsPanel {
                 move |s| get(b.get(s)),
                 move |s, v| set(b.get_mut(s), v),
                 move |s, t| def(b, s, t),
-                window,
                 cx,
             );
             let border = self.color(
@@ -652,61 +547,52 @@ impl ChartSettingsPanel {
                 move |s| bget(b.get(s)),
                 move |s, v| bset(b.get_mut(s), v),
                 move |s, t| bdef(b, s, t),
-                window,
                 cx,
             );
-            rows.push(
-                Self::row(label)
-                    .control(fill)
-                    .control(border)
-                    .into_any_element(),
-            );
+            rows.push(Self::row(label).control(fill).control(border).into());
         }
     }
 
     fn renko_inputs(&mut self, rows: &mut Rows, window: &mut Window, cx: &mut Context<Self>) {
-        let up = color!(
-            self,
-            window,
-            cx,
-            "renko.wick_up",
-            symbol.renko.wick_up,
-            |_, t| t.up_wick
-        );
+        let up = color!(self, cx, "renko.wick_up", symbol.renko.wick_up, |_, t| t
+            .up_wick);
         let down = color!(
             self,
-            window,
             cx,
             "renko.wick_down",
             symbol.renko.wick_down,
-            |_, t| { t.down_wick }
+            |_, t| t.down_wick
         );
         rows.push(
-            check!(self, cx, "renko.wicks", "Wicks", symbol.renko.inputs.wicks)
+            check!(self, cx, "renko.wicks", "Wick", symbol.renko.inputs.wicks)
                 .control(up)
                 .control(down)
-                .into_any_element(),
+                .into(),
         );
         let i = self.draft.symbol.renko.inputs;
-        let source = self.select(
-            "renko.source",
-            BrickSource::ALL.iter().map(|v| (*v, v.label())),
-            i.source,
-            |s, v| s.symbol.renko.inputs.source = v,
-            cx,
-        );
-        rows.push(Self::row("Source").control(source).into_any_element());
-        let method = self.select(
-            "renko.method",
-            BoxMethod::ALL.iter().map(|v| (*v, v.label())),
-            i.method,
-            |s, v| s.symbol.renko.inputs.method = v,
-            cx,
-        );
+        let source = self
+            .select(
+                "renko.source",
+                BrickSource::ALL.iter().map(|v| (*v, v.label())),
+                i.source,
+                |s, v| s.symbol.renko.inputs.source = v,
+                cx,
+            )
+            .width(W_SELECT_SM);
+        rows.push(Self::row("Source").control(source).into());
+        let method = self
+            .select(
+                "renko.method",
+                BoxMethod::ALL.iter().map(|v| (*v, v.label())),
+                i.method,
+                |s, v| s.symbol.renko.inputs.method = v,
+                cx,
+            )
+            .width(W_SELECT);
         rows.push(
             Self::row("Box size assignment method")
                 .control(method)
-                .into_any_element(),
+                .into(),
         );
         let row = match i.method {
             BoxMethod::Atr => {
@@ -716,7 +602,7 @@ impl ChartSettingsPanel {
                     |s, v| s.symbol.renko.inputs.atr_length = v.round().max(1.0) as u32,
                     1.0,
                     500.0,
-                    1.0,
+                    W_FIELD,
                     window,
                     cx,
                 );
@@ -729,7 +615,7 @@ impl ChartSettingsPanel {
                     |s, v| s.symbol.renko.inputs.box_size = v,
                     0.000_000_01,
                     1e12,
-                    1.0,
+                    W_FIELD,
                     window,
                     cx,
                 );
@@ -742,14 +628,14 @@ impl ChartSettingsPanel {
                     |s, v| s.symbol.renko.inputs.percent = v,
                     0.001,
                     100.0,
-                    0.1,
+                    W_FIELD,
                     window,
                     cx,
                 );
                 Self::row("Percentage").control(n).unit("%")
             }
         };
-        rows.push(row.indent().into_any_element());
+        rows.push(row.into());
     }
 
     fn data_modification(&self, rows: &mut Rows, cx: &mut Context<Self>) {
@@ -767,14 +653,16 @@ impl ChartSettingsPanel {
         if let Precision::Fraction(f) = d.precision {
             precision.push((d.precision, format!("1/{f}")));
         }
-        let sel = self.select(
-            "data.precision",
-            precision,
-            d.precision,
-            |s, v| s.symbol.data.precision = v,
-            cx,
-        );
-        rows.push(Self::row("Precision").control(sel).into_any_element());
+        let sel = self
+            .select(
+                "data.precision",
+                precision,
+                d.precision,
+                |s, v| s.symbol.data.precision = v,
+                cx,
+            )
+            .width(W_SELECT);
+        rows.push(Self::row("Precision").control(sel).into());
         // Exchange, UTC, Local and TradingView's zones, with current offsets.
         // (Binance is the only venue: its exchange zone is UTC.)
         let mut zones = tt_session::tz::choices(Some("UTC"), crate::source::now_ms());
@@ -791,7 +679,7 @@ impl ChartSettingsPanel {
                 |s, v| s.symbol.data.time_zone = v,
                 cx,
             )
-            .width(W_SELECT_WIDE);
-        rows.push(Self::row("Time zone").control(sel).into_any_element());
+            .width(W_SELECT);
+        rows.push(Self::row("Timezone").control(sel).into());
     }
 }

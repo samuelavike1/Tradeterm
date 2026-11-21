@@ -534,6 +534,8 @@ fn segmented(
 pub struct LinePicker {
     id: ElementId,
     value: LineValue,
+    thickness: bool,
+    style: bool,
     on_change: Option<LineHandler>,
 }
 
@@ -542,12 +544,26 @@ impl LinePicker {
         Self {
             id: id.into(),
             value,
+            thickness: true,
+            style: true,
             on_change: None,
         }
     }
 
     pub fn on_change(mut self, f: impl Fn(LineValue, &mut Window, &mut App) + 'static) -> Self {
         self.on_change = Some(Rc::new(f));
+        self
+    }
+
+    /// No "Thickness" section (lines whose width is fixed: grid lines).
+    pub fn no_thickness(mut self) -> Self {
+        self.thickness = false;
+        self
+    }
+
+    /// No "Line style" section (lines that are always solid: price lines).
+    pub fn no_style(mut self) -> Self {
+        self.style = false;
         self
     }
 }
@@ -580,6 +596,7 @@ impl RenderOnce for LinePicker {
                 .child(line_preview(30.0, v.width as f32, v.dash, v.color)),
         );
         let (id, f) = (self.id.clone(), self.on_change);
+        let (thickness, style) = (self.thickness, self.style);
         picker_popover(self.id, trigger, move |_, cx| {
             let t = cx.ui().clone();
             let emit = {
@@ -633,11 +650,17 @@ impl RenderOnce for LinePicker {
                     ColorPalette::new(child_id(&id, "palette"), v.color)
                         .on_change(move |c, w, cx| e(LineValue { color: c, ..v }, w, cx)),
                 )
-                .child(div().h(px(1.0)).bg(hsla(t.border)))
-                .child(section("Thickness"))
-                .child(segmented(&id, "width", widths, &t))
-                .child(section("Line style"))
-                .child(segmented(&id, "dash", dashes, &t))
+                .when(thickness || style, |d| {
+                    d.child(div().h(px(1.0)).bg(hsla(t.border)))
+                })
+                .when(thickness, |d| {
+                    d.child(section("Thickness"))
+                        .child(segmented(&id, "width", widths, &t))
+                })
+                .when(style, |d| {
+                    d.child(section("Line style"))
+                        .child(segmented(&id, "dash", dashes, &t))
+                })
                 .into_any_element()
         })
     }

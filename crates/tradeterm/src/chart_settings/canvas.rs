@@ -1,5 +1,5 @@
 //! The Canvas page: background, grid, separators, crosshair, watermark,
-//! scales text, buttons and margins.
+//! scales text, buttons and margins (TradingView's order).
 
 use super::*;
 use tt_chart::style::{BackgroundKind, ButtonsVisibility, GridLines, resolve};
@@ -20,13 +20,12 @@ impl ChartSettingsPanel {
                 |s, v| s.canvas.background_kind = v,
                 cx,
             )
-            .width(W_SELECT_SM);
-        let bg = color!(self, window, cx, "cv.bg", canvas.background, |_, t| t.bg);
-        let mut row = Self::row("Background").control(bg);
+            .width(W_SELECT);
+        let bg = color!(self, cx, "cv.bg", canvas.background, |_, t| t.bg);
+        let mut row = Self::row("Background").control(kind).control(bg);
         if cv.background_kind == BackgroundKind::Gradient {
             let bottom = color!(
                 self,
-                window,
                 cx,
                 "cv.bg_bottom",
                 canvas.background_bottom,
@@ -34,137 +33,103 @@ impl ChartSettingsPanel {
             );
             row = row.control(bottom);
         }
-        let row = row.control(kind);
-        rows.push(row.into_any_element());
+        rows.push(row.into());
 
-        let grid = self.select(
-            "cv.grid",
-            GridLines::ALL.iter().map(|v| (*v, v.label())),
-            cv.grid_lines,
-            |s, v| s.canvas.grid_lines = v,
-            cx,
-        );
-        rows.push(Self::row("Grid lines").control(grid).into_any_element());
-        if cv.grid_lines.vertical() {
-            let color = color!(
-                self,
-                window,
-                cx,
-                "cv.grid_v",
-                canvas.grid_v_color,
-                |_, t| t.grid
-            );
-            let kind = self.line_kind(
-                "cv.grid_v_kind",
+        // Grid: one checkbox per direction (GridLines), each with its line.
+        let v_line = self.line(
+            "cv.grid_v",
+            |s| s.canvas.grid_v_color,
+            |s, v| s.canvas.grid_v_color = v,
+            |_, t| t.grid,
+            None,
+            Some((
                 cv.grid_v_kind,
-                |s, v| s.canvas.grid_v_kind = v,
-                cx,
-            );
-            rows.push(
-                Self::row("Vert grid lines")
-                    .indent()
-                    .control(color)
-                    .control(kind)
-                    .into_any_element(),
-            );
-        }
-        if cv.grid_lines.horizontal() {
-            let color = color!(
-                self,
-                window,
-                cx,
-                "cv.grid_h",
-                canvas.grid_h_color,
-                |_, t| t.grid
-            );
-            let kind = self.line_kind(
-                "cv.grid_h_kind",
-                cv.grid_h_kind,
-                |s, v| s.canvas.grid_h_kind = v,
-                cx,
-            );
-            rows.push(
-                Self::row("Horz grid lines")
-                    .indent()
-                    .control(color)
-                    .control(kind)
-                    .into_any_element(),
-            );
-        }
-        let sep = color!(
-            self,
-            window,
-            cx,
-            "cv.separators",
-            canvas.separators,
-            |_, t| t.border
-        );
-        rows.push(Self::row("Pane separators").control(sep).into_any_element());
-
-        let color = color!(
-            self,
-            window,
-            cx,
-            "cv.crosshair",
-            canvas.crosshair,
-            |_, t| t.crosshair
-        );
-        let width = self.width(
-            "cv.crosshair_w",
-            cv.crosshair_width,
-            |s, v| s.canvas.crosshair_width = v,
-            cx,
-        );
-        let kind = self.line_kind(
-            "cv.crosshair_kind",
-            cv.crosshair_kind,
-            |s, v| s.canvas.crosshair_kind = v,
+                Rc::new(|s: &mut ChartStyle, v| s.canvas.grid_v_kind = v),
+            )),
             cx,
         );
         rows.push(
-            Self::row("Crosshair")
-                .control(color)
-                .control(width)
-                .control(kind)
-                .into_any_element(),
+            self.check(
+                "cv.grid_v_on",
+                "Vertical grid lines",
+                cv.grid_lines.vertical(),
+                |s, v| {
+                    s.canvas.grid_lines = GridLines::from_flags(v, s.canvas.grid_lines.horizontal())
+                },
+                cx,
+            )
+            .control(v_line)
+            .into(),
         );
-
-        let wm = color!(
-            self,
-            window,
+        let h_line = self.line(
+            "cv.grid_h",
+            |s| s.canvas.grid_h_color,
+            |s, v| s.canvas.grid_h_color = v,
+            |_, t| t.grid,
+            None,
+            Some((
+                cv.grid_h_kind,
+                Rc::new(|s: &mut ChartStyle, v| s.canvas.grid_h_kind = v),
+            )),
             cx,
-            "cv.watermark",
-            canvas.watermark.color,
-            |_, t| { alpha(t.text, 0.06) }
         );
+        rows.push(
+            self.check(
+                "cv.grid_h_on",
+                "Horizontal grid lines",
+                cv.grid_lines.horizontal(),
+                |s, v| {
+                    s.canvas.grid_lines = GridLines::from_flags(s.canvas.grid_lines.vertical(), v)
+                },
+                cx,
+            )
+            .control(h_line)
+            .into(),
+        );
+        let sep = color!(self, cx, "cv.separators", canvas.separators, |_, t| t
+            .border);
+        rows.push(Self::row("Pane separators").control(sep).into());
+
+        let crosshair = self.line(
+            "cv.crosshair",
+            |s| s.canvas.crosshair,
+            |s, v| s.canvas.crosshair = v,
+            |_, t| t.crosshair,
+            Some((
+                cv.crosshair_width,
+                Rc::new(|s: &mut ChartStyle, v| s.canvas.crosshair_width = v),
+            )),
+            Some((
+                cv.crosshair_kind,
+                Rc::new(|s: &mut ChartStyle, v| s.canvas.crosshair_kind = v),
+            )),
+            cx,
+        );
+        rows.push(Self::row("Crosshair").control(crosshair).into());
+
+        let wm = color!(self, cx, "cv.watermark", canvas.watermark.color, |_, t| {
+            alpha(t.text, 0.06)
+        });
         rows.push(
             check!(self, cx, "cv.wm", "Watermark", canvas.watermark.visible)
                 .control(wm)
-                .into_any_element(),
+                .into(),
         );
         if cv.watermark.visible {
-            rows.push(
-                check!(
-                    self,
-                    cx,
-                    "cv.wm_ticker",
-                    "Ticker and interval",
-                    canvas.watermark.ticker_interval
-                )
-                .indent()
-                .into_any_element(),
-            );
-            rows.push(
-                check!(
-                    self,
-                    cx,
-                    "cv.wm_desc",
-                    "Description",
-                    canvas.watermark.description
-                )
-                .indent()
-                .into_any_element(),
-            );
+            rows.push(self.sub_check(
+                "cv.wm_ticker",
+                "Ticker and interval",
+                cv.watermark.ticker_interval,
+                |s, v| s.canvas.watermark.ticker_interval = v,
+                cx,
+            ));
+            rows.push(self.sub_check(
+                "cv.wm_desc",
+                "Description",
+                cv.watermark.description,
+                |s, v| s.canvas.watermark.description = v,
+                cx,
+            ));
         }
 
         rows.push(section("Scales"));
@@ -175,14 +140,8 @@ impl ChartSettingsPanel {
             sizes.push(size);
             sizes.sort_by(f32::total_cmp);
         }
-        let text = color!(
-            self,
-            window,
-            cx,
-            "cv.scale_text",
-            canvas.scale_text,
-            |_, t| t.text_muted
-        );
+        let text = color!(self, cx, "cv.scale_text", canvas.scale_text, |_, t| t
+            .text_muted);
         let size_sel = self
             .select(
                 "cv.text_size",
@@ -191,22 +150,11 @@ impl ChartSettingsPanel {
                 |s, v| s.scales.text_size = v,
                 cx,
             )
-            .width(W_SELECT_XS);
-        rows.push(
-            Self::row("Text")
-                .control(text)
-                .control(size_sel)
-                .into_any_element(),
-        );
-        let lines = color!(
-            self,
-            window,
-            cx,
-            "cv.scale_lines",
-            canvas.scale_lines,
-            |_, t| t.border
-        );
-        rows.push(Self::row("Lines").control(lines).into_any_element());
+            .width(W_SELECT_SM);
+        rows.push(Self::row("Text").control(text).control(size_sel).into());
+        let lines = color!(self, cx, "cv.scale_lines", canvas.scale_lines, |_, t| t
+            .border);
+        rows.push(Self::row("Lines").control(lines).into());
 
         rows.push(section("Buttons"));
         // Navigation buttons: hidden until the chart has them (BACKLOG.md).
@@ -218,8 +166,8 @@ impl ChartSettingsPanel {
                 |s, v| s.canvas.pane_buttons = v,
                 cx,
             )
-            .width(W_SELECT_WIDE);
-        rows.push(Self::row("Pane").control(pane).into_any_element());
+            .width(W_SELECT_LG);
+        rows.push(Self::row("Pane").control(pane).into());
 
         rows.push(section("Margins"));
         let top = self.number(
@@ -228,43 +176,33 @@ impl ChartSettingsPanel {
             |s, v| s.canvas.margins.top = v as f32,
             0.0,
             40.0,
-            1.0,
+            W_FIELD_SM,
             window,
             cx,
         );
-        rows.push(Self::row("Top").control(top).unit("%").into_any_element());
+        rows.push(Self::row("Top").control(top).unit("%").into());
         let bottom = self.number(
             "cv.margin_bottom",
             |s| s.canvas.margins.bottom as f64,
             |s, v| s.canvas.margins.bottom = v as f32,
             0.0,
             40.0,
-            1.0,
+            W_FIELD_SM,
             window,
             cx,
         );
-        rows.push(
-            Self::row("Bottom")
-                .control(bottom)
-                .unit("%")
-                .into_any_element(),
-        );
+        rows.push(Self::row("Bottom").control(bottom).unit("%").into());
         let right = self.number(
             "cv.margin_right",
             |s| s.canvas.margins.right as f64,
             |s, v| s.canvas.margins.right = v as f32,
             0.0,
             100.0,
-            1.0,
+            W_FIELD_SM,
             window,
             cx,
         );
-        rows.push(
-            Self::row("Right")
-                .control(right)
-                .unit("bars")
-                .into_any_element(),
-        );
+        rows.push(Self::row("Right").control(right).unit("bars").into());
         rows
     }
 }

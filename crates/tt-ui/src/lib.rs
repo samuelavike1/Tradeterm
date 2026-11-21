@@ -21,6 +21,7 @@ pub mod menu;
 pub mod motion;
 pub mod overlay;
 pub mod picker;
+pub mod side_nav;
 pub mod slider;
 pub mod theme;
 pub mod tokens;
@@ -43,6 +44,7 @@ pub use picker::{
     LineStyleButton, LineValue, LineWidthButton, TV_PALETTE, TextStyleBar, TextStyleValue,
     ToggleSquare, line_preview,
 };
+pub use side_nav::{SectionTitle, SideNavFrame, sub_row};
 pub use slider::{RangeField, RangeSlider};
 pub use theme::{ActiveUiTheme, UiTheme, hsla};
 pub use tooltip::{format_keys, kbd, tip, tip_action};

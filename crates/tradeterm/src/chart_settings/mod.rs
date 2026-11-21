@@ -1,7 +1,14 @@
-//! Chart "Settings" dialog, TradingView-style: a left nav (Symbol, Status
+//! Chart "Settings" dialog, laid out like TradingView's
+//! (docs/specs/chart-settings-tv-ref.md): the comfortable density
+//! (ui-guidelines §2.10), a 236 px left nav with icons (Symbol, Status
 //! line, Scales and lines, Canvas) and rows of options for **one chart**
 //! (the tab it was opened on). Every field of `ChartStyle` v2 that applies
 //! to crypto charts has a row.
+//!
+//! Rows: checkbox + label, then the controls (`ColorSwatchButton`,
+//! `LinePicker`, comfortable `Select` / `CheckSelect`, `Field`); each page
+//! has one label column as wide as its widest label (+ 20), like
+//! TradingView's table; a lone checkbox spans the row.
 //!
 //! Changes preview live on that chart; Ok keeps them for the tab, Cancel / ×
 //! / Esc restore the previous settings. The footer has the Template ▾ menu
@@ -13,7 +20,6 @@
 
 use crate::app::TradeTerm;
 use ecolor::Color32;
-use gpui_kit::component::color_picker::{ColorPickerEvent, ColorPickerState};
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::{WindowExt as _, v_flex};
 use gpui_kit::*;
@@ -23,17 +29,20 @@ use tt_chart::style::LineKind;
 use tt_chart::{ChartStyle, ChartType, ColorSlot};
 use tt_theme::Theme;
 use tt_ui::prelude::*;
-use tt_ui::{DialogFooter, DialogOpts, DialogSize, TemplateMenu, hsla};
+use tt_ui::side_nav::{C_SUB_INDENT, C_W_SETTINGS_DIALOG};
+use tt_ui::tokens::{C_CHECKBOX, C_CONTROL, C_GAP, C_LABEL_GAP, C_R_CONTROL, TEXT_BODY};
+use tt_ui::{
+    DialogFooter, DialogOpts, DialogSize, SectionTitle, SideNavFrame, TemplateMenu, hsla, sub_row,
+};
 
-/// A color row control for the style field at `path` (get and set).
+/// A color swatch for the style field at `path` (get and set).
 macro_rules! color {
-    ($this:ident, $w:ident, $cx:ident, $id:expr, $($path:ident).+, $default:expr) => {
+    ($this:ident, $cx:ident, $id:expr, $($path:ident).+, $default:expr) => {
         $this.color(
             $id,
             move |s: &ChartStyle| s.$($path).+,
             move |s: &mut ChartStyle, v: ColorSlot| s.$($path).+ = v,
             $default,
-            $w,
             $cx,
         )
     };
@@ -58,12 +67,14 @@ mod status_line;
 mod symbol;
 mod templates;
 
-const SIZE: DialogSize = DialogSize::Lg;
-/// Narrow selects inside multi-control rows (width, line style).
-const W_SELECT_XS: f32 = 76.0;
-const W_SELECT_SM: f32 = 104.0;
-/// Selects with long option labels ("Visible on mouse over").
-const W_SELECT_WIDE: f32 = tokens::W_FIELD_SELECT + tokens::S6 * 2.0;
+/// TradingView's select widths (default / normal / big).
+const W_SELECT_SM: f32 = 100.0;
+const W_SELECT: f32 = 150.0;
+const W_SELECT_LG: f32 = 180.0;
+/// Number fields: margins (100) and the wider ones (lock ratio, base
+/// level, box sizes: 150).
+const W_FIELD_SM: f32 = 100.0;
+const W_FIELD: f32 = 150.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Page {
@@ -112,12 +123,6 @@ impl Page {
 type Effective = Rc<dyn Fn(&ChartStyle, &Theme) -> Color32>;
 type NumGet = Rc<dyn Fn(&ChartStyle) -> f64>;
 
-struct ColorEntry {
-    state: Entity<ColorPickerState>,
-    effective: Effective,
-    _sub: Subscription,
-}
-
 struct NumberEntry {
     state: Entity<InputState>,
     get: NumGet,
@@ -137,7 +142,6 @@ pub struct ChartSettingsPanel {
     draft: ChartStyle,
     page: Page,
     /// Created on first render of their row, keyed by field id.
-    colors: HashMap<SharedString, ColorEntry>,
     numbers: HashMap<SharedString, NumberEntry>,
     committed: bool,
     _subs: Vec<Subscription>,
@@ -171,7 +175,6 @@ impl ChartSettingsPanel {
             original,
             draft: style,
             page,
-            colors: HashMap::new(),
             numbers: HashMap::new(),
             committed: false,
             _subs: vec![release],
@@ -190,6 +193,7 @@ impl ChartSettingsPanel {
         });
         let (p1, p2, p3) = (panel.clone(), panel.downgrade(), panel.downgrade());
         let footer = DialogFooter::new()
+            .comfortable()
             .template(TemplateMenu::build(move |menu, _, cx| {
                 templates::menu(&p1, menu, cx)
             }))
@@ -206,7 +210,10 @@ impl ChartSettingsPanel {
         tt_ui::open_dialog(
             window,
             cx,
-            DialogOpts::new("Settings", SIZE).footer(footer),
+            DialogOpts::new("Settings", DialogSize::Lg)
+                .comfortable()
+                .width(C_W_SETTINGS_DIALOG)
+                .footer(footer),
             panel,
         );
     }
@@ -227,7 +234,7 @@ impl ChartSettingsPanel {
     }
 
     /// Replaces the whole draft (template, defaults) and refreshes every
-    /// field that keeps its own state (color pickers, number inputs).
+    /// field that keeps its own state (number inputs).
     pub(crate) fn replace_draft(
         &mut self,
         style: ChartStyle,
@@ -235,11 +242,6 @@ impl ChartSettingsPanel {
         cx: &mut Context<Self>,
     ) {
         self.draft = style;
-        let theme = self.draft.theme(&self.base);
-        for e in self.colors.values() {
-            let v = hsla((e.effective)(&self.draft, &theme));
-            e.state.update(cx, |p, cx| p.set_value(v, window, cx));
-        }
         for e in self.numbers.values() {
             let v = fmt_number((e.get)(&self.draft));
             e.state.update(cx, |s, cx| s.set_value(v, window, cx));
@@ -278,13 +280,25 @@ impl ChartSettingsPanel {
             .ok();
     }
 
-    // ---- row helpers -------------------------------------------------------
-
-    fn row(label: impl Into<SharedString>) -> FormRow {
-        FormRow::new(label).label_width(SIZE.label_width())
+    /// The draft's palette (theme tokens with its overrides).
+    fn theme(&self) -> Theme {
+        self.draft.theme(&self.base)
     }
 
-    /// A checkbox row.
+    // ---- row helpers -------------------------------------------------------
+
+    /// A labelled row.
+    fn row(label: impl Into<SharedString>) -> Line {
+        let label = label.into();
+        Line {
+            label: label.clone(),
+            check: false,
+            controls: false,
+            row: FormRow::new(label).comfortable(),
+        }
+    }
+
+    /// A checkbox row (spans the row while it has no controls).
     fn check(
         &self,
         id: impl Into<SharedString>,
@@ -292,15 +306,42 @@ impl ChartSettingsPanel {
         value: bool,
         set: impl Fn(&mut ChartStyle, bool) + 'static,
         cx: &mut Context<Self>,
-    ) -> FormRow {
+    ) -> Line {
+        let label = label.into();
         let this = cx.entity().downgrade();
-        FormRow::check(ElementId::Name(id.into()), label, value, move |v, _, cx| {
-            this.update(cx, |p, cx| p.edit(cx, |s| set(s, v))).ok();
-        })
-        .label_width(SIZE.label_width())
+        Line {
+            label: label.clone(),
+            check: true,
+            controls: false,
+            row: FormRow::check(ElementId::Name(id.into()), label, value, move |v, _, cx| {
+                this.update(cx, |p, cx| p.edit(cx, |s| set(s, v))).ok();
+            })
+            .comfortable(),
+        }
     }
 
-    /// A dropdown of fixed options.
+    /// A follow-up checkbox (42 px, indented under the row above).
+    fn sub_check(
+        &self,
+        id: impl Into<SharedString>,
+        label: impl Into<SharedString>,
+        value: bool,
+        set: impl Fn(&mut ChartStyle, bool) + 'static,
+        cx: &mut Context<Self>,
+    ) -> Item {
+        let this = cx.entity().downgrade();
+        Item::Sub(
+            false,
+            CheckBox::new(ElementId::Name(id.into()), label, value)
+                .on_change(move |v, _, cx| {
+                    this.update(cx, |p, cx| p.edit(cx, |s| set(s, v))).ok();
+                })
+                .into_any_element(),
+        )
+    }
+
+    /// A comfortable dropdown of fixed options (`W_SELECT_SM` wide unless
+    /// widened).
     fn select<T: Clone + PartialEq + 'static>(
         &self,
         id: impl Into<SharedString>,
@@ -310,86 +351,95 @@ impl ChartSettingsPanel {
         cx: &mut Context<Self>,
     ) -> Select<T> {
         let this = cx.entity().downgrade();
-        Select::new(ElementId::Name(id.into()), options, current).on_change(move |v, _, cx| {
-            this.update(cx, |p, cx| p.edit(cx, |s| set(s, v))).ok();
-        })
+        Select::new(ElementId::Name(id.into()), options, current)
+            .comfortable()
+            .on_change(move |v, _, cx| {
+                this.update(cx, |p, cx| p.edit(cx, |s| set(s, v))).ok();
+            })
     }
 
-    /// Line width 1–4 px.
-    fn width(
-        &self,
-        id: impl Into<SharedString>,
-        current: f32,
-        set: impl Fn(&mut ChartStyle, f32) + 'static,
-        cx: &mut Context<Self>,
-    ) -> Select<u8> {
-        let cur = current.round().clamp(1.0, 4.0) as u8;
-        self.select(
-            id,
-            (1..=4u8).map(|w| (w, format!("{w} px"))),
-            cur,
-            move |s, v| set(s, v as f32),
-            cx,
-        )
-        .width(W_SELECT_XS)
-    }
-
-    /// Solid / Dotted / Dashed.
-    fn line_kind(
-        &self,
-        id: impl Into<SharedString>,
-        current: LineKind,
-        set: impl Fn(&mut ChartStyle, LineKind) + 'static,
-        cx: &mut Context<Self>,
-    ) -> Select<LineKind> {
-        self.select(
-            id,
-            LineKind::ALL.iter().map(|k| (*k, k.label())),
-            current,
-            set,
-            cx,
-        )
-        .width(W_SELECT_SM)
-    }
-
-    /// A color swatch with the palette / opacity popover. `default` is the
-    /// color drawn while the slot is `None` (the theme token).
+    /// A color swatch with TradingView's palette / opacity popover.
+    /// `default` is the color drawn while the slot is `None` (the theme
+    /// token); picking a color stores it.
     fn color(
-        &mut self,
+        &self,
         id: impl Into<SharedString>,
         get: impl Fn(&ChartStyle) -> ColorSlot + 'static,
         set: impl Fn(&mut ChartStyle, ColorSlot) + 'static,
         default: impl Fn(&ChartStyle, &Theme) -> Color32 + 'static,
-        window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> ColorField {
-        let id = id.into();
-        if !self.colors.contains_key(&id) {
-            let effective: Effective = Rc::new(move |s, t| match get(s) {
-                Some(c) => c.to_color32(),
-                None => default(s, t),
-            });
-            let value = hsla(effective(&self.draft, &self.draft.theme(&self.base)));
-            let state = cx.new(|cx| ColorPickerState::new(window, cx).default_value(value));
-            let _sub = cx.subscribe(&state, move |this, _, ev: &ColorPickerEvent, cx| {
-                if let ColorPickerEvent::Change(Some(c)) = ev {
-                    let c = rgba(*c);
-                    this.edit(cx, |s| set(s, Some(c)));
-                }
-            });
-            self.colors.insert(
-                id.clone(),
-                ColorEntry {
-                    state,
-                    effective,
-                    _sub,
-                },
-            );
-        }
-        ColorField::new(&self.colors[&id].state)
+    ) -> ColorSwatchButton {
+        let now = match get(&self.draft) {
+            Some(c) => c.to_color32(),
+            None => default(&self.draft, &self.theme()),
+        };
+        let this = cx.entity().downgrade();
+        ColorSwatchButton::new(ElementId::Name(id.into()), hsla(now)).on_change(move |c, _, cx| {
+            let c = rgba(c);
+            this.update(cx, |p, cx| p.edit(cx, |s| set(s, Some(c))))
+                .ok();
+        })
     }
 
-    /// A number input clamped to `min..=max`.
+    /// TradingView's line control: color (+ opacity), and the thickness
+    /// and style when the field has them.
+    #[allow(clippy::too_many_arguments)]
+    fn line(
+        &self,
+        id: impl Into<SharedString>,
+        get: impl Fn(&ChartStyle) -> ColorSlot + 'static,
+        set: impl Fn(&mut ChartStyle, ColorSlot) + 'static,
+        default: impl Fn(&ChartStyle, &Theme) -> Color32 + 'static,
+        width: Option<(f32, WidthSet)>,
+        kind: Option<(LineKind, KindSet)>,
+        cx: &mut Context<Self>,
+    ) -> LinePicker {
+        let effective: Effective = Rc::new(move |s, t| match get(s) {
+            Some(c) => c.to_color32(),
+            None => default(s, t),
+        });
+        let color = hsla(effective(&self.draft, &self.theme()));
+        let value = LineValue {
+            color,
+            width: width
+                .as_ref()
+                .map_or(1, |(w, _)| w.round().clamp(1.0, 4.0) as u8),
+            dash: kind.as_ref().map_or(LineDash::Solid, |(k, _)| dash(*k)),
+        };
+        let (has_width, has_kind) = (width.is_some(), kind.is_some());
+        let set_w = width.map(|(_, f)| f);
+        let set_k = kind.map(|(_, f)| f);
+        let this = cx.entity().downgrade();
+        let picker =
+            LinePicker::new(ElementId::Name(id.into()), value).on_change(move |lv, _, cx| {
+                // Only what changed: a width change keeps a theme-default
+                // color following the theme.
+                let apply = |s: &mut ChartStyle| {
+                    if lv.color != value.color {
+                        set(s, Some(rgba(lv.color)));
+                    }
+                    if let Some(f) = &set_w
+                        && lv.width != value.width
+                    {
+                        f(s, lv.width as f32);
+                    }
+                    if let Some(f) = &set_k
+                        && lv.dash != value.dash
+                    {
+                        f(s, line_kind(lv.dash));
+                    }
+                };
+                this.update(cx, |p, cx| p.edit(cx, apply)).ok();
+            });
+        let picker = if has_width {
+            picker
+        } else {
+            picker.no_thickness()
+        };
+        if has_kind { picker } else { picker.no_style() }
+    }
+
+    /// A number field (`w` wide) clamped to `min..=max`.
     #[allow(clippy::too_many_arguments)]
     fn number(
         &mut self,
@@ -398,20 +448,14 @@ impl ChartSettingsPanel {
         set: impl Fn(&mut ChartStyle, f64) + 'static,
         min: f64,
         max: f64,
-        step: f64,
+        w: f32,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> NumberField {
+    ) -> Field {
         let id = id.into();
         if !self.numbers.contains_key(&id) {
             let value = fmt_number(get(&self.draft));
-            let state = cx.new(|cx| {
-                InputState::new(window, cx)
-                    .step(step)
-                    .min(min)
-                    .max(max)
-                    .default_value(value)
-            });
+            let state = cx.new(|cx| InputState::new(window, cx).default_value(value));
             let _sub = cx.subscribe(&state, move |this, input, ev: &InputEvent, cx| {
                 if let InputEvent::Change = ev
                     && let Ok(v) = input.read(cx).value().trim().parse::<f64>()
@@ -429,7 +473,26 @@ impl ChartSettingsPanel {
                 },
             );
         }
-        NumberField::new(&self.numbers[&id].state)
+        Field::new(&self.numbers[&id].state).width(w)
+    }
+}
+
+type WidthSet = Rc<dyn Fn(&mut ChartStyle, f32)>;
+type KindSet = Rc<dyn Fn(&mut ChartStyle, LineKind)>;
+
+fn dash(k: LineKind) -> LineDash {
+    match k {
+        LineKind::Solid => LineDash::Solid,
+        LineKind::Dotted => LineDash::Dotted,
+        LineKind::Dashed => LineDash::Dashed,
+    }
+}
+
+fn line_kind(d: LineDash) -> LineKind {
+    match d {
+        LineDash::Solid => LineKind::Solid,
+        LineDash::Dotted => LineKind::Dotted,
+        LineDash::Dashed => LineKind::Dashed,
     }
 }
 
@@ -454,14 +517,125 @@ fn alpha(c: Color32, a: f32) -> Color32 {
     tt_theme::with_alpha(c, a)
 }
 
+/// Width of `s` in the dialog's 14 px text.
+fn text_w(window: &Window, s: &str) -> f32 {
+    if s.is_empty() {
+        return 0.0;
+    }
+    let run = window.text_style().to_run(s.len());
+    let line = window.text_system().shape_line(
+        SharedString::from(s.to_owned()),
+        px(TEXT_BODY),
+        &[run],
+        None,
+    );
+    f32::from(line.width).ceil()
+}
+
+/// A field that is off (TradingView's disabled "Lock price to bar ratio"
+/// number): the value, muted, in the field's outline.
+fn disabled_field(value: String, w: f32, cx: &App) -> AnyElement {
+    let t = cx.ui();
+    div()
+        .flex_none()
+        .w(px(w))
+        .h(px(C_CONTROL))
+        .px(px(tokens::S3))
+        .flex()
+        .items_center()
+        .rounded(px(C_R_CONTROL))
+        .border_1()
+        .border_color(hsla(t.border))
+        .text_size(px(TEXT_BODY))
+        .text_color(hsla(t.text_muted))
+        .opacity(0.6)
+        .child(value)
+        .into_any_element()
+}
+
+/// A row being built: its label (measured for the page's label column)
+/// and the kit `FormRow`.
+pub(super) struct Line {
+    label: SharedString,
+    check: bool,
+    controls: bool,
+    row: FormRow,
+}
+
+impl Line {
+    fn control(mut self, c: impl IntoElement) -> Self {
+        self.controls = true;
+        self.row = self.row.control(c);
+        self
+    }
+
+    fn unit(mut self, u: impl Into<SharedString>) -> Self {
+        self.controls = true;
+        self.row = self.row.unit(u);
+        self
+    }
+}
+
+/// One entry of a page.
+pub(super) enum Item {
+    Section(SharedString),
+    Line(Line),
+    /// A 42 px follow-up row: in the control column (`true`) or indented
+    /// under a checkbox (`false`).
+    Sub(bool, AnyElement),
+}
+
+impl From<Line> for Item {
+    fn from(l: Line) -> Self {
+        Item::Line(l)
+    }
+}
+
+/// A page's entries, in order.
+type Rows = Vec<Item>;
+
+fn section(title: impl Into<SharedString>) -> Item {
+    Item::Section(title.into())
+}
+
+/// Lays out a page: one label column for its labelled rows.
+fn layout(rows: Rows, window: &Window) -> Vec<AnyElement> {
+    let check = C_CHECKBOX + C_GAP;
+    let lw = rows
+        .iter()
+        .filter_map(|r| match r {
+            Item::Line(l) if l.controls => {
+                Some(text_w(window, &l.label) + if l.check { check } else { 0.0 })
+            }
+            _ => None,
+        })
+        .fold(0.0, f32::max)
+        + C_LABEL_GAP;
+    rows.into_iter()
+        .enumerate()
+        .map(|(i, r)| match r {
+            Item::Section(t) => SectionTitle::new(t).first(i == 0).into_any_element(),
+            Item::Line(l) => l.row.label_width(lw).into_any_element(),
+            Item::Sub(controls, el) => {
+                sub_row(if controls { lw } else { C_SUB_INDENT }, el).into_any_element()
+            }
+        })
+        .collect()
+}
+
 impl Render for ChartSettingsPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let this = cx.entity().downgrade();
-        let mut nav = NavTabs::vertical().selected(self.page.id());
+        // One id per page: each page opens scrolled to its top.
+        let mut frame = SideNavFrame::new(SharedString::from(format!(
+            "chart-settings-{}",
+            self.page.id()
+        )))
+        .selected(self.page.id());
         for (_, id, label, icon) in Page::ALL {
-            nav = nav.item(id, label, Some(icon.into()));
+            frame = frame.item(id, label, Some(icon.into()));
         }
-        let nav = nav.on_change(move |id, _, cx| {
+        let frame = frame.on_change(move |id, _, cx| {
             if let Some((page, ..)) = Page::ALL.iter().find(|p| p.1 == id) {
                 let page = *page;
                 this.update(cx, |p, cx| {
@@ -471,28 +645,16 @@ impl Render for ChartSettingsPanel {
                 .ok();
             }
         });
-        let body = match self.page {
+        let rows = match self.page {
             Page::Symbol => self.symbol_page(window, cx),
             Page::StatusLine => self.status_line_page(cx),
             Page::Scales => self.scales_page(window, cx),
             Page::Canvas => self.canvas_page(window, cx),
         };
-        DialogFrame::new(SIZE).id("chart-settings").nav(nav).body(
+        frame.body(
             v_flex()
                 .id(SharedString::from(format!("page-{}", self.page.id())))
-                .pr(px(tokens::S2))
-                .pb(px(tokens::S2))
-                .children(body),
+                .children(layout(rows, window)),
         )
     }
-}
-
-/// A page's rows, in order.
-type Rows = Vec<AnyElement>;
-
-fn section(title: &'static str) -> AnyElement {
-    div()
-        .pt(px(tokens::S2))
-        .child(SectionHeader::new(title))
-        .into_any_element()
 }
