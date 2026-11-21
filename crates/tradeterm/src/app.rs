@@ -553,10 +553,6 @@ impl TradeTerm {
         cx.notify();
     }
 
-    pub fn theme(&self) -> &Theme {
-        &self.theme
-    }
-
     pub fn current_timeframe(&self, cx: &App) -> Timeframe {
         self.tab_chart().map_or(Timeframe::M1, |c| {
             c.read(cx).state.read(cx).source.tab.timeframe
