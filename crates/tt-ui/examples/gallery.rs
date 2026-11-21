@@ -4,6 +4,7 @@
 //! cargo run -p tt-ui --example gallery            # dark
 //! cargo run -p tt-ui --example gallery -- --light # light
 //! cargo run -p tt-ui --example gallery -- --measure
+//! cargo run -p tt-ui --example gallery -- --icons  # icon contact sheet
 //! ```
 //!
 //! `--measure` prints the laid-out bounds of the sized components (checked
@@ -32,6 +33,8 @@ type Measured = Rc<RefCell<Vec<(&'static str, Bounds<Pixels>)>>>;
 
 struct Gallery {
     dark: bool,
+    /// `--icons`: only the SVG icon contact sheet and the large menu.
+    icons_only: bool,
     toggled: bool,
     magnet: bool,
     tf: &'static str,
@@ -57,7 +60,13 @@ struct Gallery {
 }
 
 impl Gallery {
-    fn new(dark: bool, measured: Measured, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn new(
+        dark: bool,
+        icons_only: bool,
+        measured: Measured,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let number = cx.new(|cx| InputState::new(window, cx).default_value("14"));
         let color = cx.new(|cx| {
             ColorPickerState::new(window, cx).default_value(hsla(tt_theme::Theme::dark().active))
@@ -67,6 +76,7 @@ impl Gallery {
         let blue = hsla(tt_theme::Theme::dark().active);
         Self {
             dark,
+            icons_only,
             toggled: true,
             magnet: false,
             tf: "1h",
@@ -135,8 +145,144 @@ fn caption(s: impl Into<SharedString>, cx: &App) -> impl IntoElement {
         .child(s.into())
 }
 
+/// Our SVG icons: a grid of 28 px icons with names, then one row at the
+/// three sizes (20 / 24 / 28).
+fn icon_sheet(cols: usize, cx: &App) -> impl IntoElement {
+    let muted = hsla(cx.ui().text_muted);
+    let mut grid = v_flex().gap(px(t::S2));
+    for chunk in Glyph::SVG_SET.chunks(cols) {
+        let mut row = h_flex().gap(px(t::S1)).items_start();
+        for (name, g) in chunk {
+            row = row.child(
+                v_flex()
+                    .w(px(76.))
+                    .items_center()
+                    .gap(px(t::S1))
+                    .child(glyph(*g, t::ICON_SVG))
+                    .child(
+                        div()
+                            .text_size(px(t::TEXT_CAPTION))
+                            .text_color(muted)
+                            .text_center()
+                            .child(*name),
+                    ),
+            );
+        }
+        grid = grid.child(row);
+    }
+    let mut sizes = h_flex().gap(px(t::S3)).items_end();
+    for s in [20.0, 24.0, t::ICON_SVG] {
+        let mut set = h_flex().gap(px(t::S1)).items_end();
+        for g in [
+            Glyph::CHART_CANDLES,
+            Glyph::CHART_LINE,
+            Glyph::DRAW_TREND_LINE,
+            Glyph::DRAW_FIB_RETRACEMENT,
+        ] {
+            set = set.child(glyph(g, s));
+        }
+        sizes = sizes.child(set.child(div().text_color(muted).child(format!("{s}"))));
+    }
+    v_flex().gap(px(t::S3)).child(grid).child(sizes)
+}
+
+/// The chart-type menu as the app builds it: large rows, 28 px icons,
+/// group separators, the current type (Candles) inverted, stars.
+fn chart_type_menu_preview() -> Menu {
+    let mut menu = Menu::new().id("ct-large-menu").width(MenuWidth::Lg).large();
+    for (gi, group) in [0..4, 4..7, 7..10, 10..12, 12..15].into_iter().enumerate() {
+        if gi > 0 {
+            menu = menu.separator();
+        }
+        for (name, g) in &Glyph::SVG_SET[group] {
+            menu = menu.row(
+                MenuRow::new(SharedString::from(format!("ctl-{name}")), *name)
+                    .icon(*g)
+                    .current(*name == "Candles")
+                    .favorite(*name == "Line" || *name == "Candles", |_, _| {}),
+            );
+        }
+    }
+    menu
+}
+
+/// The left drawing toolbar's buttons at their real size (34, icon 28).
+fn drawing_toolbar_preview(cx: &App) -> impl IntoElement {
+    let mut bar = v_flex()
+        .w(px(t::W_DRAWING_TOOLBAR))
+        .items_center()
+        .gap(px(t::S1))
+        .py(px(t::S1))
+        .border_r_1()
+        .border_color(hsla(cx.ui().border));
+    for (i, g) in [
+        Glyph::DRAW_CURSOR,
+        Glyph::DRAW_TREND_LINE,
+        Glyph::DRAW_FIB_RETRACEMENT,
+        Glyph::DRAW_RECTANGLE,
+        Glyph::DRAW_DATE_PRICE_RANGE,
+        Glyph::DRAW_MAGNET,
+        Glyph::DRAW_KEEP_DRAWING,
+        Glyph::DRAW_UNLOCK,
+        Glyph::DRAW_EYE,
+        Glyph::DRAW_TRASH,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        bar = bar.child(
+            IconButton::new(SharedString::from(format!("dtp-{i}")), g)
+                .size(ControlSize::Drawing)
+                .toggled(i == 1)
+                .tooltip("Drawing tool"),
+        );
+    }
+    bar
+}
+
+impl Gallery {
+    /// `--icons`: the contact sheet for docs/specs/img/icons-*.png.
+    fn render_icons(&self, cx: &App) -> Div {
+        let ui = cx.ui().clone();
+        div()
+            .size_full()
+            .bg(hsla(ui.bg))
+            .text_color(hsla(ui.text))
+            .font_family(if cfg!(target_os = "windows") {
+                "Segoe UI"
+            } else {
+                ".SystemUIFont"
+            })
+            .text_size(px(t::TEXT_BODY))
+            .child(
+                h_flex()
+                    .p(px(t::S5))
+                    .gap(px(t::S6))
+                    .items_start()
+                    .child(
+                        v_flex()
+                            .child(section("tradeterm icons · 1-stroke · 28 box", cx))
+                            .child(icon_sheet(6, cx)),
+                    )
+                    .child(
+                        v_flex()
+                            .child(section("Drawing toolbar", cx))
+                            .child(drawing_toolbar_preview(cx)),
+                    )
+                    .child(
+                        v_flex()
+                            .child(section("Chart type menu", cx))
+                            .child(chart_type_menu_preview()),
+                    ),
+            )
+    }
+}
+
 impl Render for Gallery {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.icons_only {
+            return self.render_icons(cx).into_any_element();
+        }
         let theme = self.theme();
         if cx.ui() != &theme {
             tt_ui::theme::sync(&theme, cx);
@@ -896,7 +1042,9 @@ impl Render for Gallery {
                             .child(comfortable_preview)
                             .child(section("Dialog (Sm, top tabs)", cx))
                             .child(dialog_preview)
-                            .child(div().pt(px(t::S3)).child(open)),
+                            .child(div().pt(px(t::S3)).child(open))
+                            .child(section("SVG icons (28 box, 1 px stroke)", cx))
+                            .child(icon_sheet(8, cx)),
                     )
                     .child(
                         v_flex()
@@ -906,9 +1054,14 @@ impl Render for Gallery {
                             .child(section("List", cx))
                             .child(list)
                             .child(section("Dialog left nav", cx))
-                            .child(nav_preview),
+                            .child(nav_preview)
+                            .child(section("Large menu: chart type, current inverted", cx))
+                            .child(measure("menu-large", &m, chart_type_menu_preview()))
+                            .child(section("Drawing toolbar 52 · buttons 34", cx))
+                            .child(measure("drawing-toolbar", &m, drawing_toolbar_preview(cx))),
                     ),
             )
+            .into_any_element()
     }
 }
 
@@ -930,7 +1083,7 @@ impl Render for DialogBody {
 }
 
 /// Expected sizes (token table, §2.4).
-const EXPECTED: [(&str, f32, f32); 15] = [
+const EXPECTED: [(&str, f32, f32); 17] = [
     ("icon-xs", t::CONTROL_XS, t::CONTROL_XS),
     ("icon-sm", t::CONTROL_SM, t::CONTROL_SM),
     ("icon-md", t::CONTROL_MD, t::CONTROL_MD),
@@ -947,16 +1100,20 @@ const EXPECTED: [(&str, f32, f32); 15] = [
     ("select-c", t::C_W_FIELD, t::C_CONTROL),
     ("field-c", t::C_W_FIELD, t::C_CONTROL),
     ("range-field", f32::NAN, t::C_CONTROL),
+    // TradingView-measured: large menu, drawing toolbar.
+    ("menu-large", t::W_MENU_LG, f32::NAN),
+    ("drawing-toolbar", t::W_DRAWING_TOOLBAR, f32::NAN),
 ];
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let dark = !args.iter().any(|a| a == "--light");
     let measure_only = args.iter().any(|a| a == "--measure");
+    let icons_only = args.iter().any(|a| a == "--icons");
     let measured: Measured = Rc::new(RefCell::new(Vec::new()));
 
     gpui_kit::application()
-        .with_assets(gpui_kit::assets::Assets)
+        .with_assets(tt_ui::Assets)
         .run(move |cx| {
             gpui_kit::init(cx);
             tt_ui::init(cx);
@@ -979,7 +1136,7 @@ fn main() {
             };
             let m = measured.clone();
             gpui_kit::open_window(opts, cx, move |window, cx| {
-                cx.new(|cx| Gallery::new(dark, m.clone(), window, cx))
+                cx.new(|cx| Gallery::new(dark, icons_only, m.clone(), window, cx))
             })
             .expect("open window");
 
@@ -995,8 +1152,8 @@ fn main() {
                         match got.iter().find(|(n, _)| *n == name) {
                             Some((_, b)) => {
                                 let (bw, bh) = (f32::from(b.size.width), f32::from(b.size.height));
-                                let good =
-                                    (w.is_nan() || (bw - w).abs() < 0.5) && (bh - h).abs() < 0.5;
+                                let good = (w.is_nan() || (bw - w).abs() < 0.5)
+                                    && (h.is_nan() || (bh - h).abs() < 0.5);
                                 ok &= good;
                                 println!(
                                     "{} {name}: {bw}x{bh} (expected {}x{h})",

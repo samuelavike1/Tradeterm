@@ -224,14 +224,15 @@ Chart canvas text stays user-configurable (`ChartStyle::font_size`, integers onl
 
 ### 2.4 Icon sizes and control heights
 
-Icons: Lucide (one set, see §3.2).
+Icons: Lucide (font), plus our own 1-stroke SVG set for chart types and drawing tools (see §3.2).
 
 | Token | px | Use |
 |---|---|---|
 | `ICON_XS` | 14 | inside 20 px controls, carets, legend canvas buttons, tab close |
 | `ICON_SM` | 16 | menus, lists, nav tabs, in-chart 24 px buttons, input prefix |
 | `ICON_MD` | 18 | top toolbar (32 px buttons), title bar buttons |
-| `ICON_LG` | 20 | left drawing toolbar (36 px buttons) |
+| `ICON_LG` | 20 | Lucide glyphs in the left drawing toolbar, large menu rows |
+| `ICON_SVG` | 28 | our SVG icons where a Lucide glyph would be 18–20 (TradingView draws its icons in a 28 box); 24 in 16 slots, 20 in 14 slots (`Glyph::svg_size`) |
 
 Rule: control size = icon + 2 × inset, with inset 3 (xs), 4 (sm), 7 (md) or 8 (lg).
 
@@ -245,16 +246,18 @@ Rule: control size = icon + 2 × inset, with inset 3 (xs), 4 (sm), 7 (md) or 8 (
 | `CONTROL_SM` | 24 | in-chart overlay buttons (pane, gear, floating toolbar), chips, title bar buttons |
 | `H_FIELD` | 28 | inputs, selects, color fields inside forms |
 | `CONTROL_MD` | 32 | top toolbar buttons, dialog footer buttons |
-| `CONTROL_LG` | 36 | drawing toolbar buttons |
-| `H_MENU_ROW` | 32 | every menu row (custom and former PopupMenu) |
+| `CONTROL_LG` | 36 | large icon buttons (gallery) |
+| `CONTROL_DRAWING` | 34 | left drawing toolbar buttons, 4 apart (38 pitch), TradingView-measured |
+| `H_MENU_ROW` | 32 | menu rows (custom and former PopupMenu) |
+| `H_MENU_ROW_LG` | 40 | `Menu::large()`: chart-type menu, drawing flyouts (TradingView: 40, icon 28 at x 4, label at x 36, separators 6 + 1 + 6) |
 | `H_SECTION` | 28 | `SectionHeader` |
 | `H_LIST_ROW` | 36 | nav tabs, indicator list, form rows |
 | `H_LIST_ROW_TALL` | 48 | symbol search results |
 
 | Width token | px | Use |
 |---|---|---|
-| `W_DRAWING_TOOLBAR` | 48 | left toolbar (TradingView ≈ 52) |
-| `W_MENU_SM / MD / LG` | 200 / 240 / 280 | menus (LG only with a shortcut column) |
+| `W_DRAWING_TOOLBAR` | 52 | left toolbar (TradingView: 52) |
+| `W_MENU_SM / MD / LG` | 200 / 240 / 280 | menus (LG only with a shortcut column or large rows) |
 | `W_DIALOG_SM / MD / LG` | 480 / 680 / 800 | dialogs |
 | `W_NAV` | 200 | dialog left nav |
 | `W_LABEL_SM / LG` | 160 / 220 | form label column in Sm/Lg dialogs |
@@ -459,6 +462,7 @@ Decision: **Lucide, rendered with the Lucide font** everywhere we draw our own i
 - The canvas legend already needs the font, and the font gives the complete catalog with no asset registration. Color follows `text_color`, so hover and active tints need no extra state.
 - gpui-component `IconName` is not used in our code. Its SVG icons remain only inside third-party internals: checkbox tick, dialog ×, input clear, PopupMenu check. Those are Lucide too.
 - Documented exception: a filled star. The Lucide font has no filled variant, so `Glyph::StarFilled` renders `gpui_kit::component::IconName::StarFill` through `Icon`.
+- **Chart types and drawing tools use our own SVG set** (2026-11, user feedback: the Lucide chart glyphs did not match the types and were too small). 40 original 1-stroke icons in `crates/tt-ui/assets/icons/` (`chart-*`, `draw-*`), written by `scripts/icons/gen.py`: 28 × 28 viewBox, stroke 1, `fill="none"`, `stroke="currentColor"`, round caps and joins, axis-aligned strokes on half pixels, endpoint handles as open r 2 circles that the lines stop at. `tt_ui::Assets` (the app's asset source, wrapping gpui-kit's) embeds them under `tt-icons/`; `Glyph::Svg(path)` draws them with gpui `svg()` tinted by the inherited text color, and `Glyph::svg_size` maps a Lucide slot to 20 / 24 / 28. `chart_type_icon` / `drawing_tool_icon` (tradeterm `ui.rs`) pick them; contact sheet: `cargo run -p tt-ui --example gallery -- --icons`, `docs/specs/img/icons-*.png`.
 
 ```rust
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -565,6 +569,7 @@ impl MenuRow {
     pub fn new(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Self; // h 32, R_MD, text 14
     pub fn icon(self, g: impl Into<Glyph>) -> Self;            // 16, muted unless hovered
     pub fn checked(self, on: bool) -> Self;                     // leading ✓ column (16) when any row is checkable
+    pub fn current(self, on: bool) -> Self;                     // TradingView: inverted row (text fill, surface-colored content), no ✓; chart type, interval, drawing flyouts
     pub fn shortcut(self, keys: impl Into<SharedString>) -> Self;  // right-aligned Kbd text, 11 muted
     pub fn shortcut_action(self, a: &dyn Action) -> Self;
     pub fn description(self, d: impl Into<SharedString>) -> Self;  // tooltip after TOOLTIP_DELAY

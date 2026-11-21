@@ -8,6 +8,10 @@
 //! A row click closes the menu (dismiss first, then the handler, so a dialog
 //! opened by the handler keeps its focus); `keep_open()` opts out (stars,
 //! collapse toggles).
+//!
+//! The current item of a pick-one menu is either `checked` (✓ column and
+//! `selection` background) or, TradingView style, `current` (inverted row,
+//! no ✓). `Menu::large()` gives TradingView's 40 px rows with 28 px icons.
 
 use crate::button::{ControlSize, IconButton, child_id};
 use crate::divider::Divider;
@@ -31,7 +35,7 @@ pub enum MenuWidth {
     /// 240
     #[default]
     Md,
-    /// 280, only with a shortcut column.
+    /// 280, only with a shortcut column or large rows.
     Lg,
 }
 
@@ -81,6 +85,8 @@ pub struct MenuRow {
     checked: Option<bool>,
     /// `checked` is an on/off setting: ✓ only, no `selection` background.
     toggle: bool,
+    /// The current item, TradingView style: inverted row, no ✓.
+    current: bool,
     favorite: Option<(bool, Handler)>,
     removable: Option<(SharedString, Handler)>,
     danger: bool,
@@ -100,6 +106,7 @@ impl MenuRow {
             shortcut: None,
             checked: None,
             toggle: false,
+            current: false,
             favorite: None,
             removable: None,
             danger: false,
@@ -133,6 +140,16 @@ impl MenuRow {
     /// row is checkable) and `selection` background.
     pub fn checked(mut self, on: bool) -> Self {
         self.checked = Some(on);
+        self
+    }
+
+    /// The current item of a pick-one menu, TradingView style: the row is
+    /// inverted (`text` fill, content in the surface color; a dark row in
+    /// light theme, a light row in dark theme) and stays so on hover. No ✓
+    /// and no check column. Used by the chart-type and interval menus and
+    /// the drawing flyouts.
+    pub fn current(mut self, on: bool) -> Self {
+        self.current = on;
         self
     }
 
@@ -217,18 +234,29 @@ impl MenuRow {
         index: usize,
         nav: Option<&Entity<MenuNav>>,
         highlighted: bool,
-        check_col: bool,
+        (check_col, large): (bool, bool),
         dismiss: Option<Handler>,
         t: &Theme,
     ) -> Stateful<Div> {
+        // TradingView's current row: inverted, also while hovered.
+        let inverted = self.current && !self.disabled;
         let fg = if self.disabled {
             t.text_disabled
+        } else if inverted {
+            t.overlay_bg
         } else if self.danger {
             t.danger
         } else {
             t.text
         };
-        let hover_bg = if self.danger {
+        let muted = if inverted {
+            with_alpha(t.overlay_bg, 0.7)
+        } else {
+            t.text_muted
+        };
+        let hover_bg = if inverted {
+            t.text
+        } else if self.danger {
             with_alpha(t.danger, 0.12)
         } else {
             t.hover
@@ -240,18 +268,26 @@ impl MenuRow {
         let keep_open = self.keep_open;
         let on_select = self.on_select.clone();
         let id = self.id.clone();
+        // Large rows: 40 tall, the icon 4 px from the edge, the label 4 px
+        // after it (TradingView-measured).
+        let (row_h, pad, gap, icon) = if large {
+            (H_MENU_ROW_LG, S1, S1, ICON_LG)
+        } else {
+            (H_MENU_ROW, S2, S2, ICON_SM)
+        };
         h_flex()
             .id(self.id)
             .group(group.clone())
             .flex_none()
-            .h(px(H_MENU_ROW))
-            .px(px(S2))
-            .gap(px(S2))
+            .h(px(row_h))
+            .px(px(pad))
+            .gap(px(gap))
             .items_center()
             .rounded(px(R_MD))
             .text_size(px(TEXT_BODY))
             .text_color(hsla(fg))
             .when(current_bg, |d| d.bg(hsla(t.selection)))
+            .when(inverted, |d| d.bg(hsla(t.text)))
             .when(interactive && highlighted, |d| d.bg(hsla(hover_bg)))
             .when(interactive && nav.is_none(), |d| {
                 d.hover(|s| s.bg(hsla(hover_bg)))
@@ -265,7 +301,10 @@ impl MenuRow {
                 )
             })
             .when_some(self.glyph, |d, g| {
-                d.child(glyph(g, ICON_SM).when(!highlighted && interactive, |g| {
+                // SVG icons keep the label color (TradingView); font glyphs
+                // are muted unless highlighted.
+                let dim = !highlighted && interactive && !inverted && !g.is_svg();
+                d.child(glyph(g, g.svg_size(icon)).when(dim, |g| {
                     g.color(hsla(if self.danger { t.danger } else { t.text_muted }))
                 }))
             })
@@ -284,11 +323,11 @@ impl MenuRow {
                     div()
                         .flex_none()
                         .text_size(px(TEXT_CAPTION))
-                        .text_color(hsla(t.text_muted))
+                        .text_color(hsla(muted))
                         .child(format_keys(&k)),
                 )
             })
-            .when_some(self.removable, |d, (tip_text, f)| {
+            .when_some(self.removable.filter(|_| !inverted), |d, (tip_text, f)| {
                 d.child(
                     IconButton::new(child_id(&id, "remove"), Glyph::X)
                         .size(ControlSize::Xs)
@@ -316,8 +355,8 @@ impl MenuRow {
                         .when(!on, |d| {
                             d.invisible()
                                 .group_hover(group.clone(), |s| s.visible())
-                                .text_color(hsla(t.text_muted))
-                                .hover(|s| s.text_color(hsla(t.text)))
+                                .text_color(hsla(muted))
+                                .hover(|s| s.text_color(hsla(fg)))
                         })
                         .child(glyph(star, ICON_SM))
                         .on_click(move |_, window, cx| {
@@ -376,7 +415,7 @@ impl RenderOnce for MenuRow {
         // Standalone row (outside a Menu): CSS hover, no keyboard state.
         let check_col = self.checked.is_some();
         let t = cx.ui().clone();
-        self.render_row(0, None, false, check_col, None, &t)
+        self.render_row(0, None, false, (check_col, false), None, &t)
     }
 }
 
@@ -465,6 +504,7 @@ pub struct Menu {
     nav: Option<Entity<MenuNav>>,
     dismiss: Option<Handler>,
     surface: bool,
+    large: bool,
 }
 
 impl Default for Menu {
@@ -483,6 +523,7 @@ impl Menu {
             nav: None,
             dismiss: None,
             surface: true,
+            large: false,
         }
     }
 
@@ -552,6 +593,14 @@ impl Menu {
         self
     }
 
+    /// TradingView's large rows: 40 tall, icons 28 (SVG) / 20 (Lucide),
+    /// 4 px icon inset and gap, 13 px group separators. The chart-type menu
+    /// and the drawing flyouts.
+    pub fn large(mut self) -> Self {
+        self.large = true;
+        self
+    }
+
     /// Draw without the surface (bg, border, shadow); for embedding.
     pub fn bare(mut self) -> Self {
         self.surface = false;
@@ -600,6 +649,7 @@ impl RenderOnce for Menu {
             .items
             .iter()
             .any(|i| matches!(i, Item::Row(r) if r.checked.is_some()));
+        let large = self.large;
 
         // Keyboard targets: (item index, label, handler, keep_open).
         let mut targets: Vec<(usize, SharedString, Option<Handler>, bool)> = Vec::new();
@@ -614,9 +664,14 @@ impl RenderOnce for Menu {
                         targets.push((i, r.label.clone(), r.on_select.clone(), r.keep_open));
                     }
                     let hl = highlighted == Some(i);
-                    list.child(r.render_row(i, Some(&nav), hl, check_col, self.dismiss.clone(), &t))
+                    let dismiss = self.dismiss.clone();
+                    list.child(r.render_row(i, Some(&nav), hl, (check_col, large), dismiss, &t))
                 }
                 Item::Section(s) => list.child(s),
+                // Large menus: 6 + 1 + 6 between groups (TradingView).
+                Item::Separator if large => {
+                    list.child(div().py(px(S1_5 - S1)).child(Divider::horizontal()))
+                }
                 Item::Separator => list.child(Divider::horizontal()),
                 Item::Element(e) => list.child(e),
             };
@@ -629,7 +684,7 @@ impl RenderOnce for Menu {
             .key_context("TtMenu")
             .track_focus(&focus)
             .w(px(self.width.px()))
-            .p(px(S1))
+            .p(px(if large { S1_5 } else { S1 }))
             .text_color(hsla(t.text))
             .when(self.surface, |d| {
                 d.bg(hsla(t.overlay_bg))

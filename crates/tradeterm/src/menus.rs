@@ -6,8 +6,11 @@
 //! - Chart type menu: grouped types with their icon; the star pins a type to
 //!   the toolbar as a quick button; hovering a row explains the type.
 //!
-//! Both are kit `Menu`s (`tt_ui`): 32 px rows, a ✓ on the current item,
-//! keyboard navigation, and a row click closes the menu.
+//! Both are kit `Menu`s (`tt_ui`) with TradingView's inverted current row
+//! (`MenuRow::current`, no ✓), keyboard navigation, and a row click closes
+//! the menu. The interval menu has 32 px rows; the chart-type menu has
+//! TradingView's large rows (`Menu::large`: 40 px, 28 px icons, 13 px group
+//! separators) and no caret on its trigger.
 
 use crate::app::TradeTerm;
 use crate::ui::chart_type_icon;
@@ -154,7 +157,7 @@ pub fn timeframe_menu(cx: &mut Context<TradeTerm>) -> impl IntoElement + use<> {
                     let (select, star, remove) = (app.clone(), app.clone(), app.clone());
                     let id = SharedString::from(format!("tf-{}", tf.code()));
                     let row = MenuRow::new(id, tf.long_name())
-                        .checked(tf == current)
+                        .current(tf == current)
                         .favorite(favorites.contains(&tf), move |_, cx| {
                             star.update(cx, |a, cx| a.toggle_favorite_timeframe(tf, cx))
                                 .ok();
@@ -184,8 +187,8 @@ pub fn chart_type_menu(
     cx: &mut Context<TradeTerm>,
 ) -> impl IntoElement + use<> {
     let app = cx.entity().downgrade();
+    // TradingView: the current type's 28 px icon, no caret.
     ToolbarButton::icon("chart-type", chart_type_icon(current))
-        .caret()
         .tooltip(current.label())
         .menu(move |menu, _, cx| {
             let Some(app_e) = app.upgrade() else {
@@ -194,7 +197,7 @@ pub fn chart_type_menu(
             let a = app_e.read(cx);
             let current = a.current_chart_type(cx);
             let favorites = a.favorite_chart_types.clone();
-            let mut menu = menu.id("ct-menu-list").width(MenuWidth::Md);
+            let mut menu = menu.id("ct-menu-list").width(MenuWidth::Lg).large();
             for (g, group) in ChartType::GROUPS.iter().enumerate() {
                 if g > 0 {
                     menu = menu.separator();
@@ -205,7 +208,7 @@ pub fn chart_type_menu(
                     menu = menu.row(
                         MenuRow::new(id, t.label())
                             .icon(chart_type_icon(t))
-                            .checked(t == current)
+                            .current(t == current)
                             .description(t.description())
                             .favorite(favorites.contains(&t), move |_, cx| {
                                 star.update(cx, |a, cx| a.toggle_favorite_chart_type(t, cx))
