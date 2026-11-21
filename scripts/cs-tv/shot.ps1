@@ -13,6 +13,11 @@ param(
     [int[]]$Pages = @(0, 1, 2, 3),
     [switch]$Scroll,
     [switch]$Interval,
+    [double]$MenuX = 0,
+    [double]$MenuY = 0,
+    [double]$ItemX = 0,
+    [double]$ItemY = 0,
+    [switch]$Full,
     [string]$Exe = 'F:\charting\target-cs-tv\release\tradeterm.exe',
     [int]$Wait = 7
 )
@@ -32,6 +37,20 @@ public static class W {
   [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
   [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr h);
   [DllImport("user32.dll")] public static extern void mouse_event(uint f, uint x, uint y, int d, UIntPtr e);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int c);
+  [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr h);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint p);
+  [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint a, uint b, bool f);
+  [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+  public static uint Pid(IntPtr h) { uint p; GetWindowThreadProcessId(h, out p); return p; }
+  public static void Front(IntPtr h) {
+    IntPtr fg = GetForegroundWindow(); uint pp;
+    uint ft = GetWindowThreadProcessId(fg, out pp), me = GetCurrentThreadId();
+    AttachThreadInput(me, ft, true);
+    ShowWindow(h, 6); ShowWindow(h, 9);
+    BringWindowToTop(h); SetForegroundWindow(h);
+    AttachThreadInput(me, ft, false);
+  }
   public struct RECT { public int Left, Top, Right, Bottom; }
   public struct POINT { public int X, Y; }
 }
@@ -44,7 +63,10 @@ Copy-Item $Settings $settingsPath -Force
 $env:TRADETERM_SETTINGS = $settingsPath
 $p = Start-Process -FilePath $Exe -PassThru
 
-function Fg { if ([W]::GetForegroundWindow() -ne $script:h) { throw 'app window lost the foreground' } }
+function Fg {
+    $f = [W]::GetForegroundWindow()
+    if ($f -ne $script:h) { throw "app window lost the foreground (fg $f pid $([W]::Pid($f)), app $($script:h) pid $($p.Id))" }
+}
 function Click([double]$lx, [double]$ly) {
     Fg
     [W]::SetCursorPos([int]($script:ox + $lx * $script:s), [int]($script:oy + $ly * $script:s)) | Out-Null
@@ -64,8 +86,19 @@ function Shot([double]$lx, [double]$ly, [double]$lw, [double]$lh, [string]$out) 
     $bmp = New-Object System.Drawing.Bitmap $w, $hh
     $g = [System.Drawing.Graphics]::FromImage($bmp)
     $g.CopyFromScreen($x, $y, 0, 0, $bmp.Size)
-    $bmp.Save($out, [System.Drawing.Imaging.ImageFormat]::Png)
-    $g.Dispose(); $bmp.Dispose()
+    $g.Dispose()
+    # Crop under the dialog: walk down its left padding (x = edge + 14)
+    # until the color changes (the bottom border).
+    $cx = [int](22 * $script:s); $y0 = [int](80 * $script:s)
+    $ref = $bmp.GetPixel($cx, $y0); $bottom = $hh - 1
+    for ($yy = $y0; $yy -lt $hh; $yy++) {
+        $c = $bmp.GetPixel($cx, $yy)
+        if ([math]::Abs($c.R - $ref.R) + [math]::Abs($c.G - $ref.G) + [math]::Abs($c.B - $ref.B) -gt 24) { $bottom = $yy; break }
+    }
+    $ch2 = [math]::Min($hh, $bottom + [int](10 * $script:s))
+    $crop = $bmp.Clone((New-Object System.Drawing.Rectangle 0, 0, $w, $ch2), $bmp.PixelFormat)
+    $crop.Save($out, [System.Drawing.Imaging.ImageFormat]::Png)
+    $crop.Dispose(); $bmp.Dispose()
     "saved $out"
 }
 try {
@@ -74,24 +107,39 @@ try {
         Start-Sleep -Milliseconds 300; $p.Refresh()
     }
     $script:h = $p.MainWindowHandle
-    [W]::MoveWindow($h, 40, 20, 1500, 1080, $true) | Out-Null
-    [W]::SetForegroundWindow($h) | Out-Null
+    [W]::MoveWindow($h, 40, 0, 1500, 1020, $true) | Out-Null
     Start-Sleep -Seconds $Wait
+    [W]::Front($h)
+    Start-Sleep -Milliseconds 800
     $script:s = [W]::GetDpiForWindow($h) / 96.0
     $r = New-Object W+RECT; [W]::GetClientRect($h, [ref]$r) | Out-Null
     $pt = New-Object W+POINT; [W]::ClientToScreen($h, [ref]$pt) | Out-Null
     $script:ox = $pt.X; $script:oy = $pt.Y; $script:ch = $r.Bottom
     $lw = $r.Right / $s; $lh = $r.Bottom / $s
-    Fg
-    [System.Windows.Forms.SendKeys]::SendWait('^k'); Start-Sleep -Milliseconds 700
-    Fg
+    if ($Full) {
+        if ($MenuX -gt 0) { Click $MenuX $MenuY; Start-Sleep -Milliseconds 400 }
+        $bmp = New-Object System.Drawing.Bitmap ([int]$r.Right), ([int]$r.Bottom)
+        $g = [System.Drawing.Graphics]::FromImage($bmp)
+        $g.CopyFromScreen($ox, $oy, 0, 0, $bmp.Size); $g.Dispose()
+        $bmp.Save("$Prefix.png", [System.Drawing.Imaging.ImageFormat]::Png); $bmp.Dispose()
+        "saved $Prefix.png (scale $s)"
+        return
+    }
     if ($Interval) {
-        [System.Windows.Forms.SendKeys]::SendWait('custom interval'); Start-Sleep -Milliseconds 500
-    } else {
-        [System.Windows.Forms.SendKeys]::SendWait('chart settings'); Start-Sleep -Milliseconds 500
+        # The interval menu (-MenuX/-MenuY, logical px), then its last
+        # row "Add custom interval…" (found by the caller).
+        Click $MenuX $MenuY
+        Click $ItemX $ItemY
     }
     Fg
-    [System.Windows.Forms.SendKeys]::SendWait('{ENTER}'); Start-Sleep -Milliseconds 1200
+    if (-not $Interval) { [System.Windows.Forms.SendKeys]::SendWait('^k'); Start-Sleep -Milliseconds 700 }
+    if (-not $Interval) {
+        Fg
+        [System.Windows.Forms.SendKeys]::SendWait('chart settings'); Start-Sleep -Milliseconds 500
+        Fg
+        [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+    }
+    Start-Sleep -Milliseconds 1200
     $top = $lh / 10.0
     if ($Interval) {
         $dw = 400; $dx = ($lw - $dw) / 2.0
