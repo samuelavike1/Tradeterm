@@ -298,10 +298,14 @@ impl RenderOnce for NavTabs {
     }
 }
 
+/// Builds a whole template menu (see [`TemplateMenu::custom`]).
+type MenuBuilder = Rc<dyn Fn(crate::menu::Menu, &mut Window, &mut App) -> crate::menu::Menu>;
+
 /// "Template ▾": Apply defaults (later: Save as…).
 #[derive(Clone)]
 pub struct TemplateMenu {
     rows: Vec<(SharedString, Handler)>,
+    builder: Option<MenuBuilder>,
 }
 
 impl TemplateMenu {
@@ -309,6 +313,18 @@ impl TemplateMenu {
     pub fn defaults(on_apply: impl Fn(&mut Window, &mut App) + 'static) -> Self {
         Self {
             rows: vec![("Apply defaults".into(), Rc::new(on_apply))],
+            builder: None,
+        }
+    }
+
+    /// A menu built by `build` each time it opens (sections, separators,
+    /// removable rows: drawing templates).
+    pub fn custom(
+        build: impl Fn(crate::menu::Menu, &mut Window, &mut App) -> crate::menu::Menu + 'static,
+    ) -> Self {
+        Self {
+            rows: Vec::new(),
+            builder: Some(Rc::new(build)),
         }
     }
 
@@ -397,9 +413,13 @@ impl RenderOnce for DialogFooter {
         };
         let left = self.template.map(|tm| {
             let rows = tm.rows;
+            let builder = tm.builder;
             ToolbarButton::text("dialog-template", "Template")
                 .caret()
-                .menu(move |menu, _, _| {
+                .menu(move |menu, window, cx| {
+                    if let Some(b) = &builder {
+                        return b(menu, window, cx);
+                    }
                     let mut menu = menu;
                     for (i, (label, f)) in rows.iter().enumerate() {
                         let f = f.clone();

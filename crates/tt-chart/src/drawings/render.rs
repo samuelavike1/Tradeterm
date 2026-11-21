@@ -21,7 +21,7 @@ pub(crate) fn draw_base(c: &mut dyn Canvas, s: &Scene<'_>) {
         return;
     }
     for d in &ds.items {
-        if d.hidden {
+        if !ds.is_shown(d) {
             continue;
         }
         if let Some(pts) = ds.screen_of(d.id) {
@@ -50,7 +50,7 @@ pub(crate) fn axis_tags(s: &Scene<'_>) -> Vec<Tag> {
     }
     let pane = s.vp_rect();
     let mut tags = Vec::new();
-    for d in ds.items.iter().filter(|d| !d.hidden && tags_prices(d)) {
+    for d in ds.items.iter().filter(|d| ds.is_shown(d) && tags_prices(d)) {
         let n = if matches!(d.props, Props::Line(_)) {
             2
         } else {
@@ -103,7 +103,7 @@ pub(crate) fn draw_overlay(c: &mut dyn Canvas, s: &Scene<'_>) {
     }
     c.set_clip(s.full);
     // Time-axis tags of vertical and cross lines.
-    for d in ds.items.iter().filter(|d| !d.hidden) {
+    for d in ds.items.iter().filter(|d| ds.is_shown(d)) {
         let on = match &d.props {
             Props::VLine(p) => p.time_label,
             Props::Cross(p) => p.time_label,
@@ -176,7 +176,7 @@ fn draw_one(c: &mut dyn Canvas, s: &Scene<'_>, d: &Drawing, pts: &[Pos2]) {
         TrendLine | Ray | ExtendedLine | InfoLine | TrendAngle | Arrow | HorizontalLine
         | HorizontalRay | VerticalLine | CrossLine => lines::draw(c, s, d, pts),
         ParallelChannel if pts.len() >= 3 => channel::draw(c, s, d, pts),
-        Rectangle if pts.len() >= 2 => shapes::rectangle(c, d, pts),
+        Rectangle if pts.len() >= 2 => shapes::rectangle(c, d, pts, s.vp_rect()),
         FibRetracement if pts.len() >= 2 => fib::draw(c, s, d, pts),
         FibExtension if pts.len() >= 3 => fib::draw(c, s, d, pts),
         PriceRange | DateRange | DateAndPriceRange if pts.len() >= 2 => measure::draw(c, s, d, pts),

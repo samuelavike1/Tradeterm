@@ -7,12 +7,14 @@
 mod canvas;
 mod chart;
 mod drawing_menu;
+mod drawing_prefs;
 mod drawing_toolbar;
 pub mod motion;
 
 pub use canvas::{CanvasFonts, GpuiCanvas, hsla};
 pub use chart::{Chart, ChartEvent, ChartSource, ChartState, LayerStats, SeriesSource};
 pub use drawing_menu::DrawingClipboard;
+pub use drawing_prefs::{DrawingPrefs, TemplateTarget, prompt_template_name, template_menu};
 
 use std::borrow::Cow;
 

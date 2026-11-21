@@ -24,7 +24,7 @@ impl Drawings {
             }
         }
         for d in self.items.iter().rev() {
-            if d.hidden {
+            if !self.is_shown(d) {
                 continue;
             }
             let Some(pts) = self.screen_of(d.id) else {
@@ -110,9 +110,18 @@ fn touches(d: &Drawing, pts: &[Pos2], pane: Rect, plot: Rect, p: Pos2) -> bool {
         }
         (ParallelChannel, _) if pts.len() >= 3 => channel::touches(d, pts, pane, p),
         (FibRetracement | FibExtension, _) => fib::touches(d, pts, pane, p, HIT_DISTANCE),
-        (Rectangle, _) if pts.len() >= 2 => Rect::from_two_pos(pts[0], pts[1])
-            .expand(HIT_DISTANCE)
-            .contains(p),
+        (Rectangle, props) if pts.len() >= 2 => {
+            let mut r = Rect::from_two_pos(pts[0], pts[1]);
+            if let Props::Shape(sp) = props {
+                if sp.extend.left {
+                    r.min.x = pane.left();
+                }
+                if sp.extend.right {
+                    r.max.x = pane.right();
+                }
+            }
+            r.expand(HIT_DISTANCE).contains(p)
+        }
         (PriceRange | DateRange | DateAndPriceRange, _) if pts.len() >= 2 => {
             measurer_rect(d, pts, pane).expand(HIT_DISTANCE).contains(p)
         }

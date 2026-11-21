@@ -205,6 +205,22 @@ where
         .collect())
 }
 
+/// Deserializes an optional value, reading an unreadable one as `None`
+/// (with a warning) instead of rejecting the settings file.
+fn tolerant_option<'de, D, T>(d: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    let raw = serde_json::Value::deserialize(d)?;
+    if raw.is_null() {
+        return Ok(None);
+    }
+    Ok(serde_json::from_value(raw)
+        .map_err(|e| warn!("ignoring an unreadable settings value: {e}"))
+        .ok())
+}
+
 /// One chart tab.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -277,6 +293,14 @@ pub struct AppSettings {
     /// kept as raw JSON (written back on save); it never fails the file.
     #[serde(deserialize_with = "tt_chart::drawings::deserialize_drawing_map")]
     pub drawings: tt_chart::DrawingMap,
+    /// Drawing templates per tool: the remembered default style and named
+    /// templates (drawings spec 5.3). Loaded tolerantly: unknown tools and
+    /// unreadable entries are kept raw and written back.
+    pub drawing_templates: tt_chart::drawings::DrawingTemplates,
+    /// The floating drawing toolbar's top-left, as a fraction of the chart
+    /// size (`None`: default place).
+    #[serde(deserialize_with = "tolerant_option")]
+    pub drawing_toolbar_pos: Option<[f32; 2]>,
 }
 
 impl Default for AppSettings {
@@ -296,6 +320,8 @@ impl Default for AppSettings {
             favorite_indicators: Vec::new(),
             chart_style: tt_chart::ChartStyle::default(),
             drawings: Default::default(),
+            drawing_templates: Default::default(),
+            drawing_toolbar_pos: None,
         }
     }
 }

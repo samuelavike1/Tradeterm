@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 mod families;
 mod interaction;
+mod settings;
 
 pub(super) const NO_MODS: Mods = Mods {
     shift: false,
@@ -488,8 +489,9 @@ fn toolbar_edits_reach_the_saved_legacy_fields() {
     let Props::Shape(p) = &d.props else {
         panic!("shape props");
     };
-    // Until the background has its own button, it follows the line color.
-    assert_eq!(p.background.color, Rgba::new(8, 153, 129, 51));
+    // The background has its own color now: the border change leaves it.
+    assert_eq!(p.background.color, Rgba::new(0x9c, 0x27, 0xb0, 51));
+    assert_eq!(p.border.color, Rgba::new(8, 153, 129, 255));
     let v = serde_json::to_value(&d).unwrap();
     assert_eq!(v["color"], serde_json::json!([8, 153, 129, 255]));
     assert_eq!(v["width"], 3.0);

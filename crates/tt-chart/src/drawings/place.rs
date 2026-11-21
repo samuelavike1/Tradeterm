@@ -79,7 +79,8 @@ impl Drawings {
                 Placement::OpenEnded => vec![a; 2],
                 Placement::Freehand => vec![a],
             };
-            let drawing = Drawing::new(tool, points);
+            let mut drawing = Drawing::new(tool, points);
+            drawing.props = self.new_props(tool);
             let mut screen = Vec::new();
             m.screen_into(&drawing.points, &mut screen);
             self.placing = Some(Placing {

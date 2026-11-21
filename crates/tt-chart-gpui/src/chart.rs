@@ -391,6 +391,12 @@ impl<S: ChartSource> Chart<S> {
                     cx.notify();
                     return;
                 }
+                DrawingPress::Open(id) => {
+                    self.invalidate(cx);
+                    cx.emit(ChartEvent::OpenDrawingSettings(id));
+                    cx.notify();
+                    return;
+                }
             }
         }
         match hit {
@@ -614,7 +620,7 @@ impl<S: ChartSource> Render for Chart<S> {
             )
             .children(self.corner_controls(window, cx))
             .children(self.pane_controls(window, cx))
-            .children(self.drawing_toolbar(cx))
+            .children(self.drawing_toolbar(window, cx))
             .context_menu(self.drawing_menu(cx))
     }
 }
