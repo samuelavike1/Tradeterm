@@ -510,6 +510,13 @@ pub struct AppSettings {
     /// size (`None`: default place).
     #[serde(deserialize_with = "tolerant_option")]
     pub drawing_toolbar_pos: Option<[f32; 2]>,
+    /// Watchlists of the right panel (read leniently, see
+    /// [`crate::watchlist`]).
+    #[serde(deserialize_with = "crate::watchlist::tolerant_or_default")]
+    pub watchlists: crate::watchlist::Watchlists,
+    /// The right sidebar: open panel and its width.
+    #[serde(deserialize_with = "crate::watchlist::tolerant_or_default")]
+    pub right_panel: crate::watchlist::RightPanelSettings,
 }
 
 impl Default for AppSettings {
@@ -536,6 +543,8 @@ impl Default for AppSettings {
             layout_autosave: true,
             drawing_templates: Default::default(),
             drawing_toolbar_pos: None,
+            watchlists: Default::default(),
+            right_panel: Default::default(),
         }
     }
 }
@@ -555,6 +564,9 @@ impl AppSettings {
             self.tabs.push(TabSettings::default());
         }
         self.active_tab = self.active_tab.min(self.tabs.len() - 1);
+        self.watchlists = std::mem::take(&mut self.watchlists).normalized();
+        self.right_panel.width =
+            crate::watchlist::RightPanelSettings::clamped_width(self.right_panel.width);
         for tab in &mut self.tabs {
             // Files from before indicators had a volume on/off switch and no
             // indicator list (so they got the default Volume indicator).

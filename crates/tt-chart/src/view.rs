@@ -491,6 +491,28 @@ impl ChartView {
             .map(|(_, r)| *r)
     }
 
+    /// The bar under screen x in the last frame (the crosshair's bar), as
+    /// an index into the chart's series. `None` outside the bars, over the
+    /// axes, or for chart types whose bars are not the series' (Renko,
+    /// line break).
+    pub fn bar_at_x(&self, p: Pos2, series_len: usize) -> Option<usize> {
+        let fr = self.frame.as_ref()?;
+        if !fr.plot.x_range().contains(p.x) || fr.vp.bar_count != series_len {
+            return None;
+        }
+        fr.vp.bar_at(p.x)
+    }
+
+    /// The bar slot under screen x in the last frame.
+    pub fn slot_at_x(&self, x: f32) -> Option<i64> {
+        self.frame.as_ref().map(|f| f.vp.slot_at(x))
+    }
+
+    /// Decimals of the price scale in the last frame.
+    pub fn price_precision(&self) -> Option<usize> {
+        self.frame.as_ref().map(|f| f.precision)
+    }
+
     /// What is at `p` (screen point) in the last frame's layout.
     pub fn hit_test(&self, p: Pos2) -> ChartHit {
         for hit in &self.legend_hits {

@@ -159,9 +159,14 @@ impl Glyph {
     pub const DRAW_EYE: Glyph = Glyph::Svg("tt-icons/draw-eye.svg");
     pub const DRAW_EYE_OFF: Glyph = Glyph::Svg("tt-icons/draw-eye-off.svg");
     pub const DRAW_TRASH: Glyph = Glyph::Svg("tt-icons/draw-trash.svg");
+    // Right sidebar (docs/specs/right-panel.md).
+    pub const PANEL_WATCHLIST: Glyph = Glyph::Svg("tt-icons/panel-watchlist.svg");
+    pub const PANEL_ALERTS: Glyph = Glyph::Svg("tt-icons/panel-alerts.svg");
+    pub const PANEL_OBJECT_TREE: Glyph = Glyph::Svg("tt-icons/panel-object-tree.svg");
+    pub const TREE_INDICATOR: Glyph = Glyph::Svg("tt-icons/tree-indicator.svg");
 
     /// Every SVG glyph with a name (gallery contact sheet).
-    pub const SVG_SET: [(&'static str, Glyph); 40] = [
+    pub const SVG_SET: [(&'static str, Glyph); 45] = [
         ("Bars", Glyph::CHART_BARS),
         ("Candles", Glyph::CHART_CANDLES),
         ("Hollow candles", Glyph::CHART_HOLLOW_CANDLES),
@@ -202,6 +207,11 @@ impl Glyph {
         ("Show", Glyph::DRAW_EYE),
         ("Hide", Glyph::DRAW_EYE_OFF),
         ("Remove", Glyph::DRAW_TRASH),
+        ("Watchlist", Glyph::PANEL_WATCHLIST),
+        ("Alerts", Glyph::PANEL_ALERTS),
+        ("Object tree", Glyph::PANEL_OBJECT_TREE),
+        ("Indicator", Glyph::TREE_INDICATOR),
+        ("Go to date", Glyph::GO_TO_DATE),
     ];
 
     /// The font character (`None` for [`Glyph::StarFilled`] and SVGs).

@@ -245,6 +245,27 @@ ICONS["go-to-date"] = [
 ]
 
 
+# ---- right sidebar (docs/specs/right-panel.md) -------------------------------
+
+# Watchlist: a bookmark with two list lines (TradingView's shape).
+ICONS["panel-watchlist"] = [
+    path("M7.5 4.5H20.5A1 1 0 0 1 21.5 5.5V23.5L14 19.5L6.5 23.5V5.5A1 1 0 0 1 7.5 4.5Z"),
+    path("M10.5 9.5H17.5M10.5 13.5H17.5"),
+]
+# Alerts: an alarm clock (two bells, hands at 12 and 9).
+ICONS["panel-alerts"] = [
+    circle(14, 15, 8),
+    path("M5.5 8.5L9 5M22.5 8.5L19 5M14 10.5V15.5H10.5"),
+]
+# Object tree: two stacked layers.
+ICONS["panel-object-tree"] = [
+    path("M14 5.5L23.5 11L14 16.5L4.5 11Z"),
+    path("M4.5 16L14 21.5L23.5 16"),
+]
+# Object tree / data window rows: an indicator (a wave).
+ICONS["tree-indicator"] = [path("M4.5 18.5C8 7.5 11 7.5 14 14S20 20.5 23.5 9.5")]
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     for name, parts in ICONS.items():
