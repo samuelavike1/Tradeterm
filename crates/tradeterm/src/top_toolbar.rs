@@ -4,8 +4,8 @@ use crate::app::{KEY_CONTEXT, OpenIndicators, TradeTerm};
 use crate::ui::chart_type_icon;
 use gpui_kit::component::h_flex;
 use gpui_kit::*;
-use tt_ui::prelude::*;
 use tt_ui::hsla;
+use tt_ui::prelude::*;
 use tt_ui::tokens::*;
 
 impl TradeTerm {

@@ -7,8 +7,8 @@ use gpui_kit::*;
 use tt_chart_gpui::ChartSource as _;
 use tt_core::ConnectionStatus;
 use tt_ui::format_keys;
-use tt_ui::prelude::*;
 use tt_ui::hsla;
+use tt_ui::prelude::*;
 use tt_ui::tokens::*;
 
 /// Status bar group separator: a short vertical hairline.
@@ -69,9 +69,7 @@ impl TradeTerm {
         }
         bar = bar.child(group_divider()).child(pair(
             "Bars",
-            div()
-                .child(tab.series.len().to_string())
-                .into_any_element(),
+            div().child(tab.series.len().to_string()).into_any_element(),
         ));
         bar = bar.child(div().flex_1());
         if let Some(i) = tab.symbol_info.as_ref() {
@@ -84,9 +82,7 @@ impl TradeTerm {
                 .child(group_divider())
                 .child(pair(
                     "Tick",
-                    div()
-                        .child(i.tick_size.to_string())
-                        .into_any_element(),
+                    div().child(i.tick_size.to_string()).into_any_element(),
                 ))
                 .child(group_divider());
         }
@@ -108,7 +104,12 @@ impl TradeTerm {
         let line = |k: &str, v: String| {
             h_flex()
                 .gap(S3.px())
-                .child(div().w(W_FIELD_NUMBER.px()).text_color(muted).child(k.to_owned()))
+                .child(
+                    div()
+                        .w(W_FIELD_NUMBER.px())
+                        .text_color(muted)
+                        .child(k.to_owned()),
+                )
                 .child(v)
         };
         // Top right of the plot, clear of the price axis and below the

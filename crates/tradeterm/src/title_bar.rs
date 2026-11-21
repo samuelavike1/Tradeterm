@@ -1,6 +1,6 @@
 //! The title bar: chart tab pills, new tab, theme toggle, settings menu.
 
-use crate::app::{LoadSynthetic, NewTab, ToggleTheme, TogglePerf, TradeTerm};
+use crate::app::{LoadSynthetic, NewTab, TogglePerf, ToggleTheme, TradeTerm};
 use crate::ui::{badge_color, snappy};
 use gpui_kit::base::transition;
 use gpui_kit::component::{TitleBar, h_flex};
@@ -8,8 +8,8 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use tt_theme::{ThemeMode, badge_fg, with_alpha};
 use tt_ui::prelude::*;
-use tt_ui::{Menu, hsla};
 use tt_ui::tokens::*;
+use tt_ui::{Menu, hsla};
 
 impl TradeTerm {
     pub(crate) fn title_bar(
@@ -66,7 +66,9 @@ impl TradeTerm {
                             ToolbarButton::icon("settings", Glyph::SETTINGS)
                                 .size(ControlSize::Sm)
                                 .tooltip("Settings")
-                                .menu(move |menu, window, cx| settings_menu(menu, &this, window, cx)),
+                                .menu(move |menu, window, cx| {
+                                    settings_menu(menu, &this, window, cx)
+                                }),
                         ),
                 ),
         )
