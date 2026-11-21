@@ -30,6 +30,7 @@ mod top_toolbar;
 mod ui;
 mod visibility_tv;
 mod watchlist_panel;
+mod window_menu;
 
 use app::TradeTerm;
 use gpui_kit::*;

@@ -37,6 +37,10 @@ actions!(
         TogglePerf,
         /// "Indicators, metrics, and strategies" ("/" on the chart).
         OpenIndicators,
+        /// Reopen the last closed tab (Ctrl+Shift+T).
+        ReopenClosedTab,
+        /// Save settings and quit (Ctrl+Shift+Q).
+        Quit,
     ]
 );
 
@@ -51,7 +55,8 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-w", CloseTab, None),
         KeyBinding::new("ctrl-tab", NextTab, None),
         KeyBinding::new("ctrl-shift-tab", PrevTab, None),
-        KeyBinding::new("ctrl-shift-t", ToggleTheme, None),
+        KeyBinding::new("ctrl-shift-t", ReopenClosedTab, None),
+        KeyBinding::new("ctrl-shift-q", Quit, None),
         KeyBinding::new("ctrl-shift-d", LoadSynthetic, None),
         KeyBinding::new("f12", TogglePerf, None),
         KeyBinding::new("/", OpenIndicators, Some(KEY_CONTEXT)),
@@ -108,6 +113,8 @@ pub struct TradeTerm {
     pub(crate) layout_autosave: bool,
     /// Autosave off and the tabs differ from the saved layout.
     pub(crate) layout_dirty: bool,
+    /// Recently closed tabs, newest last (window menu "Reopen closed tab").
+    pub(crate) closed_tabs: Vec<TabSettings>,
     /// "Save as default" and named presets of the indicator settings dialog.
     pub(crate) indicator_defaults: tt_session::settings::IndicatorDefaults,
     pub(crate) indicator_presets: tt_session::settings::IndicatorPresets,
@@ -277,6 +284,7 @@ impl TradeTerm {
             layout_name: settings.layout_name.clone(),
             layout_autosave: settings.layout_autosave,
             layout_dirty: false,
+            closed_tabs: Vec::new(),
             indicator_defaults: settings.indicator_defaults.clone(),
             indicator_presets: settings.indicator_presets.clone(),
             perf: false,
@@ -556,7 +564,8 @@ impl TradeTerm {
         if self.tabs.len() <= 1 || index >= self.tabs.len() {
             return;
         }
-        self.tabs.remove(index);
+        let closed = self.tabs.remove(index);
+        self.remember_closed_tab(closed.read(cx).state.read(cx).source.tab.settings());
         if self.active > index || self.active >= self.tabs.len() {
             self.active = self.active.saturating_sub(1);
         }
@@ -1002,6 +1011,10 @@ impl Render for TradeTerm {
             }))
             .map(|root| crate::drawing_toolbar::on_pick_actions(root, cx))
             .map(|root| crate::top_toolbar::on_app_bar_actions(root, cx))
+            .on_action(cx.listener(|this, _: &ReopenClosedTab, window, cx| {
+                this.reopen_closed_tab(window, cx)
+            }))
+            .on_action(cx.listener(|_, _: &Quit, _, cx| cx.quit()))
             .map(|root| crate::status_bar::on_bottom_bar_actions(root, cx))
             .child(self.title_bar(window, cx))
             .child(self.toolbar(window, cx))

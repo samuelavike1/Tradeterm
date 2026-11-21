@@ -77,6 +77,9 @@ icons!(
     "panel-alerts",
     "panel-object-tree",
     "tree-indicator",
+    "app-fullscreen",
+    "app-exit-fullscreen",
+    "app-settings",
 );
 
 /// Our icons plus gpui-kit's default asset bundle.

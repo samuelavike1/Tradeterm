@@ -130,3 +130,7 @@ Add to this list whenever something is skipped; remove an entry when it lands.
 - "Moving" alerts wait for N bars of live data (no seeding from history);
   `{{volume}}` prints NaN (the feeds carry no bar volume).
 - Alerts run only while the app is open (no server).
+- Window menu Zoom (− 90% +): an app-wide UI zoom needs every kit size, text
+  size and the chart canvas to go through one scale (gpui's display-scale
+  override is test-only and the kit uses absolute px). "Open link from
+  clipboard": nothing to open in tradeterm yet (no shareable chart links).

@@ -50,6 +50,7 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-shift-z", Redo, chart),
         KeyBinding::new("shift-f", ToggleFullscreen, chart),
         KeyBinding::new("ctrl-k", QuickSearch, None),
+        KeyBinding::new("ctrl-,", OpenChartSettings, None),
         KeyBinding::new("ctrl-s", SaveLayout, None),
         KeyBinding::new("ctrl-alt-s", DownloadSnapshot, None),
         KeyBinding::new("ctrl-shift-s", CopySnapshot, None),
@@ -222,7 +223,7 @@ impl TradeTerm {
                     ),
             )
             .child(
-                ToolbarButton::icon("chart-settings", Glyph::SETTINGS)
+                ToolbarButton::icon("chart-settings", Glyph::APP_SETTINGS)
                     .tooltip("Settings")
                     .on_click(
                         cx.listener(|this, _, window, cx| this.open_chart_settings(window, cx)),
@@ -232,9 +233,9 @@ impl TradeTerm {
                 ToolbarButton::icon(
                     "fullscreen",
                     if full {
-                        Glyph::EXIT_FULLSCREEN
+                        Glyph::APP_EXIT_FULLSCREEN
                     } else {
-                        Glyph::FULLSCREEN
+                        Glyph::APP_FULLSCREEN
                     },
                 )
                 .selected(full)

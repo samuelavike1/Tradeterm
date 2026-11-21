@@ -266,6 +266,36 @@ ICONS["panel-object-tree"] = [
 ICONS["tree-indicator"] = [path("M4.5 18.5C8 7.5 11 7.5 14 14S20 20.5 23.5 9.5")]
 
 
+# App bar icons given as Tabler SVGs (24 x 24, stroke 1), kept exact and
+# moved into our 28 box: +2 to center, +0.5 so axis-aligned strokes sit on
+# half pixels (crisp at 1x).
+def tabler(*ds):
+    return ['<g transform="translate(2.5 2.5)">' + "".join(path(d) for d in ds) + "</g>"]
+
+
+# Fullscreen: four corner brackets (Tabler "maximize").
+ICONS["app-fullscreen"] = tabler(
+    "M4 8v-2a2 2 0 0 1 2 -2h2",
+    "M4 16v2a2 2 0 0 0 2 2h2",
+    "M16 4h2a2 2 0 0 1 2 2v2",
+    "M16 20h2a2 2 0 0 0 2 -2v-2",
+)
+# Exit fullscreen: the brackets turned inward (Tabler "minimize").
+ICONS["app-exit-fullscreen"] = tabler(
+    "M15 19v-2a2 2 0 0 1 2 -2h2",
+    "M15 5v2a2 2 0 0 0 2 2h2",
+    "M5 15h2a2 2 0 0 1 2 2v2",
+    "M5 9h2a2 2 0 0 0 2 -2v-2",
+)
+# Settings: a hexagon with a circle (Tabler "settings-2" style).
+ICONS["app-settings"] = tabler(
+    "M19.875 6.27a2.225 2.225 0 0 1 1.125 1.948v7.284c0 .809 -.443 1.555 -1.158 1.948l-6.75 4.27"
+    "a2.269 2.269 0 0 1 -2.184 0l-6.75 -4.27a2.225 2.225 0 0 1 -1.158 -1.948v-7.285c0 -.809 .443 -1.554"
+    " 1.158 -1.947l6.75 -3.98a2.33 2.33 0 0 1 2.25 0l6.75 3.98h-.033",
+    "M9 12a3 3 0 1 0 6 0a3 3 0 1 0 -6 0",
+)
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     for name, parts in ICONS.items():

@@ -168,6 +168,13 @@ impl Glyph {
     pub const PANEL_ALERTS: Glyph = Glyph::Svg("tt-icons/panel-alerts.svg");
     pub const PANEL_OBJECT_TREE: Glyph = Glyph::Svg("tt-icons/panel-object-tree.svg");
     pub const TREE_INDICATOR: Glyph = Glyph::Svg("tt-icons/tree-indicator.svg");
+    // App bar / window menu (Tabler shapes, scripts/icons/gen.py).
+    pub const APP_FULLSCREEN: Glyph = Glyph::Svg("tt-icons/app-fullscreen.svg");
+    pub const APP_EXIT_FULLSCREEN: Glyph = Glyph::Svg("tt-icons/app-exit-fullscreen.svg");
+    pub const APP_SETTINGS: Glyph = Glyph::Svg("tt-icons/app-settings.svg");
+    pub const REOPEN: Glyph = Glyph::Lucide(Lucide::RotateCcw);
+    pub const EXIT: Glyph = Glyph::Lucide(Lucide::LogOut);
+    pub const ACTIVITY: Glyph = Glyph::Lucide(Lucide::Activity);
 
     /// Every SVG glyph with a name (gallery contact sheet).
     pub const SVG_SET: [(&'static str, Glyph); 47] = [

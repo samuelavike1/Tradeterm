@@ -1,15 +1,15 @@
-//! The title bar: chart tab pills, new tab, theme toggle, main menu.
+//! The title bar: chart tab pills, new tab, the "⋯" window menu.
 
-use crate::app::{LoadSynthetic, NewTab, TogglePerf, ToggleTheme, TradeTerm};
+use crate::app::{NewTab, TradeTerm};
 use crate::ui::{badge_color, logo_or_badge, snappy};
 use gpui_kit::base::transition;
 use gpui_kit::component::{TitleBar, h_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use tt_theme::{ThemeMode, badge_fg, with_alpha};
+use tt_theme::{badge_fg, with_alpha};
+use tt_ui::hsla;
 use tt_ui::prelude::*;
 use tt_ui::tokens::*;
-use tt_ui::{Menu, hsla};
 
 impl TradeTerm {
     pub(crate) fn title_bar(
@@ -34,8 +34,6 @@ impl TradeTerm {
                 cx,
             ));
         }
-        let this = cx.entity().downgrade();
-        let dark = self.theme.dark;
         TitleBar::new().child(
             h_flex()
                 .w_full()
@@ -50,87 +48,9 @@ impl TradeTerm {
                             .on_click(cx.listener(|this, _, window, cx| this.new_tab(window, cx))),
                     ),
                 )
-                .child(
-                    h_flex()
-                        .gap(S1.px())
-                        .items_center()
-                        .child(
-                            IconButton::new("theme", if dark { Glyph::SUN } else { Glyph::MOON })
-                                .size(ControlSize::Sm)
-                                .tooltip_action("Toggle theme", &ToggleTheme, None)
-                                .on_click(
-                                    cx.listener(|this, _, window, cx| {
-                                        this.toggle_theme(window, cx)
-                                    }),
-                                ),
-                        )
-                        .child(
-                            ToolbarButton::icon("main-menu", Glyph::MENU)
-                                .size(ControlSize::Sm)
-                                .tooltip("Main menu")
-                                .menu_right()
-                                .menu(move |menu, window, cx| {
-                                    settings_menu(menu, &this, window, cx)
-                                }),
-                        ),
-                ),
+                .child(crate::window_menu::window_menu_button(cx)),
         )
     }
-}
-
-/// The main menu: theme (checked), chart settings, developer tools.
-fn settings_menu(menu: Menu, app: &WeakEntity<TradeTerm>, window: &Window, cx: &App) -> Menu {
-    let Some(a) = app.upgrade() else {
-        return menu;
-    };
-    let (mode, perf) = {
-        let a = a.read(cx);
-        (a.theme_mode, a.perf)
-    };
-    let theme_row = |id: &'static str, label: &'static str, m: ThemeMode| {
-        let app = app.clone();
-        MenuRow::new(id, label)
-            .checked(mode == m)
-            .on_select(move |window, cx| {
-                app.update(cx, |a, cx| a.set_theme(m, window, cx)).ok();
-            })
-    };
-    let (settings, synth, perf_app) = (app.clone(), app.clone(), app.clone());
-    menu.width(MenuWidth::Lg)
-        .section("Theme")
-        .row(theme_row("theme-dark", "Dark", ThemeMode::Dark))
-        .row(theme_row("theme-light", "Light", ThemeMode::Light))
-        .row(theme_row("theme-system", "System", ThemeMode::System))
-        .separator()
-        .row(
-            MenuRow::new("chart-settings", "Chart settings…").on_select(move |window, cx| {
-                settings
-                    .update(cx, |a, cx| a.open_chart_settings(window, cx))
-                    .ok();
-            }),
-        )
-        .separator()
-        .section("Developer")
-        .row(
-            MenuRow::new("perf", "Performance overlay")
-                .checked(perf)
-                .shortcut_action(&TogglePerf, None, window)
-                .on_select(move |_, cx| {
-                    perf_app
-                        .update(cx, |a, cx| {
-                            a.perf = !a.perf;
-                            cx.notify();
-                        })
-                        .ok();
-                }),
-        )
-        .row(
-            MenuRow::new("synthetic", "Load 1M synthetic bars")
-                .shortcut_action(&LoadSynthetic, None, window)
-                .on_select(move |_, cx| {
-                    synth.update(cx, |a, cx| a.load_synthetic(cx)).ok();
-                }),
-        )
 }
 
 /// Badge diameter: the small-icon box, so initials line up with icons.

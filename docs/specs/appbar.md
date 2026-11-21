@@ -46,8 +46,8 @@ TradingView runs in a browser, so its tabs are browser tabs. Ours:
 |---------|-----------|--------|
 | Tab pill | Badge, symbol, change %, × on hover; middle-click closes; active fill eases in. | done |
 | New tab (+) | Ctrl + T. | done |
-| Theme toggle | Sun / moon, Ctrl + Shift + T. | done |
-| Main menu | Theme (Dark / Light / System), Chart settings…, Developer (performance overlay F12, synthetic bars). | done (icon changed from gear to menu so the app bar gear is the only "Settings") |
+| Window menu (⋯) | TradingView desktop's window menu (`img/tv-ref/tv-window-menu.png`) without profile and New window: Settings (Ctrl+,), New tab (Ctrl+T), Reopen closed tab (Ctrl+Shift+T, last 10 closed tabs), theme tiles System / Dark / Light, Developer (performance overlay F12, 1M synthetic bars), Exit tradeterm (Ctrl+Shift+Q, settings flushed on quit). Replaces the theme toggle and the hamburger menu. | done |
+| Zoom row, Open link from clipboard | − 90% + app zoom; open a shared link. | backlog (see BACKLOG.md) |
 
 ## 3. Consistency rules (both bars)
 
