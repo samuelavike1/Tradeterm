@@ -6928,6 +6928,7 @@ dependencies = [
 name = "tradeterm"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "ecolor",
  "emath",
  "futures",

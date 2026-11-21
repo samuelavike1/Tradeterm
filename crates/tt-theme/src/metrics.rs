@@ -74,6 +74,9 @@ pub const H_TITLE_BAR: f32 = 34.0;
 pub const H_TAB: f32 = 28.0;
 pub const H_TOOLBAR: f32 = 40.0;
 pub const H_STATUS_BAR: f32 = 28.0;
+/// The bottom toolbar under the chart (date ranges, Go to, clock):
+/// TradingView's is 38 tall plus a 1 px top border.
+pub const H_BOTTOM_BAR: f32 = 38.0;
 /// A/L/%, swatches in rows, row actions (star, ×), canvas legend buttons.
 pub const CONTROL_XS: f32 = 20.0;
 /// In-chart overlay buttons, chips, title bar buttons.
