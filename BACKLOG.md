@@ -63,3 +63,10 @@ Add to this list whenever something is skipped; remove an entry when it lands.
 ## Data / connection
 - First chart at startup still takes ~3–4 s to show history (cold REST fetch).
 - Live stream attaches ~1 s after history appears.
+
+## Chart settings (hidden until they work)
+- Bid and ask labels/lines: needs a Binance `bookTicker` stream (new MarketEvent,
+  throttled repaints). The model fields exist; the dialog rows are hidden.
+- Navigation buttons on the chart (zoom / scroll / reset at the bottom): setting
+  exists in the model, dialog row hidden.
+- Pre/post market and Plus button on the price scale (n/a for crypto / blocked).

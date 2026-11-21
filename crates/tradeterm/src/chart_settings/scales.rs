@@ -258,52 +258,7 @@ impl ChartSettingsPanel {
             window,
             cx,
         ));
-        // Bid and ask: mode + both colors, then the line style.
-        let ba = sc.bid_ask;
-        let mode = self
-            .select(
-                "sc.bid_ask.mode",
-                LINE_LABEL_MODES.iter().map(|m| (*m, m.label())),
-                LabelMode::from_value_line(ba.label, ba.line),
-                |s, m| {
-                    s.scales.bid_ask.label = m.shows_value();
-                    s.scales.bid_ask.line = m.shows_line();
-                },
-                cx,
-            )
-            .width(W_SELECT_SM + tokens::S4);
-        let bid = color!(self, window, cx, "sc.bid", scales.bid_ask.bid, |_, t| {
-            t.series_palette[0]
-        });
-        let ask = color!(self, window, cx, "sc.ask", scales.bid_ask.ask, |_, _| {
-            Color32::from_rgb(0xf7, 0x52, 0x5f)
-        });
-        rows.push(
-            Self::row("Bid and ask")
-                .control(mode)
-                .control(bid)
-                .control(ask)
-                .into_any_element(),
-        );
-        let kind = self.line_kind(
-            "sc.bid_ask.kind",
-            ba.kind,
-            |s, v| s.scales.bid_ask.kind = v,
-            cx,
-        );
-        let width = self.width(
-            "sc.bid_ask.width",
-            ba.width,
-            |s, v| s.scales.bid_ask.width = v,
-            cx,
-        );
-        rows.push(
-            Self::row("Bid and ask lines")
-                .indent()
-                .control(kind)
-                .control(width)
-                .into_any_element(),
-        );
+        // Bid and ask: hidden until the feed has bid/ask data (BACKLOG.md).
 
         rows.push(section("Time scale"));
         rows.push(
