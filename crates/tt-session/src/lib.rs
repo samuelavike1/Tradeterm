@@ -4,6 +4,8 @@
 //! synthetic stress-test data ([`synthetic`]).
 
 pub mod fsutil;
+pub mod indicator_templates;
+pub mod layouts;
 pub mod runtime;
 pub mod settings;
 pub mod synthetic;

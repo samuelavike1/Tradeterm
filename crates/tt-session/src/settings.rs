@@ -303,6 +303,13 @@ pub struct AppSettings {
     /// kept as raw JSON (written back on save); it never fails the file.
     #[serde(deserialize_with = "tt_chart::drawings::deserialize_drawing_map")]
     pub drawings: tt_chart::DrawingMap,
+    /// Saved indicator templates (unreadable entries are skipped).
+    #[serde(deserialize_with = "tolerant_vec")]
+    pub indicator_templates: Vec<crate::indicator_templates::IndicatorTemplate>,
+    /// Name of the current layout (`layouts.json`); `tabs` is its working copy.
+    pub layout_name: String,
+    /// Autosave the current layout (TradingView's "Autosave", on by default).
+    pub layout_autosave: bool,
 }
 
 impl Default for AppSettings {
@@ -322,6 +329,9 @@ impl Default for AppSettings {
             favorite_indicators: Vec::new(),
             chart_style: tt_chart::ChartStyle::default(),
             drawings: Default::default(),
+            indicator_templates: Vec::new(),
+            layout_name: crate::layouts::UNNAMED.to_owned(),
+            layout_autosave: true,
         }
     }
 }

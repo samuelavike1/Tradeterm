@@ -82,6 +82,23 @@ impl Glyph {
     pub const PALETTE: Glyph = Glyph::Lucide(Lucide::Palette);
     pub const COPY: Glyph = Glyph::Lucide(Lucide::Copy);
     pub const CHART_CANDLESTICK: Glyph = Glyph::Lucide(Lucide::ChartCandlestick);
+    // App bar (docs/specs/appbar.md).
+    pub const UNDO: Glyph = Glyph::Lucide(Lucide::Undo2);
+    pub const REDO: Glyph = Glyph::Lucide(Lucide::Redo2);
+    pub const CAMERA: Glyph = Glyph::Lucide(Lucide::Camera);
+    pub const FULLSCREEN: Glyph = Glyph::Lucide(Lucide::Expand);
+    pub const EXIT_FULLSCREEN: Glyph = Glyph::Lucide(Lucide::Shrink);
+    pub const TEMPLATES: Glyph = Glyph::Lucide(Lucide::LayoutTemplate);
+    pub const DOWNLOAD: Glyph = Glyph::Lucide(Lucide::ImageDown);
+    pub const CLIPBOARD_COPY: Glyph = Glyph::Lucide(Lucide::ClipboardCopy);
+    pub const MENU: Glyph = Glyph::Lucide(Lucide::Menu);
+    pub const SAVE: Glyph = Glyph::Lucide(Lucide::Save);
+    pub const SAVED: Glyph = Glyph::Lucide(Lucide::CloudCheck);
+    pub const FOLDER_OPEN: Glyph = Glyph::Lucide(Lucide::FolderOpen);
+    pub const FILE_PLUS: Glyph = Glyph::Lucide(Lucide::FilePlus);
+    pub const FILE_DOWN: Glyph = Glyph::Lucide(Lucide::FileDown);
+    pub const RENAME: Glyph = Glyph::Lucide(Lucide::TextCursorInput);
+    pub const COMMAND: Glyph = Glyph::Lucide(Lucide::Command);
 
     /// The font character (`None` for [`Glyph::StarFilled`]).
     pub fn char(self) -> Option<char> {

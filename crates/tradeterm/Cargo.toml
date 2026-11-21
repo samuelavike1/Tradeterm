@@ -12,6 +12,7 @@ futures = "0.3.34"
 gpui-kit = "=0.10.0"
 lucide-icons = "1.77.0"
 tokio = { version = "1.54.1", features = ["rt"] }
+tiny-skia = "0.11.4"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 tt-brokers = { path = "../tt-brokers" }
@@ -21,3 +22,4 @@ tt-core = { path = "../tt-core" }
 tt-session = { path = "../tt-session" }
 tt-theme = { path = "../tt-theme" }
 tt-ui = { path = "../tt-ui" }
+ttf-parser = "0.25.1"

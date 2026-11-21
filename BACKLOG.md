@@ -63,3 +63,27 @@ Add to this list whenever something is skipped; remove an entry when it lands.
 ## Data / connection
 - First chart at startup still takes ~3–4 s to show history (cold REST fetch).
 - Live stream attaches ~1 s after history appears.
+
+## Top app bar (docs/specs/appbar.md)
+- Compare / add symbol (+): needs a second live series per chart, a percent
+  overlay on the price pane (or its own scale / pane) and a legend row for it.
+- Create alert (Alt + A): needs an alert engine evaluating conditions on live
+  data, an alert list and notifications.
+- Bar replay: needs a replay source (history cut at a bar, timed feed, step /
+  speed) and the replay toolbar on the chart.
+- Layout setup: several charts per layout (1–16 grids) with symbol / interval /
+  crosshair / time / date-range sync. Today one chart per tab.
+- Share layout, snapshot "Copy link" / "Open in new tab" / "Post image",
+  Publish idea: need a server to host layouts and images.
+- Trade button / trading panel: no broker execution yet.
+- Undo / redo covers drawings only; indicator, chart type, symbol and interval
+  changes are not in the history. TradingView's tooltip names the action
+  ("Undo create trend line").
+- Layouts carry tabs only; drawings stay per symbol across layouts (TradingView
+  can keep drawings per layout). Unsaved-changes prompt when switching with
+  autosave off (changes are dropped today).
+- Download chart data: OHLCV only (TradingView adds indicator columns).
+- Indicator templates: TradingView's tabbed menu (Indicators / Templates) is one
+  menu with sections here; "Technicals" built-ins are limited to the indicators
+  we have (no Bill Williams 3 Lines, Displaced EMA, MA Exp Ribbon, Swing
+  Trading, Volume Based).

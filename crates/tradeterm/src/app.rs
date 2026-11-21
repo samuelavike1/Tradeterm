@@ -56,6 +56,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("/", OpenIndicators, Some(KEY_CONTEXT)),
     ]);
     cx.bind_keys(crate::drawing_toolbar::key_bindings());
+    cx.bind_keys(crate::top_toolbar::key_bindings());
 }
 
 /// F12 overlay numbers (per second, for the active chart).
@@ -97,6 +98,14 @@ pub struct TradeTerm {
     pub(crate) collapsed_timeframe_sections: Vec<String>,
     pub(crate) favorite_chart_types: Vec<ChartType>,
     pub(crate) favorite_indicators: Vec<tt_core::StudyKind>,
+    /// Saved indicator templates (app bar, `indicator_templates.rs`).
+    pub(crate) indicator_templates: Vec<tt_session::indicator_templates::IndicatorTemplate>,
+    /// Saved layouts (`layouts.json`) and the current one (`layouts_ui.rs`).
+    pub(crate) layouts: tt_session::layouts::LayoutStore,
+    pub(crate) layout_name: String,
+    pub(crate) layout_autosave: bool,
+    /// Autosave off and the tabs differ from the saved layout.
+    pub(crate) layout_dirty: bool,
     pub(crate) perf: bool,
     pub(crate) perf_stats: PerfStats,
     /// Quote chip of the symbol search, remembered between openings.
@@ -194,6 +203,11 @@ impl TradeTerm {
             ThemeMode::System => window.appearance() == WindowAppearance::Dark,
         };
         let templates = TemplateStore::load(store.path().map(TemplateStore::path_next_to));
+        let layouts = tt_session::layouts::LayoutStore::load(
+            store
+                .path()
+                .map(tt_session::layouts::LayoutStore::path_next_to),
+        );
         let mut app = Self {
             shared,
             tabs: Vec::new(),
@@ -211,6 +225,11 @@ impl TradeTerm {
             collapsed_timeframe_sections: settings.collapsed_timeframe_sections.clone(),
             favorite_chart_types: settings.favorite_chart_types.clone(),
             favorite_indicators: settings.favorite_indicators.clone(),
+            indicator_templates: settings.indicator_templates.clone(),
+            layouts,
+            layout_name: settings.layout_name.clone(),
+            layout_autosave: settings.layout_autosave,
+            layout_dirty: false,
             perf: false,
             perf_stats: PerfStats::default(),
             search_quote: 0,
@@ -236,7 +255,7 @@ impl TradeTerm {
         app
     }
 
-    fn make_chart(
+    pub(crate) fn make_chart(
         &mut self,
         t: &TabSettings,
         synthetic: Option<usize>,
@@ -285,7 +304,11 @@ impl TradeTerm {
     }
 
     /// Runs `f` on the active tab's session and repaints its chart.
-    fn with_tab(&mut self, cx: &mut Context<Self>, f: impl FnOnce(&mut TabSource, &Shared)) {
+    pub(crate) fn with_tab(
+        &mut self,
+        cx: &mut Context<Self>,
+        f: impl FnOnce(&mut TabSource, &Shared),
+    ) {
         let Some(chart) = self.tab_chart().cloned() else {
             return;
         };
@@ -343,6 +366,9 @@ impl TradeTerm {
             collapsed_timeframe_sections: self.collapsed_timeframe_sections.clone(),
             favorite_chart_types: self.favorite_chart_types.clone(),
             favorite_indicators: self.favorite_indicators.clone(),
+            indicator_templates: self.indicator_templates.clone(),
+            layout_name: self.layout_name.clone(),
+            layout_autosave: self.layout_autosave,
             ..AppSettings::default()
         };
         // Up/down colors live in the chart settings now.
@@ -395,6 +421,7 @@ impl TradeTerm {
             Poll::Due => {
                 self.stash_drawings(cx);
                 let snapshot = self.settings_snapshot(cx);
+                self.layout_after_save(&snapshot, cx);
                 self.store.save(snapshot);
             }
             Poll::Wait(wait) => self.schedule_settings_check(wait, cx),
@@ -406,6 +433,10 @@ impl TradeTerm {
     pub fn flush_settings(&mut self, cx: &mut App) {
         self.stash_drawings(cx);
         let snapshot = self.settings_snapshot(cx);
+        if self.layout_autosave {
+            let (name, tabs, active) = (&self.layout_name, &snapshot.tabs, snapshot.active_tab);
+            self.layouts.save(name, tabs, active).ok();
+        }
         self.store.flush_with(|| snapshot);
     }
 
@@ -554,7 +585,7 @@ impl TradeTerm {
     }
 
     /// The UI follows the active tab's up / down colors.
-    fn refresh_ui_theme(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn refresh_ui_theme(&mut self, cx: &mut Context<Self>) {
         let Some(chart) = self.tab_chart() else {
             return;
         };
@@ -873,8 +904,9 @@ impl Render for TradeTerm {
                 this.open_indicators(window, cx);
             }))
             .map(|root| crate::drawing_toolbar::on_pick_actions(root, cx))
+            .map(|root| crate::top_toolbar::on_app_bar_actions(root, cx))
             .child(self.title_bar(window, cx))
-            .child(self.toolbar(cx))
+            .child(self.toolbar(window, cx))
             .child(
                 h_flex()
                     .flex_1()

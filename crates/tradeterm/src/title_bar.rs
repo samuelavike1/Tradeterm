@@ -1,4 +1,4 @@
-//! The title bar: chart tab pills, new tab, theme toggle, settings menu.
+//! The title bar: chart tab pills, new tab, theme toggle, main menu.
 
 use crate::app::{LoadSynthetic, NewTab, TogglePerf, ToggleTheme, TradeTerm};
 use crate::ui::{badge_color, snappy};
@@ -63,9 +63,10 @@ impl TradeTerm {
                                 ),
                         )
                         .child(
-                            ToolbarButton::icon("settings", Glyph::SETTINGS)
+                            ToolbarButton::icon("main-menu", Glyph::MENU)
                                 .size(ControlSize::Sm)
-                                .tooltip("Settings")
+                                .tooltip("Main menu")
+                                .menu_right()
                                 .menu(move |menu, window, cx| {
                                     settings_menu(menu, &this, window, cx)
                                 }),
@@ -75,7 +76,7 @@ impl TradeTerm {
     }
 }
 
-/// The gear menu: theme (checked), chart settings, developer tools.
+/// The main menu: theme (checked), chart settings, developer tools.
 fn settings_menu(menu: Menu, app: &WeakEntity<TradeTerm>, window: &Window, cx: &App) -> Menu {
     let Some(a) = app.upgrade() else {
         return menu;
