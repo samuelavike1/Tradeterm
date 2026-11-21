@@ -1,11 +1,18 @@
-//! The status bar and the F12 performance overlay.
+//! The bottom toolbar under the chart (TradingView's, docs/specs/
+//! bottom-panel.md) and the F12 performance overlay.
+//!
+//! left: date ranges `1D 5D 1M 3M 6M YTD 1Y 5Y All` | Go to (Alt+G);
+//! right: connection dot (data source; words only while not connected) |
+//! the time zone clock and its zone menu.
 
-use crate::app::TradeTerm;
+use crate::app::{KEY_CONTEXT, TradeTerm};
 use crate::source::now_ms;
 use crate::ui;
 use gpui_kit::component::{ActiveTheme as _, h_flex};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use std::time::Duration;
+use tt_chart::range::{DateRange, ViewTarget};
 use tt_chart::style::TimeZoneSetting;
 use tt_chart_gpui::ChartSource as _;
 use tt_core::ConnectionStatus;
@@ -14,12 +21,36 @@ use tt_ui::hsla;
 use tt_ui::prelude::*;
 use tt_ui::tokens::*;
 
-/// Status bar group separator: a short vertical hairline.
+actions!(
+    tradeterm,
+    [
+        /// The Go to dialog (Alt+G, TradingView's).
+        GoToDate,
+    ]
+);
+
+/// Bottom toolbar shortcuts.
+pub fn key_bindings() -> Vec<KeyBinding> {
+    vec![KeyBinding::new("alt-g", GoToDate, Some(KEY_CONTEXT))]
+}
+
+/// Registers the bottom toolbar's action handlers on the app root.
+pub fn on_bottom_bar_actions(root: Stateful<Div>, cx: &mut Context<TradeTerm>) -> Stateful<Div> {
+    root.on_action(cx.listener(|this, _: &GoToDate, window, cx| {
+        if !this.chart_has_keyboard(window, cx) {
+            return cx.propagate();
+        }
+        this.open_go_to(window, cx);
+    }))
+}
+
+/// Group separator: a short vertical hairline.
 fn group_divider() -> Divider {
-    Divider::vertical().length(ICON_XS).inset(S1_5)
+    Divider::vertical().length(ICON_MD).inset(S1)
 }
 
 impl TradeTerm {
+    /// The bottom toolbar (was the status bar).
     pub(crate) fn status_bar(
         &self,
         window: &mut Window,
@@ -28,79 +59,101 @@ impl TradeTerm {
         let app = cx.weak_entity();
         let clock = window.use_keyed_state("tz-clock", cx, move |_, cx| TzClock::new(app, cx));
         let Some(chart) = self.tab_chart() else {
-            return div();
+            return div().into_any_element();
         };
         let t = cx.ui().clone();
         let state = chart.read(cx).state.read(cx);
         let tab = &state.source.tab;
+        let active = tab.chart.active_range();
+
+        let mut ranges = h_flex().gap(S0_5.px()).items_center();
+        for r in DateRange::ALL {
+            ranges = ranges.child(
+                ToolbarButton::text(
+                    SharedString::from(format!("range-{}", r.label())),
+                    r.label(),
+                )
+                .selected(active == Some(r))
+                .tooltip(r.tooltip())
+                .on_click(cx.listener(move |this, _, _, cx| this.set_date_range(r, cx))),
+            );
+        }
+
+        // Connection: a dot (tooltip: state and source); words only while
+        // not connected.
+        let connected = tab.status == ConnectionStatus::Connected;
         let (dot, text) = match &tab.status {
             ConnectionStatus::Connected => (t.up, "Connected".to_owned()),
             ConnectionStatus::Connecting => (t.warning, "Connecting…".to_owned()),
             other => (t.down, format!("{other:?}")),
         };
-        let muted = hsla(t.text_muted);
-        let pair = |k: &'static str, v: AnyElement| {
-            h_flex()
-                .gap(S1.px())
-                .child(div().text_color(muted).child(k))
-                .child(v)
-        };
-        let mut bar = h_flex()
-            .h(H_STATUS_BAR.px())
+        let tip = SharedString::from(format!("{text} · {}", tab.source_name(&self.shared)));
+        let connection = h_flex()
+            .id("connection")
+            .h(CONTROL_MD.px())
             .px(S2.px())
-            .gap(S1.px())
+            .gap(S1_5.px())
             .items_center()
-            .text_size(TEXT_SMALL.px())
+            .text_size(TEXT_BODY.px())
+            .text_color(hsla(t.text_muted))
+            .child(ui::status_dot(
+                dot,
+                tab.status == ConnectionStatus::Connecting,
+            ))
+            .when(!connected, |d| d.child(text))
+            .tooltip(tt_ui::tip(tip, None));
+
+        h_flex()
+            .id("bottom-bar")
+            .flex_none()
+            .h(H_BOTTOM_BAR.px())
+            .px(S1.px())
+            .gap(S0_5.px())
+            .items_center()
             .text_color(hsla(t.text))
             .bg(hsla(t.panel))
             .border_t_1()
             .border_color(hsla(t.border))
+            .child(ranges)
+            .child(group_divider())
             .child(
-                h_flex()
-                    .gap(S1_5.px())
-                    .items_center()
-                    .child(ui::status_dot(
-                        dot,
-                        tab.status == ConnectionStatus::Connecting,
-                    ))
-                    .child(text),
-            );
-        if let Some(c) = tab.series.last() {
-            let color = if c.is_bullish() { t.up } else { t.down };
-            let price = tt_chart::scale::format_price(c.close, tab.price_precision());
-            bar = bar.child(group_divider()).child(pair(
-                "Last",
-                div()
-                    .text_color(hsla(color))
-                    .child(price)
-                    .into_any_element(),
-            ));
-        }
-        bar = bar.child(group_divider()).child(pair(
-            "Bars",
-            div().child(tab.series.len().to_string()).into_any_element(),
-        ));
-        bar = bar.child(div().flex_1());
-        if let Some(i) = tab.symbol_info.as_ref() {
-            bar = bar
-                .child(
-                    div()
-                        .text_color(muted)
-                        .child(format!("{} / {}", i.base, i.quote)),
-                )
-                .child(group_divider())
-                .child(pair(
-                    "Tick",
-                    div().child(i.tick_size.to_string()).into_any_element(),
-                ))
-                .child(group_divider());
-        }
-        bar.child(div().text_color(muted).child(tab.source_name(&self.shared)))
+                IconButton::new("go-to", Glyph::GO_TO_DATE)
+                    .tooltip_action("Go to", &GoToDate, Some(KEY_CONTEXT))
+                    .on_click(cx.listener(|this, _, window, cx| this.open_go_to(window, cx))),
+            )
+            .child(div().flex_1())
+            .child(connection)
             .child(group_divider())
             .child(clock)
+            .into_any_element()
     }
 
-    /// Status-bar zone menu: the active tab's Symbol › Time zone (its own
+    /// A range button: TradingView's interval for it, then its span.
+    pub(crate) fn set_date_range(&mut self, r: DateRange, cx: &mut Context<Self>) {
+        self.with_tab(cx, |s, shared| {
+            s.tab.set_timeframe(r.timeframe(), shared);
+            s.tab.chart.show_target(ViewTarget::Range(r), Some(r));
+        });
+    }
+
+    /// Go to dialog result: a date or a custom range.
+    pub(crate) fn go_to(&mut self, target: ViewTarget, cx: &mut Context<Self>) {
+        self.with_tab(cx, |s, _| s.tab.chart.show_target(target, None));
+    }
+
+    pub(crate) fn open_go_to(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(chart) = self.tab_chart() else {
+            return;
+        };
+        let tab = &chart.read(cx).state.read(cx).source.tab;
+        let tz = tab.chart.time_zone().clone();
+        let visible = tab.chart.visible_time_range(&tab.series);
+        let app = cx.weak_entity();
+        let panel = cx.new(|cx| crate::go_to::GoTo::new(app, tz, visible, window, cx));
+        crate::go_to::GoTo::open(panel, window, cx);
+    }
+
+    /// Bottom toolbar zone menu: the active tab's Symbol › Time zone (its own
     /// style, or the default when the result equals it).
     pub(crate) fn set_time_zone(&mut self, zone: TimeZoneSetting, cx: &mut Context<Self>) {
         let Some((tab, _, _, mut style)) = self.active_tab_style(cx) else {
@@ -176,7 +229,7 @@ impl TradeTerm {
     }
 }
 
-/// The status bar's time zone button: a live clock in the active chart's
+/// The bottom toolbar's time zone button: a live clock in the active chart's
 /// zone (`14:05:33 UTC+1`, like TradingView's) that opens the zone menu.
 /// Its own view, so the once-a-second tick repaints only this button.
 pub(crate) struct TzClock {
@@ -226,11 +279,10 @@ impl Render for TzClock {
         };
         let weak = self.app.clone();
         let max_h = (window.viewport_size().height
-            - (H_TITLE_BAR + H_TOOLBAR + H_STATUS_BAR + S4).px())
+            - (H_TITLE_BAR + H_TOOLBAR + H_BOTTOM_BAR + S4).px())
         .max((H_MENU_ROW * 6.).px());
         ToolbarButton::text("tz-clock", text)
-            .size(ControlSize::Sm)
-            .tooltip("Time zone")
+            .tooltip("Timezone")
             .menu_anchor(Anchor::BottomRight)
             .menu(move |menu, _, cx| {
                 let Some(app) = weak.upgrade() else {

@@ -127,6 +127,8 @@ impl Glyph {
     pub const CHART_AREA: Glyph = Glyph::Svg("tt-icons/chart-area.svg");
     pub const CHART_HLC_AREA: Glyph = Glyph::Svg("tt-icons/chart-hlc-area.svg");
     pub const CHART_BASELINE: Glyph = Glyph::Svg("tt-icons/chart-baseline.svg");
+    /// The bottom toolbar's Go to (calendar with an arrow).
+    pub const GO_TO_DATE: Glyph = Glyph::Svg("tt-icons/go-to-date.svg");
     pub const CHART_COLUMNS: Glyph = Glyph::Svg("tt-icons/chart-columns.svg");
     pub const CHART_HIGH_LOW: Glyph = Glyph::Svg("tt-icons/chart-high-low.svg");
     pub const CHART_HEIKIN_ASHI: Glyph = Glyph::Svg("tt-icons/chart-heikin-ashi.svg");
@@ -164,7 +166,7 @@ impl Glyph {
     pub const TREE_INDICATOR: Glyph = Glyph::Svg("tt-icons/tree-indicator.svg");
 
     /// Every SVG glyph with a name (gallery contact sheet).
-    pub const SVG_SET: [(&'static str, Glyph); 44] = [
+    pub const SVG_SET: [(&'static str, Glyph); 45] = [
         ("Bars", Glyph::CHART_BARS),
         ("Candles", Glyph::CHART_CANDLES),
         ("Hollow candles", Glyph::CHART_HOLLOW_CANDLES),
@@ -209,6 +211,7 @@ impl Glyph {
         ("Alerts", Glyph::PANEL_ALERTS),
         ("Object tree", Glyph::PANEL_OBJECT_TREE),
         ("Indicator", Glyph::TREE_INDICATOR),
+        ("Go to date", Glyph::GO_TO_DATE),
     ];
 
     /// The font character (`None` for [`Glyph::StarFilled`] and SVGs).

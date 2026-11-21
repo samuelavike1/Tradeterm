@@ -8,6 +8,7 @@ mod data_window;
 mod dialogs;
 mod drawing_settings;
 mod drawing_toolbar;
+mod go_to;
 mod indicator_settings;
 mod indicator_templates;
 mod indicators;

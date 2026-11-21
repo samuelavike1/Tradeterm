@@ -70,6 +70,7 @@ icons!(
     "draw-eye",
     "draw-eye-off",
     "draw-trash",
+    "go-to-date",
     "panel-watchlist",
     "panel-alerts",
     "panel-object-tree",

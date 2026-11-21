@@ -58,6 +58,7 @@ pub fn bind_keys(cx: &mut App) {
     ]);
     cx.bind_keys(crate::drawing_toolbar::key_bindings());
     cx.bind_keys(crate::top_toolbar::key_bindings());
+    cx.bind_keys(crate::status_bar::key_bindings());
 }
 
 /// F12 overlay numbers (per second, for the active chart).
@@ -987,6 +988,7 @@ impl Render for TradeTerm {
             }))
             .map(|root| crate::drawing_toolbar::on_pick_actions(root, cx))
             .map(|root| crate::top_toolbar::on_app_bar_actions(root, cx))
+            .map(|root| crate::status_bar::on_bottom_bar_actions(root, cx))
             .child(self.title_bar(window, cx))
             .child(self.toolbar(window, cx))
             .child(
@@ -995,23 +997,34 @@ impl Render for TradeTerm {
                     .min_h_0()
                     .child(self.drawing_toolbar(cx))
                     .child(
-                        div()
-                            .relative()
+                        // Chart over the bottom toolbar, as on TradingView
+                        // (the drawing toolbar runs full height beside them).
+                        v_flex()
                             .flex_1()
                             .min_w_0()
                             .h_full()
-                            // Clicking the chart gives the keyboard back to the
-                            // app (Escape / Delete for drawings).
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, _, window, cx| this.focus.focus(window, cx)),
+                            .child(
+                                div()
+                                    .relative()
+                                    .flex_1()
+                                    .min_h_0()
+                                    .w_full()
+                                    // Clicking the chart gives the keyboard
+                                    // back to the app (Escape / Delete for
+                                    // drawings).
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, window, cx| {
+                                            this.focus.focus(window, cx)
+                                        }),
+                                    )
+                                    .children(chart)
+                                    .children(self.perf_overlay(cx)),
                             )
-                            .children(chart)
-                            .children(self.perf_overlay(cx)),
+                            .child(self.status_bar(window, cx)),
                     )
                     .child(self.right_sidebar.clone()),
             )
-            .child(self.status_bar(window, cx))
     }
 }
 
