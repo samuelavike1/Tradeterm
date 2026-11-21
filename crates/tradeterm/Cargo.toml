@@ -20,3 +20,4 @@ tt-chart-gpui = { path = "../tt-chart-gpui" }
 tt-core = { path = "../tt-core" }
 tt-session = { path = "../tt-session" }
 tt-theme = { path = "../tt-theme" }
+tt-ui = { path = "../tt-ui" }
