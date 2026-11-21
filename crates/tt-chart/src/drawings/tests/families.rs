@@ -396,11 +396,9 @@ fn every_line_fib_and_range_tool_renders() {
     let s = series(100);
     let pane = Rect::from_min_max(pos2(0.0, 0.0), pos2(1000.0, 500.0));
     let mut ds = Drawings::empty();
-    let tools = DrawingTool::LINES
-        .iter()
-        .chain(&DrawingTool::FIB)
-        .chain(&DrawingTool::MEASURERS);
-    for &t in tools {
+    // Every available tool (lines, Fibs, measurers, rectangle, arrow), all
+    // with text.
+    for t in DrawingTool::available() {
         let pts = [
             anchor(600_000, 40.0),
             anchor(1_800_000, 60.0),
@@ -408,6 +406,7 @@ fn every_line_fib_and_range_tool_renders() {
         ];
         let mut d = Drawing::new(t, pts[..t.placement().min_points()].to_vec());
         d.text = "note".into();
+        d.props.set_text_on(true);
         if let Props::Line(p) = &mut d.props {
             p.text.on = true;
             p.price_labels = true;
@@ -468,6 +467,18 @@ fn every_line_fib_and_range_tool_renders() {
     assert!(texts.contains("Vol "), "{texts}");
     assert!(texts.contains("20 bars, 20m"), "{texts}");
     assert!(texts.contains('°'), "{texts}");
+    // The text of every tool that has a Text tab: lines (not the angle),
+    // horizontal / vertical lines, channel, rectangle (ranges add theirs
+    // to the label).
+    let with_text = DrawingTool::available()
+        .filter(|t| {
+            super::super::form::has_text_content(*t, &Props::defaults(*t))
+                && !DrawingTool::MEASURERS.contains(t)
+        })
+        .count();
+    // Rotated text is drawn glyph by glyph.
+    let notes = c.texts.concat().matches("note").count();
+    assert!(notes >= with_text, "{notes} < {with_text}: {texts}");
     // Axis tags: lines with price labels, horizontal lines, the cross line.
     assert!(axis_tags(&scene).len() >= 2 * 6);
 }

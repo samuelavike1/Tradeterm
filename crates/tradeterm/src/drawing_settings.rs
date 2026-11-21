@@ -133,6 +133,8 @@ enum NumberTarget {
     PointPrice(usize),
     /// TradingView's bar number of point `k` (comfortable layout).
     PointBar(usize),
+    /// The parallel channel's "Price offset" (its third point).
+    PriceOffset,
     VisMin(TimeUnit),
     VisMax(TimeUnit),
 }
@@ -252,47 +254,52 @@ impl DrawingSettingsPanel {
             .chain(&self.text_fields)
             .cloned()
             .collect();
+        // The comfortable layout edits colors with the kit's swatch / line
+        // / text pickers (no gpui color picker state).
+        let comfortable = self.comfortable();
         for f in &fields {
-            let comfortable = self.comfortable();
             match &f.kind {
-                FieldKind::Color => colors.push(ColorTarget::Path(f.path.clone())),
-                // The comfortable layout edits these through its line
-                // picker and text bar (no gpui color picker needed).
-                FieldKind::Line | FieldKind::TextStyle
-                    if comfortable
-                        && DrawingSettingsPanel::tv_skips_color(&ColorTarget::Path(format!(
-                            "{}/color",
-                            f.path
-                        )))
-                        && f.check.is_none() => {}
-                FieldKind::Line | FieldKind::TextStyle => {
+                FieldKind::Color if !comfortable => colors.push(ColorTarget::Path(f.path.clone())),
+                FieldKind::Line | FieldKind::TextStyle | FieldKind::TextBar if !comfortable => {
                     colors.push(ColorTarget::Path(format!("{}/color", f.path)))
                 }
                 FieldKind::Number { .. } => numbers.push(NumberTarget::Path(f.path.clone())),
-                FieldKind::Percent => numbers.push(NumberTarget::Percent(f.path.clone())),
+                FieldKind::Percent if !comfortable => {
+                    numbers.push(NumberTarget::Percent(f.path.clone()))
+                }
                 FieldKind::Levels => {
                     for i in 0..form::levels(&d.props).len() {
-                        colors.push(ColorTarget::Level(i));
+                        if !comfortable {
+                            colors.push(ColorTarget::Level(i));
+                        }
                         numbers.push(NumberTarget::LevelCoeff(i));
                     }
-                    if matches!(d.props, Props::Fib(_)) {
+                    if matches!(d.props, Props::Fib(_)) && !comfortable {
                         colors.push(ColorTarget::AllLevels);
                     }
                 }
                 _ => {}
             }
         }
-        for k in 0..d.points.len() {
+        let rows = if comfortable {
+            form::coordinate_rows(d.tool, d.points.len())
+        } else {
+            d.points.len()
+        };
+        for k in 0..rows {
             let (time, price) = form::coordinate_parts(d.tool, k);
-            if time && !self.comfortable() {
+            if time && !comfortable {
                 numbers.push(NumberTarget::PointTime(k));
             }
             if price {
                 numbers.push(NumberTarget::PointPrice(k));
             }
-            if time && self.comfortable() {
+            if time && comfortable {
                 numbers.push(NumberTarget::PointBar(k));
             }
+        }
+        if comfortable && rows < d.points.len() {
+            numbers.push(NumberTarget::PriceOffset);
         }
         for u in Visibility::UNITS {
             numbers.push(NumberTarget::VisMin(u));
@@ -441,6 +448,14 @@ impl DrawingSettingsPanel {
                         form::set_point(&mut d.points, k, Some(ms), None);
                     });
                 }
+            }
+            NumberTarget::PriceOffset => {
+                let (Some(v), Some(bars)) = (num, self.point_bars(cx)) else {
+                    return;
+                };
+                self.edit(cx, move |d| {
+                    form::set_channel_offset(&mut d.points, bars, v);
+                });
             }
             NumberTarget::VisMin(u) | NumberTarget::VisMax(u) => {
                 let Some(v) = num else {
@@ -738,6 +753,12 @@ impl DrawingSettingsPanel {
                     .into_any_element()
             }
             FieldKind::Levels => self.levels(d, cx),
+            // Kinds only the comfortable layout has a control for.
+            FieldKind::Pair { .. } | FieldKind::CheckMenu { .. } | FieldKind::TextBar => {
+                self.field_tv(f, d, v, label_w, cx)
+            }
+            // The generic Text tab shows the text box above its fields.
+            FieldKind::TextArea => div().into_any_element(),
         }
     }
 
@@ -796,9 +817,35 @@ impl DrawingSettingsPanel {
         out.into_any_element()
     }
 
+    /// The first three points' bar numbers (the channel's offset).
+    fn point_bars(&self, cx: &App) -> Option<[f64; 3]> {
+        let d = self.current(cx)?;
+        let tab = &self.chart.read(cx).state.read(cx).source.tab;
+        let bar = |k: usize| {
+            d.points
+                .get(k)
+                .and_then(|a| tab.chart.bar_of_time(&tab.series, a.time_ms))
+                .map(|b| b as f64)
+        };
+        Some([bar(0)?, bar(1)?, bar(2)?])
+    }
+
     /// The text an input shows (bar numbers need the chart's slots).
     fn number_text(&self, t: &NumberTarget, d: &Drawing, v: &Value, cx: &App) -> String {
         match t {
+            NumberTarget::PriceOffset => {
+                let prec = self
+                    .chart
+                    .read(cx)
+                    .state
+                    .read(cx)
+                    .source
+                    .tab
+                    .price_precision();
+                self.point_bars(cx)
+                    .and_then(|bars| form::channel_offset(&d.points, bars))
+                    .map_or_else(String::new, |o| format!("{o:.prec$}"))
+            }
             NumberTarget::PointBar(k) => {
                 let tab = &self.chart.read(cx).state.read(cx).source.tab;
                 d.points
@@ -909,15 +956,15 @@ fn number_text(t: &NumberTarget, d: &Drawing, v: &Value) -> String {
             .points
             .get(*k)
             .map_or_else(String::new, |a| trim_number(a.price)),
-        // Needs the chart: `DrawingSettingsPanel::number_text`.
-        NumberTarget::PointBar(_) => String::new(),
+        // Need the chart: `DrawingSettingsPanel::number_text`.
+        NumberTarget::PointBar(_) | NumberTarget::PriceOffset => String::new(),
         NumberTarget::VisMin(u) => d.visibility.span(*u).min.to_string(),
         NumberTarget::VisMax(u) => d.visibility.span(*u).max.to_string(),
     }
 }
 
 impl Render for DrawingSettingsPanel {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let Some(d) = self.current(cx) else {
             return div().child("This drawing was removed.").into_any_element();
         };
@@ -941,9 +988,9 @@ impl Render for DrawingSettingsPanel {
         }
         if self.comfortable() {
             let body: AnyElement = match self.tab {
-                Tab::Style => self.style_tv(&d, &v, cx),
-                Tab::Text => self.text_tv(&v, cx),
-                Tab::Coordinates => self.coordinates_tv(&d),
+                Tab::Style => self.style_tv(&d, &v, window, cx),
+                Tab::Text => self.text_tv(&d, &v, window, cx),
+                Tab::Coordinates => self.coordinates_tv(&d, window),
                 Tab::Visibility => self.visibility_tv(&d, cx),
             };
             return DialogFrame::new(DialogSize::Sm)

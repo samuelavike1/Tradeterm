@@ -4,7 +4,8 @@
 //! `line 0 + offset × coeff` (0 = line 0, 1 = line 1, 0.5 = the middle).
 
 use super::hit::{dist_to_segment, extend};
-use super::props::{ChannelProps, Props};
+use super::lines::text_along;
+use super::props::{ChannelProps, Props, VAlign};
 use super::render::styled_line;
 use super::{Anchor, Drawing, HIT_DISTANCE, Mapper};
 use crate::draw::Scene;
@@ -95,6 +96,18 @@ pub(super) fn draw(c: &mut dyn Canvas, s: &Scene<'_>, d: &Drawing, pts: &[Pos2])
             (a, b)
         };
         styled_line(c, a, b, st.width as f32, st.color.to_color32(), st.style);
+    }
+    if cp.text.on && !d.text.is_empty() {
+        // TradingView: along the upper line (Top), the middle (Inside) or
+        // the lower line (Bottom).
+        let upper = if g.offset < 0.0 { 1.0 } else { 0.0 };
+        let coeff = match cp.text.v {
+            VAlign::Top => upper,
+            VAlign::Middle => 0.5,
+            VAlign::Bottom => 1.0 - upper,
+        };
+        let (a, b) = g.level(coeff);
+        text_along(c, a, b, &d.text, &cp.text_style, &cp.text);
     }
 }
 

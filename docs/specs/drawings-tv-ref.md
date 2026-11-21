@@ -15,7 +15,8 @@ Common to every tool:
 - **Visibility** is the same for every tool: Ticks, Seconds … Months (check
   + `[min] ——o==o—— [max]`), Ranges (`tv-hray-visibility.png`).
 - **Coordinates**: one row per point, `#k (price, bar)` `[price] [bar]`;
-  vertical line `#1 (bar)` (bar only); horizontal line/ray `#1 (price)`.
+  vertical line `#1 (bar)` (bar only); horizontal line `#1 (price)`;
+  horizontal ray `#1 (price, bar)`.
 - **Text tab** (where present): `[color][size ▾][B][I]`, text area ("Add
   text"), then `Text alignment [vertical ▾] [horizontal ▾]`. Font sizes:
   8 10 11 12 14 16 18 20 22 24 28 32 40.

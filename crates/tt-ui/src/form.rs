@@ -18,6 +18,7 @@ use gpui_kit::component::{Sizable as _, Size, h_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use std::rc::Rc;
+use tt_theme::Theme;
 
 /// The shared color palette (TradingView-like): grays, then the series
 /// colors and their light / dark variants, row by row.
@@ -246,24 +247,7 @@ impl RenderOnce for CheckBox {
             .cursor_pointer()
             .text_size(px(TEXT_BODY))
             .text_color(hsla(t.text))
-            .child(
-                div()
-                    .flex_none()
-                    .size(px(C_CHECKBOX))
-                    .rounded(px(3.0))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .when(on, |d| {
-                        d.bg(hsla(t.text))
-                            .child(glyph(Glyph::CHECK, ICON_XS).color(hsla(t.bg)))
-                    })
-                    .when(!on, |d| {
-                        d.border_1()
-                            .border_color(crate::picker::toggle_border(t))
-                            .bg(hsla(t.bg))
-                    }),
-            )
+            .child(check_square(on, t))
             .when(!self.label.is_empty(), |d| {
                 d.child(div().whitespace_nowrap().child(self.label))
             })
@@ -394,36 +378,7 @@ impl<T: PartialEq + Clone + 'static> RenderOnce for Select<T> {
             .find(|(v, _)| *v == self.current)
             .map(|(_, l)| l.clone())
             .unwrap_or_default();
-        let (h, chevron) = if self.comfortable {
-            (C_CONTROL, ICON_MD)
-        } else {
-            (H_FIELD, ICON_XS)
-        };
-        let trigger = Button::new(child_id(&id, "select-trigger"))
-            .outline()
-            .with_size(Size::Size(px(h)))
-            .h(px(h))
-            .w(px(self.width))
-            .px(px(S2))
-            .py_0()
-            .when(self.comfortable, |b| b.rounded(px(C_R_CONTROL)).pl(px(S3)))
-            .child(
-                h_flex()
-                    .w_full()
-                    .items_center()
-                    .justify_between()
-                    .gap(px(S1_5))
-                    .text_size(px(TEXT_BODY))
-                    .child(
-                        div()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .whitespace_nowrap()
-                            .text_ellipsis()
-                            .child(label),
-                    )
-                    .child(glyph(Glyph::CHEVRON_DOWN, chevron).color(hsla(t.text_muted))),
-            );
+        let trigger = select_trigger(&id, label, self.width, self.comfortable, &t);
         let options = Rc::new(self.options);
         let current = self.current;
         let on_change = self.on_change;
@@ -458,6 +413,139 @@ impl<T: PartialEq + Clone + 'static> RenderOnce for Select<T> {
                 }
                 menu
             })
+    }
+}
+
+/// The outline trigger of [`Select`] / [`CheckSelect`]: `label`
+/// (ellipsized) and a chevron.
+fn select_trigger(
+    id: &ElementId,
+    label: SharedString,
+    width: f32,
+    comfortable: bool,
+    t: &Theme,
+) -> Button {
+    let (h, chevron) = if comfortable {
+        (C_CONTROL, ICON_MD)
+    } else {
+        (H_FIELD, ICON_XS)
+    };
+    Button::new(child_id(id, "select-trigger"))
+        .outline()
+        .with_size(Size::Size(px(h)))
+        .h(px(h))
+        .w(px(width))
+        .px(px(S2))
+        .py_0()
+        .when(comfortable, |b| b.rounded(px(C_R_CONTROL)).pl(px(S3)))
+        .child(
+            h_flex()
+                .w_full()
+                .items_center()
+                .justify_between()
+                .gap(px(S1_5))
+                .text_size(px(TEXT_BODY))
+                .child(
+                    div()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .child(label),
+                )
+                .child(glyph(Glyph::CHEVRON_DOWN, chevron).color(hsla(t.text_muted))),
+        )
+}
+
+/// The checkbox square (TradingView's: 18 px, radius 3; checked: `text`
+/// fill with a check in `bg`).
+fn check_square(on: bool, t: &Theme) -> Div {
+    div()
+        .flex_none()
+        .size(px(C_CHECKBOX))
+        .rounded(px(3.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .when(on, |d| {
+            d.bg(hsla(t.text))
+                .child(glyph(Glyph::CHECK, ICON_XS).color(hsla(t.bg)))
+        })
+        .when(!on, |d| {
+            d.border_1()
+                .border_color(crate::picker::toggle_border(t))
+                .bg(hsla(t.bg))
+        })
+}
+
+type ToggleHandler = Rc<dyn Fn(usize, bool, &mut Window, &mut App)>;
+
+/// TradingView's select of checkable items ("Extend", "Stats"): the
+/// comfortable trigger shows the checked items' `summary`; the menu lists
+/// every item with a checkbox and stays open while toggling.
+#[derive(IntoElement)]
+pub struct CheckSelect {
+    id: ElementId,
+    items: Vec<(SharedString, bool)>,
+    summary: SharedString,
+    width: f32,
+    on_toggle: Option<ToggleHandler>,
+}
+
+impl CheckSelect {
+    pub fn new(
+        id: impl Into<ElementId>,
+        items: impl IntoIterator<Item = (impl Into<SharedString>, bool)>,
+        summary: impl Into<SharedString>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            items: items.into_iter().map(|(l, on)| (l.into(), on)).collect(),
+            summary: summary.into(),
+            width: W_CHECK_SELECT,
+            on_toggle: None,
+        }
+    }
+
+    pub fn width(mut self, w: f32) -> Self {
+        self.width = w;
+        self
+    }
+
+    /// Item `i` toggled to the given state.
+    pub fn on_toggle(mut self, f: impl Fn(usize, bool, &mut Window, &mut App) + 'static) -> Self {
+        self.on_toggle = Some(Rc::new(f));
+        self
+    }
+}
+
+/// TradingView's Extend / Stats selects are wider than the plain ones.
+pub const W_CHECK_SELECT: f32 = 180.0;
+
+impl RenderOnce for CheckSelect {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let t = cx.ui().clone();
+        let trigger = select_trigger(&self.id, self.summary, self.width, true, &t);
+        let items = Rc::new(self.items);
+        let f = self.on_toggle;
+        crate::picker::menu_with(self.id, trigger, window, cx, move |mut menu, cx| {
+            let t = cx.ui().clone();
+            menu = menu.width(MenuWidth::Sm);
+            for (i, (label, on)) in items.iter().enumerate() {
+                let (f, on, t) = (f.clone(), *on, t.clone());
+                menu = menu.row(
+                    MenuRow::new(("check-select-opt", i), label.clone())
+                        .leading_element(move || check_square(on, &t).into_any_element())
+                        .keep_open()
+                        .on_select(move |win, cx| {
+                            if let Some(f) = &f {
+                                f(i, !on, win, cx)
+                            }
+                        }),
+                );
+            }
+            menu
+        })
     }
 }
 

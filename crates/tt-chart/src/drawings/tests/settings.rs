@@ -6,6 +6,7 @@ use super::super::model::BLUE;
 use super::super::props::{LineEnd, Props};
 use super::super::templates::{DrawingTemplates, tool_name};
 use super::*;
+use serde_json::Value;
 use tt_core::{TimeUnit, Timeframe};
 
 fn at(price: f64) -> Anchor {
@@ -222,13 +223,26 @@ fn form_fields_edit_props_by_path() {
     // Every field's path exists in the props.
     let v = form::props_value(&p);
     for f in &fields {
-        if f.kind != FieldKind::Section {
-            assert!(form::get(&v, &f.path).is_some(), "{}", f.path);
-        }
-        if let Some(c) = &f.check {
-            assert!(form::get(&v, c).is_some(), "{c}");
+        for path in f.paths() {
+            assert!(form::get(&v, &path).is_some(), "{path}");
         }
     }
+    // TradingView's order: line (with its ends), extend, …, INFO, stats.
+    let labels: Vec<&str> = fields.iter().map(|f| f.label).collect();
+    assert_eq!(
+        labels,
+        [
+            "Line",
+            "Extend",
+            "Middle point",
+            "Price labels",
+            "INFO",
+            "Stats",
+            "Stats position",
+            "Always show stats"
+        ]
+    );
+    assert!(fields[0].ends);
     assert!(form::set(
         &mut p,
         "/ends/right",
@@ -276,19 +290,44 @@ fn every_family_form_points_at_real_fields() {
             .into_iter()
             .chain(form::text_fields(tool, &p))
         {
-            if f.kind != FieldKind::Section {
-                assert!(form::get(&v, &f.path).is_some(), "{tool:?} {}", f.path);
+            for path in f.paths() {
+                assert!(form::get(&v, &path).is_some(), "{tool:?} {path}");
             }
-            if let Some(c) = &f.check {
-                assert!(form::get(&v, c).is_some(), "{tool:?} {c}");
+            // Every menu item and choice value can be written back.
+            let mut q = p.clone();
+            if let FieldKind::CheckMenu { items, .. } = &f.kind {
+                for (path, _) in *items {
+                    let on = form::get_bool(&v, path);
+                    assert!(form::set(&mut q, path, Value::Bool(!on)), "{tool:?} {path}");
+                }
+            }
+            if let FieldKind::Choice(opts) = &f.kind {
+                for (val, _) in *opts {
+                    let now = form::get_choice(&form::props_value(&q), &f.path);
+                    assert!(
+                        now == *val || form::set(&mut q, &f.path, form::choice_value(val)),
+                        "{tool:?} {} {val}",
+                        f.path
+                    );
+                }
             }
         }
     }
-    // Text tabs: lines, shapes, channels, ranges; not Fib or cross lines.
-    let has = |t| !form::text_fields(t, &Props::defaults(t)).is_empty();
+    // Text tabs (TradingView): lines, shapes, channels, ranges; not the
+    // trend angle, Fibs or the cross line.
+    let has = |t| form::has_text_content(t, &Props::defaults(t));
     assert!(has(DrawingTool::TrendLine) && has(DrawingTool::Rectangle));
     assert!(has(DrawingTool::ParallelChannel) && has(DrawingTool::PriceRange));
+    assert!(has(DrawingTool::VerticalLine) && has(DrawingTool::HorizontalRay));
     assert!(!has(DrawingTool::FibRetracement) && !has(DrawingTool::CrossLine));
+    assert!(!has(DrawingTool::TrendAngle));
+    assert!(
+        form::text_fields(
+            DrawingTool::TrendAngle,
+            &Props::defaults(DrawingTool::TrendAngle)
+        )
+        .is_empty()
+    );
 }
 
 #[test]

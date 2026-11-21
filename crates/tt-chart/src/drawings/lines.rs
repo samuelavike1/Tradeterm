@@ -66,11 +66,36 @@ pub(super) fn draw(c: &mut dyn Canvas, s: &Scene<'_>, d: &Drawing, pts: &[Pos2])
             let (w, col, style) = parts(&vp.line);
             let span = if vp.extend { s.plot } else { pane };
             c.set_clip(span);
-            let (top, bottom) = (pos2(pts[0].x, span.top()), pos2(pts[0].x, span.bottom()));
-            styled_line(c, top, bottom, w, col, style);
+            let x = pts[0].x;
+            let with_text = vp.text.on && !d.text.is_empty();
+            // Text along the line and on it breaks it (as on other lines).
+            let gap = (with_text && vp.text.vertical && vp.text.h == HAlign::Center).then(|| {
+                let ts = &vp.text_style;
+                let tw = c.text_size_styled(&d.text, ts.size as f32, ts.bold).x;
+                let (y0, y1) = vertical_text_span(pane, tw, vp.text.v);
+                (y0 - TEXT_LINE_GAP, y1 + TEXT_LINE_GAP)
+            });
+            match gap {
+                Some((g0, g1)) => {
+                    if g0 > span.top() {
+                        styled_line(c, pos2(x, span.top()), pos2(x, g0), w, col, style);
+                    }
+                    if g1 < span.bottom() {
+                        styled_line(c, pos2(x, g1), pos2(x, span.bottom()), w, col, style);
+                    }
+                }
+                None => styled_line(
+                    c,
+                    pos2(x, span.top()),
+                    pos2(x, span.bottom()),
+                    w,
+                    col,
+                    style,
+                ),
+            }
             c.set_clip(pane);
-            if vp.text.on && !d.text.is_empty() {
-                vertical_text(c, pts[0].x, pane, &d.text, &vp.text_style, &vp.text);
+            if with_text {
+                vertical_text(c, x, pane, &d.text, &vp.text_style, &vp.text);
             }
         }
         (Props::Cross(cp), CrossLine) => {
@@ -241,7 +266,14 @@ pub(super) fn gap_span(center: f32, half: f32, len: f32) -> (f32, f32) {
 
 /// Text along the line `a → b`, kept upright, placed by `layout`
 /// (horizontal: start / middle / end; vertical: above / on / below).
-fn text_along(c: &mut dyn Canvas, a: Pos2, b: Pos2, text: &str, ts: &TextStyle, lay: &TextLayout) {
+pub(super) fn text_along(
+    c: &mut dyn Canvas,
+    a: Pos2,
+    b: Pos2,
+    text: &str,
+    ts: &TextStyle,
+    lay: &TextLayout,
+) {
     let (a, b) = if b.x < a.x { (b, a) } else { (a, b) };
     let d = b - a;
     let mut rot = d.y.atan2(d.x);
@@ -273,6 +305,16 @@ fn text_along(c: &mut dyn Canvas, a: Pos2, b: Pos2, text: &str, ts: &TextStyle, 
             rotation: rot,
         },
     );
+}
+
+/// The y span `(top, bottom)` of a vertical line's rotated text `len`
+/// long (as [`vertical_text`] places it).
+pub(super) fn vertical_text_span(pane: Rect, len: f32, v: VAlign) -> (f32, f32) {
+    match v {
+        VAlign::Top => (pane.top() + 6.0, pane.top() + 6.0 + len),
+        VAlign::Middle => (pane.center().y - len / 2.0, pane.center().y + len / 2.0),
+        VAlign::Bottom => (pane.bottom() - 6.0 - len, pane.bottom() - 6.0),
+    }
 }
 
 /// A vertical line's text: rotated along the line (or horizontal), at the

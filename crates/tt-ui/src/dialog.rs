@@ -308,17 +308,24 @@ impl DialogFrame {
 }
 
 impl RenderOnce for DialogFrame {
-    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, _: &mut App) -> impl IntoElement {
         if self.comfortable {
+            // Tall tabs (Fib levels) scroll inside the window, like
+            // TradingView's.
+            let chrome = C_H_HEADER + C_H_TABS + C_H_FOOTER + 2.0 * C_PAD_Y + 4.0 * S6;
+            let max = (f32::from(window.viewport_size().height) - chrome).max(self.min_body);
             return v_flex()
-                .id(self.id)
+                .id(self.id.clone())
                 .w_full()
                 .when_some(self.nav, |d, nav| d.child(nav.comfortable()))
                 .child(
                     v_flex()
+                        .id(child_id(&self.id, "body"))
                         .px(px(C_PAD_X))
                         .py(px(C_PAD_Y))
                         .min_h(px(self.min_body))
+                        .max_h(px(max))
+                        .overflow_y_scroll()
                         .children(self.body),
                 )
                 .into_any_element();
