@@ -81,6 +81,11 @@ pub struct SymbolLabels {
     pub description: String,
     /// "BTCUSDT, 1h" (built once, for the watermark).
     pub ticker_interval: String,
+    /// Base asset code ("BTC"): the status line's logo, drawn as a letter
+    /// badge when there is no logo image. Empty: no logo.
+    pub logo_key: String,
+    /// The base asset's logo image file, once cached.
+    pub logo: Option<std::sync::Arc<std::path::Path>>,
 }
 
 /// What is under a point, from the last frame's layout
@@ -322,7 +327,13 @@ impl ChartView {
         {
             return;
         }
+        let (logo_key, logo) = (
+            std::mem::take(&mut self.labels.logo_key),
+            self.labels.logo.take(),
+        );
         self.labels = SymbolLabels {
+            logo_key,
+            logo,
             ticker: ticker.to_owned(),
             interval: interval.to_owned(),
             currency: currency.to_owned(),
@@ -333,6 +344,17 @@ impl ChartView {
                 format!("{ticker}, {interval}")
             },
         };
+    }
+
+    /// Sets the status line's logo: the base asset code (letter badge) and
+    /// its image file once cached. Allocates only when something changed.
+    pub fn set_symbol_logo(&mut self, key: &str, logo: Option<std::sync::Arc<std::path::Path>>) {
+        if self.labels.logo_key != key {
+            self.labels.logo_key = key.to_owned();
+        }
+        if self.labels.logo != logo {
+            self.labels.logo = logo;
+        }
     }
 
     pub fn symbol_labels(&self) -> &SymbolLabels {

@@ -1,0 +1,15 @@
+{
+  "theme_mode": "Dark",
+  "tabs": [
+    { "symbol": "BTCUSDT", "timeframe": "1h", "chart_type": "Candles" },
+    { "symbol": "ETHUSDT", "timeframe": "1h", "chart_type": "Candles" },
+    { "symbol": "SOLUSDT", "timeframe": "1h", "chart_type": "Candles" },
+    { "symbol": "BNBBTC", "timeframe": "1h", "chart_type": "Candles" },
+    { "symbol": "DOGEUSDT", "timeframe": "1h", "chart_type": "Candles" }
+  ],
+  "active_tab": 0,
+  "chart_style": {
+    "version": 2,
+    "canvas": { "watermark": { "visible": true } }
+  }
+}

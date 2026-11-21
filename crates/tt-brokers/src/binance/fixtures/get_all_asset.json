@@ -1,0 +1,12 @@
+{"code":"000000","message":null,"messageDetail":null,"data":[
+{"id":"1","assetCode":"BTC","assetName":"Bitcoin","unit":"₿","commissionRate":0.00000000,"createTime":1645068789000,"test":0,"isLegalMoney":false,"logoUrl":"https://bin.bnbstatic.com/image/admin_mgs_image_upload/20220218/btc.png","fullLogoUrl":"https://bin.bnbstatic.com/image/admin_mgs_image_upload/20220218/btc.png","feeDigit":8,"assetDigit":8,"trading":true,"tags":["pow"],"delisted":false,"assetDisplayName":"Bitcoin"},
+{"id":"2","assetCode":"USDT","assetName":"TetherUS","logoUrl":"https://bin.bnbstatic.com/image/usdt.png","fullLogoUrl":"https://bin.bnbstatic.com/image/usdt-full.png","trading":true,"assetDisplayName":"TetherUS"},
+{"id":"3","assetCode":"eth","assetName":"Ethereum","logoUrl":"","fullLogoUrl":"https://bin.bnbstatic.com/image/eth.png"},
+{"id":"4","assetCode":"NOLOGO","assetName":"No Logo Coin","logoUrl":null,"fullLogoUrl":null},
+{"id":"5","assetCode":"BLANK","assetName":"  ","assetDisplayName":"Blank Display","logoUrl":"http://insecure.example/blank.png"},
+{"id":"6","assetName":"Missing code"},
+{"id":"7","assetCode":42,"assetName":"Numeric code"},
+"not an object",
+{"id":"8","assetCode":"币安人生","assetName":"币安人生","logoUrl":"https://bin.bnbstatic.com/image/cn.png"},
+{"id":"9","assetCode":"BTC","assetName":"Bitcoin duplicate","logoUrl":"https://bin.bnbstatic.com/image/dup.png"}
+],"success":true}

@@ -8,6 +8,7 @@ use futures::channel::mpsc;
 use gpui_kit::component::{WindowExt as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tt_brokers::BinanceSource;
@@ -110,6 +111,8 @@ pub struct TradeTerm {
     pub(crate) indicator_defaults: tt_session::settings::IndicatorDefaults,
     pub(crate) indicator_presets: tt_session::settings::IndicatorPresets,
     pub(crate) perf: bool,
+    /// [`tt_session::assets::AssetCache::generation`] last applied.
+    assets_generation: u64,
     pub(crate) perf_stats: PerfStats,
     /// Quote chip of the symbol search, remembered between openings.
     pub(crate) search_quote: usize,
@@ -137,10 +140,24 @@ impl TradeTerm {
         let (tx, mut rx) = mpsc::unbounded::<Wake>();
         let tx_after = tx.clone();
         let source = Arc::new(BinanceSource::new().expect("HTTP client"));
+        let wake: tt_session::tab::Wake = Arc::new(move || {
+            let _ = tx.unbounded_send(Wake::Now);
+        });
+        // Asset names and logos: cached next to the settings, refreshed in
+        // the background.
+        let assets_dir = store
+            .path()
+            .map(Path::to_path_buf)
+            .or_else(SettingsStore::default_path)
+            .and_then(|p| tt_session::assets::AssetCache::dir_for(&p));
+        let assets = tt_session::assets::AssetCache::start(
+            assets_dir,
+            source.clone(),
+            runtime.handle().clone(),
+            wake.clone(),
+        );
         let shared = Shared {
-            wake: Arc::new(move || {
-                let _ = tx.unbounded_send(Wake::Now);
-            }),
+            wake,
             wake_after: Arc::new(move |d| {
                 let _ = tx_after.unbounded_send(Wake::After(d));
             }),
@@ -148,6 +165,7 @@ impl TradeTerm {
             source,
             chart_style: style.clone(),
             drawings: Arc::new(std::sync::Mutex::new(settings.drawings.clone())),
+            assets,
         };
 
         // Background data → UI: drain all pending wake-ups, then apply events
@@ -242,6 +260,7 @@ impl TradeTerm {
             indicator_defaults: settings.indicator_defaults.clone(),
             indicator_presets: settings.indicator_presets.clone(),
             perf: false,
+            assets_generation: 0,
             perf_stats: PerfStats::default(),
             search_quote: 0,
             draw: Default::default(),
@@ -360,6 +379,18 @@ impl TradeTerm {
             });
         }
         self.perf_stats.events += events;
+        // Asset names or a logo arrived: titles (full names), charts (status
+        // line logo) and every window (tab badges, search rows).
+        let generation = shared.assets.generation();
+        if generation != self.assets_generation {
+            self.assets_generation = generation;
+            for chart in self.tabs.clone() {
+                chart.update(cx, |chart, cx| {
+                    chart.update_state(cx, |s| s.source.refresh_title());
+                });
+            }
+            cx.refresh_windows();
+        }
         if any {
             // Tab strip change %, status bar.
             cx.notify();

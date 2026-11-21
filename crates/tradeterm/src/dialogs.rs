@@ -13,6 +13,7 @@ impl TradeTerm {
     pub fn open_search(&mut self, initial: &str, window: &mut Window, cx: &mut Context<Self>) {
         let app = cx.entity().downgrade();
         let (source, handle) = (self.shared.source.clone(), self.shared.handle.clone());
+        let assets = self.shared.assets.clone();
         let recent = search::recent_rows(&self.recent);
         // Opened from the ticker: the current symbol, selected.
         let select_all = initial.is_empty();
@@ -26,7 +27,7 @@ impl TradeTerm {
         let quote = self.search_quote;
         let panel = cx.new(|cx| {
             SymbolSearch::new(
-                app, source, handle, recent, &initial, quote, select_all, window, cx,
+                app, source, handle, assets, recent, &initial, quote, select_all, window, cx,
             )
         });
         let focus = panel.clone();

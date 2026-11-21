@@ -111,6 +111,16 @@ pub trait Canvas {
     /// Size of `text` at `size` without drawing it.
     fn text_size_styled(&mut self, text: &str, size: f32, bold: bool) -> Vec2;
 
+    /// Draws the image file at `path` scaled into `rect`, corners rounded by
+    /// `radius` (`rect.width() / 2` for a circle). Returns `false` when the
+    /// backend can't draw images, so the caller draws a fallback; backends
+    /// that load images asynchronously return `true` and show the image
+    /// once it is decoded. The default draws nothing.
+    fn image(&mut self, rect: Rect, radius: f32, path: &std::sync::Arc<std::path::Path>) -> bool {
+        let _ = (rect, radius, path);
+        false
+    }
+
     /// Draws an icon glyph (from the icon font, if the backend has one)
     /// centered on `center`; returns its bounding rect.
     fn icon(&mut self, center: Pos2, glyph: char, size: f32, color: Color32) -> Rect {

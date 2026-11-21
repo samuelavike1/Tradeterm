@@ -7,7 +7,9 @@
 //! - lines, polylines and fills → triangle `Path`s; consecutive triangles of
 //!   the same color share one path, so a polyline is one primitive;
 //! - axis-aligned dotted lines (the grid) → one dashed-border quad each;
-//! - text and icons → `shape_line`.
+//! - text and icons → `shape_line`;
+//! - images → `paint_image` (decoded by gpui's asset cache, painted above
+//!   paths and below text).
 
 use ecolor::Color32;
 use emath::{Align2, Pos2, Rect, Vec2};
@@ -16,6 +18,7 @@ use gpui_kit::{
     Hsla, PaintQuad, Path, Pixels, Rgba, ShapedLine, SharedString, TextAlign, TextRun, Window,
     point, px, size,
 };
+use std::sync::Arc;
 use tt_chart::render::{Canvas, TextOpts};
 
 /// Line height as a multiple of the font size (the text height the chart's
@@ -48,6 +51,9 @@ enum Item {
     /// item (quads too) would be ~1.4 KB.
     Text(Box<(ShapedLine, Pos2, f32)>),
     Path(Path<Pixels>, Background, Option<[u8; 4]>),
+    /// An image file in a rect with a corner radius (loaded through gpui's
+    /// asset cache: decoded once, off the UI thread).
+    Image(Box<(Rect, f32, Arc<std::path::Path>)>),
 }
 
 const _: () = assert!(std::mem::size_of::<Item>() <= 256);
@@ -197,6 +203,7 @@ impl<'a> GpuiCanvas<'a> {
         let full = bounds(self.full);
         let mut paths = Vec::new();
         let mut texts = Vec::new();
+        let mut images = Vec::new();
         window.paint_layer(full, |window| {
             for (clip, items) in batches {
                 let mask = ContentMask {
@@ -209,6 +216,7 @@ impl<'a> GpuiCanvas<'a> {
                             Item::Quad(q) => window.paint_quad(q),
                             Item::Path(path, bg, _) => clip_paths.push((path, bg)),
                             Item::Text(t) => clip_texts.push(t),
+                            Item::Image(i) => images.push((mask, i)),
                         }
                     }
                 });
@@ -225,6 +233,19 @@ impl<'a> GpuiCanvas<'a> {
                 for (path, bg) in clip_paths {
                     window.paint_path(path, bg);
                 }
+            });
+        }
+        for (mask, image) in images {
+            let (rect, radius, path) = *image;
+            // `None` while decoding: this view repaints when it's ready.
+            let resource = gpui_kit::Resource::Path(path);
+            let Some(Ok(data)) = window.use_asset::<gpui_kit::ImageAssetLoader>(&resource, cx)
+            else {
+                continue;
+            };
+            window.with_content_mask(Some(mask), |window| {
+                let b = bounds(rect);
+                let _ = window.paint_image(b, b, Corners::all(px(radius)), data, 0, false);
             });
         }
         window.paint_layer(full, |window| {
@@ -542,6 +563,13 @@ impl Canvas for GpuiCanvas<'_> {
             mesh.push_triangle((pt(a), pt(b), pt(c)), st);
         });
         self.scratch = scratch;
+    }
+
+    fn image(&mut self, rect: Rect, radius: f32, path: &Arc<std::path::Path>) -> bool {
+        if self.clip.intersects(rect) {
+            self.push(Item::Image(Box::new((rect, radius, path.clone()))));
+        }
+        true
     }
 
     fn icon(&mut self, center: Pos2, glyph: char, size: f32, color: Color32) -> Rect {

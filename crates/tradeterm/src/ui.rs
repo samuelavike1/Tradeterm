@@ -72,13 +72,25 @@ impl RenderOnce for StatusDot {
     }
 }
 
-/// Deterministic badge colour for an asset (stable across runs).
-pub fn badge_color(theme: &Theme, key: &str) -> Color32 {
-    let h = key
-        .bytes()
-        .fold(0u32, |a, b| a.wrapping_mul(31).wrapping_add(b as u32));
-    let palette = &theme.series_palette;
-    palette[(h as usize) % palette.len()]
+pub use tt_theme::badge_color;
+
+/// An asset's logo, round-clipped to `size`, or `badge` (its letter badge)
+/// when there is no cached logo or it fails to decode. The image is decoded
+/// once by gpui's asset cache, off the UI thread.
+pub fn logo_or_badge(
+    logo: Option<std::sync::Arc<std::path::Path>>,
+    size: Pixels,
+    badge: impl Fn() -> AnyElement + 'static,
+) -> AnyElement {
+    match logo {
+        Some(path) => img(path)
+            .flex_none()
+            .size(size)
+            .rounded_full()
+            .with_fallback(badge)
+            .into_any_element(),
+        None => badge(),
+    }
 }
 
 /// Lucide icon for a chart type (toolbar button, menu rows).

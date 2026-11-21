@@ -43,6 +43,8 @@ pub struct Shared {
     pub chart_style: tt_chart::ChartStyle,
     /// Drawings per symbol, shared by all tabs.
     pub drawings: DrawingStore,
+    /// Asset names and logos (tab badges, search rows, status line).
+    pub assets: crate::assets::AssetCache,
 }
 
 /// Drawings per symbol key (see [`ChartTab::drawings_key`]).

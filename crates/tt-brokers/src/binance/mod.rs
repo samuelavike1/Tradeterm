@@ -1,6 +1,9 @@
 //! Binance spot market data via the public, key-less `data-*.binance.vision` endpoints.
 
+mod assets;
 mod parse;
+
+pub use assets::{ASSETS_URL, AssetInfo, MAX_LOGO_BYTES, is_image, parse_assets};
 
 pub use parse::{
     KlineUpdate, base_timeframe, interval, parse_exchange_info, parse_rest_klines, parse_ws_kline,
@@ -69,6 +72,18 @@ impl BinanceSource {
             ws_base: ws_base.into().trim_end_matches('/').to_owned(),
             symbols: Arc::new(OnceCell::new()),
         })
+    }
+
+    /// Names and logo URLs of all Binance assets (binance.com's own,
+    /// undocumented list; best-effort).
+    pub async fn fetch_assets(&self) -> Result<Vec<AssetInfo>> {
+        assets::fetch_assets(&self.http).await
+    }
+
+    /// One logo image's bytes (HTTPS only, size-capped, checked to be an
+    /// image).
+    pub async fn fetch_logo(&self, url: &str) -> Result<Vec<u8>> {
+        assets::fetch_logo(&self.http, url).await
     }
 
     /// GET helper: returns the body, turning HTTP errors into readable messages

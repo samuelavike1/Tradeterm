@@ -357,6 +357,14 @@ Settings are stored at:
 Delete the file to reset to defaults. Set `TRADETERM_SETTINGS=/path/to/settings.json` to
 use a different file (portable installs, test runs).
 
+Ticker logos and full asset names ("Bitcoin / TetherUS") come from Binance's website
+asset list (`https://www.binance.com/bapi/asset/v2/public/asset/asset/get-all-asset`,
+undocumented, so best-effort); the images are small PNGs on `bin.bnbstatic.com`. They
+are cached next to the settings file: `assets.json` (re-downloaded in the background at
+most once a day) and `logos/<CODE>.png` (each downloaded the first time it is shown).
+Offline, the cached copies are used; assets without a logo show a letter badge. Delete
+`assets.json` and `logos/` to refetch.
+
 ### Window chrome notes
 
 The window has no OS decorations; gpui-component's `TitleBar` draws the title bar and
