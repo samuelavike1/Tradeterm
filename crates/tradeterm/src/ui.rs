@@ -5,18 +5,15 @@
 //! crosshair) is ever animated. gpui-kit honours the OS "reduce motion"
 //! setting (Windows: Animation effects off), snapping to the end state.
 
-use crate::app::TradeTerm;
 use ecolor::Color32;
 use gpui_kit::base::{
-    Easing, IterationCount, Keyframe, Keyframes, Timing, Transition, animate_keyframes, transition,
+    Easing, IterationCount, Keyframe, Keyframes, Timing, Transition, animate_keyframes,
 };
-use gpui_kit::component::{ActiveTheme, Theme as UiTheme, ThemeMode as UiThemeMode, h_flex};
-use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use std::time::Duration;
 use tt_chart::ChartType;
 use tt_chart_gpui::hsla;
-use tt_theme::{Theme, mix, with_alpha};
+use tt_theme::Theme;
 
 pub const UI_FONT: &str = if cfg!(target_os = "windows") {
     "Segoe UI"
@@ -24,43 +21,29 @@ pub const UI_FONT: &str = if cfg!(target_os = "windows") {
     ".SystemUIFont"
 };
 
-/// Standard snappy transition for state changes.
+/// Standard snappy transition for state changes (kit: `tt_ui::motion`).
 pub fn snappy(ms: u64) -> Transition {
-    Transition::new(Duration::from_millis(ms)).easing(Easing::EaseOut)
+    tt_ui::motion::snappy(ms)
 }
 
-/// Switches gpui-component's palette with our light/dark mode.
-pub fn apply_theme(dark: bool, window: &mut Window, cx: &mut App) {
-    let mode = if dark {
-        UiThemeMode::Dark
-    } else {
-        UiThemeMode::Light
-    };
-    UiTheme::change(mode, Some(window), cx);
-    // Snappy motion for every component (menus, popovers, dialogs): about
-    // two thirds of gpui-component's defaults.
-    let m = &mut UiTheme::global_mut(cx).motion;
-    m.duration_fast = Duration::from_millis(90);
-    m.duration_normal = Duration::from_millis(130);
-    m.duration_slow = Duration::from_millis(200);
-    m.spring_control = gpui_kit::base::Spring::new(Duration::from_millis(140));
-    m.spring_move = gpui_kit::base::Spring::new(Duration::from_millis(200))
-        .with_damping(0.85)
-        .with_epsilon(0.1);
+/// Sets the UI palette: the kit's global `UiTheme` and gpui-component's
+/// theme (mode, colors, radii, motion) from the same tokens.
+pub fn apply_theme(theme: &Theme, cx: &mut App) {
+    tt_ui::theme::sync(theme, cx);
 }
 
-/// A Lucide glyph (from the icon font registered by `tt_chart_gpui::init`).
+/// A Lucide glyph (from the icon font registered by `tt_ui::init`).
 pub fn lucide(icon: lucide_icons::Icon, size: f32) -> Div {
     div()
-        .font_family(tt_chart_gpui::ICON_FONT)
+        .font_family(tt_ui::ICON_FONT)
         .text_size(px(size))
         .line_height(px(size))
         .child(char::from(icon).to_string())
 }
 
-/// A thin vertical toolbar separator.
-pub fn separator(theme: &Theme) -> Div {
-    div().w(px(1.)).h(px(20.)).mx_1().bg(hsla(theme.border))
+/// A thin vertical toolbar separator (kit: `tt_ui::Divider::vertical`).
+pub fn separator(_theme: &Theme) -> tt_ui::Divider {
+    tt_ui::Divider::vertical()
 }
 
 /// Connection status dot; breathes (keyframed opacity) while connecting.
@@ -109,95 +92,6 @@ pub fn badge_color(theme: &Theme, key: &str) -> Color32 {
         .fold(0u32, |a, b| a.wrapping_mul(31).wrapping_add(b as u32));
     let palette = &theme.series_palette;
     palette[(h as usize) % palette.len()]
-}
-
-/// One chart tab in the title bar: badge, symbol, change %, close button on
-/// hover. The active tab's background eases in.
-#[allow(clippy::too_many_arguments)]
-pub fn tab_pill(
-    index: usize,
-    active: bool,
-    label: String,
-    badge: String,
-    change: Option<f64>,
-    closable: bool,
-    theme: &Theme,
-    window: &mut Window,
-    cx: &mut Context<TradeTerm>,
-) -> impl IntoElement {
-    let fill = transition(
-        SharedString::from(format!("tab-fill-{index}")),
-        if active { 1.0f32 } else { 0.0 },
-        snappy(120),
-        window,
-        cx,
-    );
-    let bg = with_alpha(theme.tab_active, fill);
-    let hover_bg = with_alpha(mix(theme.chrome, theme.tab_active, 0.5), 1.0);
-    let group = SharedString::from(format!("tab-{index}"));
-    h_flex()
-        .id(("tab", index))
-        .group(group.clone())
-        .h(px(30.))
-        .pl_2()
-        .pr_1()
-        .gap_2()
-        .items_center()
-        .rounded(px(7.))
-        .bg(hsla(bg))
-        .when(!active, |d| d.hover(|s| s.bg(hsla(hover_bg))))
-        .cursor_pointer()
-        .text_size(px(13.))
-        .child(
-            div()
-                .size(px(18.))
-                .rounded_full()
-                .bg(hsla(badge_color(theme, &badge)))
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_size(px(10.))
-                .text_color(hsla(theme.text_on_accent))
-                .child(badge.chars().next().unwrap_or('?').to_string()),
-        )
-        .child(div().text_color(hsla(theme.text)).child(label))
-        .children(change.map(|pct| {
-            let color = if pct >= 0.0 { theme.up } else { theme.down };
-            div()
-                .text_size(px(12.))
-                .text_color(hsla(color))
-                .child(format!(
-                    "{}{:.2}%",
-                    if pct >= 0.0 { "▲ " } else { "▼ " },
-                    pct.abs()
-                ))
-        }))
-        .child(
-            div()
-                .id(("tab-close", index))
-                .size(px(18.))
-                .rounded(px(4.))
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_color(hsla(theme.text_muted))
-                .invisible()
-                .when(closable, |d| {
-                    d.group_hover(group, |s| s.visible())
-                        .hover(|s| s.bg(hsla(theme.selection)).text_color(hsla(theme.text)))
-                })
-                .child(lucide(lucide_icons::Icon::X, 13.))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    cx.stop_propagation();
-                    this.on_tab_click(index, true, cx)
-                })),
-        )
-        .on_click(cx.listener(move |this, _, _, cx| this.on_tab_click(index, false, cx)))
-        .on_mouse_down(
-            MouseButton::Middle,
-            cx.listener(move |this, _, _, cx| this.on_tab_click(index, true, cx)),
-        )
-        .text_color(cx.theme().foreground)
 }
 
 /// Lucide icon for a chart type (toolbar button, menu rows).
