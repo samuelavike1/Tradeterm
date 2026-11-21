@@ -1,8 +1,11 @@
 //! TradingView's floating toolbar for the selected drawings (spec 4.1), on
-//! the tt-ui kit: grip (drag it; the position is remembered), template
-//! menu, line / background / text colors (with opacity), line width and
+//! the tt-ui kit at the TradingView-measured density (ui-guidelines
+//! §2.10: 38 px tall, 38 px buttons, 24 px grip): grip (drag it; the
+//! position is remembered), template menu, line / background / text colors
+//! (an icon with a color bar, palette + opacity), "— 1px" line width, line
 //! style, settings, lock, remove and a "…" menu (clone, copy, visual order,
-//! visibility on intervals, hide).
+//! visibility on intervals, hide). TradingView's "Add alert" is left out
+//! until tradeterm has alerts (BACKLOG.md).
 //!
 //! Buttons follow the selection's [`Caps`] (with a multi-selection, the
 //! controls all of them have); an edit applies to every selected drawing.
@@ -11,14 +14,12 @@
 
 use crate::chart::{Chart, ChartEvent, ChartSource};
 use crate::drawing_prefs::{DrawingPrefs, TemplateTarget, template_menu};
-use gpui_kit::component::color_picker::{ColorPickerEvent, ColorPickerState};
 use gpui_kit::*;
-use lucide_icons::Icon;
 use std::rc::Rc;
 use tt_chart::{Caps, Drawing, LineStyle, Props, Rgba, VisibilityPreset, VisualOrder};
-use tt_ui::Menu;
 use tt_ui::prelude::*;
 use tt_ui::tokens::*;
+use tt_ui::{ColorBarButton, LineDash, LineStyleButton, LineWidthButton, Menu};
 
 /// Undo-merge slots of the toolbar's controls (consecutive edits of one
 /// control are one undo step).
@@ -49,13 +50,6 @@ impl Render for NoPreview {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         div()
     }
-}
-
-/// A color button's picker, kept across renders; its changes edit the
-/// selection.
-struct ColorSlot {
-    picker: Entity<ColorPickerState>,
-    _sub: Subscription,
 }
 
 /// Which color a toolbar color button edits.
@@ -89,6 +83,31 @@ impl ColorKind {
             ColorKind::Fill => "Background color",
             ColorKind::Text => "Text color",
         }
+    }
+
+    /// TradingView's icons: a pencil (line), a bucket (fill), a "T" (text).
+    fn glyph(self) -> Glyph {
+        match self {
+            ColorKind::Line => Glyph::PENCIL,
+            ColorKind::Fill => Glyph::PAINT_BUCKET,
+            ColorKind::Text => Glyph::TYPE,
+        }
+    }
+}
+
+fn dash(s: LineStyle) -> LineDash {
+    match s {
+        LineStyle::Solid => LineDash::Solid,
+        LineStyle::Dashed => LineDash::Dashed,
+        LineStyle::Dotted => LineDash::Dotted,
+    }
+}
+
+fn line_style(d: LineDash) -> LineStyle {
+    match d {
+        LineDash::Solid => LineStyle::Solid,
+        LineDash::Dashed => LineStyle::Dashed,
+        LineDash::Dotted => LineStyle::Dotted,
     }
 }
 
@@ -167,43 +186,23 @@ impl<S: ChartSource> Chart<S> {
     }
 
     /// A color button bound to the selection's `kind` color.
-    fn color_button(
-        &self,
-        kind: ColorKind,
-        current: Rgba,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    fn color_button(&self, kind: ColorKind, current: Rgba, cx: &mut Context<Self>) -> AnyElement {
         let chart = cx.entity().downgrade();
-        let key = match kind {
+        let id = match kind {
             ColorKind::Line => "dt-color-line",
             ColorKind::Fill => "dt-color-fill",
             ColorKind::Text => "dt-color-text",
         };
-        let slot = window.use_keyed_state(key, cx, move |window, cx| {
-            let picker = cx.new(|cx| ColorPickerState::new(window, cx));
-            let sub = cx.subscribe(&picker, move |_, _, ev: &ColorPickerEvent, cx| {
-                if let ColorPickerEvent::Change(Some(c)) = ev {
-                    let c = from_hsla(*c);
-                    chart
-                        .update(cx, |ch, cx| {
-                            ch.toolbar_edit(kind.slot(), |d| kind.set(d, c), cx)
-                        })
-                        .ok();
-                }
-            });
-            ColorSlot { picker, _sub: sub }
-        });
-        let picker = slot.read(cx).picker.clone();
-        // Follow the selection (no change event, so nothing feeds back).
-        if picker.read(cx).value().map(from_hsla) != Some(current) {
-            picker.update(cx, |p, cx| p.set_value(to_hsla(current), window, cx));
-        }
-        div()
-            .id(SharedString::from(format!("{key}-tip")))
-            .flex_none()
-            .tooltip(tip(kind.tip(), None))
-            .child(ColorField::new(&picker).compact())
+        ColorBarButton::new(id, kind.glyph(), to_hsla(current))
+            .tooltip(kind.tip())
+            .on_change(move |c, _, cx| {
+                let c = from_hsla(c);
+                chart
+                    .update(cx, |ch, cx| {
+                        ch.toolbar_edit(kind.slot(), |d| kind.set(d, c), cx)
+                    })
+                    .ok();
+            })
             .into_any_element()
     }
 
@@ -211,7 +210,7 @@ impl<S: ChartSource> Chart<S> {
     /// placing / dragging).
     pub(crate) fn drawing_toolbar(
         &self,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let (drawings, primary, layout) = {
@@ -236,6 +235,8 @@ impl<S: ChartSource> Chart<S> {
         let p = &primary.props;
 
         let mut buttons: Vec<AnyElement> = Vec::new();
+        // Laid-out width of the buttons (most are `FT_BUTTON` squares).
+        let mut buttons_w = 0.0;
         if same_tool {
             let (t_cur, t_apply) = (this.clone(), this.clone());
             let target = TemplateTarget {
@@ -260,96 +261,67 @@ impl<S: ChartSource> Chart<S> {
                 }),
             };
             buttons.push(
-                ToolbarButton::icon("dt-template", Glyph::Lucide(Icon::LayoutTemplate))
-                    .size(ControlSize::Sm)
-                    .caret()
+                IconButton::new("dt-template", Glyph::GRID_PLUS)
+                    .size(ControlSize::Xl)
                     .tooltip("Template")
-                    .menu(move |menu, _, cx| template_menu(menu, target.clone(), cx))
+                    .menu(Anchor::TopLeft, move |menu, _, cx| {
+                        template_menu(menu, target.clone(), cx)
+                    })
                     .into_any_element(),
             );
+            buttons_w += FT_BUTTON;
         }
         if caps.contains(Caps::LINE_COLOR) && !matches!(p, Props::TextBox(_)) {
-            buttons.push(self.color_button(ColorKind::Line, p.line_color(), window, cx));
+            buttons.push(self.color_button(ColorKind::Line, p.line_color(), cx));
+            buttons_w += FT_BUTTON;
         }
         if caps.contains(Caps::FILL)
             && let Some(f) = p.fill()
         {
-            buttons.push(self.color_button(ColorKind::Fill, f.color, window, cx));
+            buttons.push(self.color_button(ColorKind::Fill, f.color, cx));
+            buttons_w += FT_BUTTON;
         }
+        // TradingView shows the text color whenever the tool has text.
         if caps.contains(Caps::TEXT)
-            && p.text_on()
             && let Some(ts) = p.text_style()
         {
-            buttons.push(self.color_button(ColorKind::Text, ts.color, window, cx));
+            buttons.push(self.color_button(ColorKind::Text, ts.color, cx));
+            buttons_w += FT_BUTTON;
         }
         if caps.contains(Caps::LINE_WIDTH) {
-            let now = p.line_width();
             let t = this.clone();
             buttons.push(
-                ToolbarButton::text("dt-width", format!("{now}px"))
-                    .size(ControlSize::Sm)
-                    .caret()
-                    .tooltip("Line width")
-                    .menu(move |mut menu, _, _| {
-                        menu = menu.width(MenuWidth::Sm);
-                        for w in 1u8..=4 {
-                            let t = t.clone();
-                            menu = menu.row(
-                                MenuRow::new(("dt-width-opt", w as usize), format!("{w}px"))
-                                    .checked(w == now)
-                                    .on_select(move |_, cx| {
-                                        t.update(cx, |c, cx| {
-                                            c.toolbar_edit(
-                                                SLOT_WIDTH,
-                                                |d| d.props.set_line_width(w),
-                                                cx,
-                                            )
-                                        })
-                                        .ok();
-                                    }),
-                            );
-                        }
-                        menu
+                LineWidthButton::new("dt-width", p.line_width())
+                    .on_change(move |w, _, cx| {
+                        t.update(cx, |c, cx| {
+                            c.toolbar_edit(SLOT_WIDTH, |d| d.props.set_line_width(w), cx)
+                        })
+                        .ok();
                     })
                     .into_any_element(),
             );
+            buttons_w += FT_W_WIDTH_BUTTON;
         }
         if caps.contains(Caps::LINE_STYLE) {
-            let now = p.line_style();
             let t = this.clone();
             buttons.push(
-                ToolbarButton::text("dt-style", style_mark(now))
-                    .size(ControlSize::Sm)
-                    .caret()
-                    .tooltip("Line style")
-                    .menu(move |mut menu, _, _| {
-                        menu = menu.width(MenuWidth::Sm);
-                        for (i, st) in LineStyle::ALL.into_iter().enumerate() {
-                            let t = t.clone();
-                            menu = menu.row(
-                                MenuRow::new(
-                                    ("dt-style-opt", i),
-                                    format!("{}   {}", style_mark(st), st.label()),
-                                )
-                                .checked(st == now)
-                                .on_select(move |_, cx| {
-                                    t.update(cx, |c, cx| {
-                                        c.toolbar_edit(SLOT_STYLE, |d| d.set_style(st), cx)
-                                    })
-                                    .ok();
-                                }),
-                            );
-                        }
-                        menu
+                LineStyleButton::new("dt-style", dash(p.line_style()))
+                    .on_change(move |d, _, cx| {
+                        let st = line_style(d);
+                        t.update(cx, |c, cx| {
+                            c.toolbar_edit(SLOT_STYLE, |d| d.set_style(st), cx)
+                        })
+                        .ok();
                     })
                     .into_any_element(),
             );
+            buttons_w += FT_BUTTON;
         }
         let id = primary.id;
         let t = this.clone();
         buttons.push(
             IconButton::new("dt-settings", Glyph::SETTINGS)
-                .size(ControlSize::Sm)
+                .size(ControlSize::Xl)
                 .tooltip("Settings")
                 .on_click(move |_, _, cx| {
                     t.update(cx, |_, cx| cx.emit(ChartEvent::OpenDrawingSettings(id)))
@@ -368,7 +340,7 @@ impl<S: ChartSource> Chart<S> {
                     Glyph::LOCK_OPEN
                 },
             )
-            .size(ControlSize::Sm)
+            .size(ControlSize::Xl)
             .toggled(locked)
             .tooltip(if locked { "Unlock" } else { "Lock" })
             .on_click(move |_, _, cx| {
@@ -382,7 +354,7 @@ impl<S: ChartSource> Chart<S> {
         let t = this.clone();
         buttons.push(
             IconButton::new("dt-delete", Glyph::TRASH)
-                .size(ControlSize::Sm)
+                .size(ControlSize::Xl)
                 .tooltip("Remove")
                 .on_click(move |_, _, cx| {
                     t.update(cx, |c, cx| {
@@ -394,18 +366,21 @@ impl<S: ChartSource> Chart<S> {
         );
         let t = this.clone();
         buttons.push(
-            ToolbarButton::icon("dt-more", Glyph::ELLIPSIS)
-                .size(ControlSize::Sm)
+            IconButton::new("dt-more", Glyph::ELLIPSIS)
+                .size(ControlSize::Xl)
                 .tooltip("More")
-                .menu(move |menu, _, _| more_menu(menu, t.clone()))
+                .menu(Anchor::TopLeft, move |menu, _, _| {
+                    more_menu(menu, t.clone())
+                })
                 .into_any_element(),
         );
+        // Settings, lock, remove, more.
+        buttons_w += 4.0 * FT_BUTTON;
 
         // Place: the remembered fraction of the chart, else top center of
         // the price pane; clamped inside the pane, below the top row.
-        let n = buttons.len() as f32;
-        let w = S0_5 * 2.0 + (CONTROL_SM / 2.0 + S0_5) + n * (CONTROL_SM + S0_5) + 2.0 * S3;
-        let h = CONTROL_SM + 2.0 * S0_5 + 2.0;
+        let w = FT_GRIP + buttons_w;
+        let h = FT_HEIGHT;
         let (x, y) = match DrawingPrefs::get(cx).toolbar_pos {
             Some([fx, fy]) => (
                 plot.left() + fx * plot.width(),
@@ -416,7 +391,7 @@ impl<S: ChartSource> Chart<S> {
         let x = x.min(pane.right() - w - EDGE).max(plot.left() + EDGE);
         let y = y.min(pane.bottom() - h - EDGE).max(pane.top() + TOP_CLEAR);
         let origin = plot.min;
-        let grip_w = S0_5 + CONTROL_SM / 2.0 + S0_5;
+        let grip_w = FT_GRIP;
 
         let drag_this = this.clone();
         Some(
@@ -507,13 +482,4 @@ fn more_menu<S: ChartSource>(menu: Menu, t: WeakEntity<Chart<S>>) -> Menu {
         })
         .icon(Glyph::EYE_OFF),
     )
-}
-
-/// A short text picture of a line style (the style button and menu).
-fn style_mark(s: LineStyle) -> &'static str {
-    match s {
-        LineStyle::Solid => "\u{2014}\u{2014}",
-        LineStyle::Dashed => "\u{2013} \u{2013}",
-        LineStyle::Dotted => "\u{00b7}\u{00b7}\u{00b7}",
-    }
 }
