@@ -29,6 +29,20 @@ pub trait Canvas {
 
     fn polyline(&mut self, points: &[Pos2], width: f32, color: Color32);
 
+    /// A dashed polyline: `dash` on, `gap` off, measured along the path so
+    /// the pattern runs on across vertices. The default draws each dash
+    /// piece with [`Canvas::line`]; backends override it to batch them.
+    fn dashed_polyline(
+        &mut self,
+        points: &[Pos2],
+        width: f32,
+        color: Color32,
+        dash: f32,
+        gap: f32,
+    ) {
+        dash_pieces(points, dash, gap, |a, b| self.line(a, b, width, color));
+    }
+
     /// A 1-px dotted line (1 px on, 3 px off, TradingView's grid style).
     /// Backends may draw it as one textured quad instead of many dots.
     fn dotted_line(&mut self, a: Pos2, b: Pos2, color: Color32) {
@@ -199,6 +213,42 @@ pub fn styled_line<C: Canvas + ?Sized>(
     }
 }
 
+/// Splits a polyline into its dash pieces (`dash` on, `gap` off, along the
+/// path); a dash that crosses a vertex yields one piece per segment.
+pub fn dash_pieces(points: &[Pos2], dash: f32, gap: f32, mut piece: impl FnMut(Pos2, Pos2)) {
+    if points.len() < 2 || dash.is_nan() || dash <= 0.0 || gap.is_nan() || gap < 0.0 {
+        return;
+    }
+    // Position in the pattern: `on` while drawing, `left` until it flips.
+    let (mut on, mut left) = (true, dash);
+    for w in points.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        let len = a.distance(b);
+        if len.is_nan() || len <= 0.0 {
+            continue;
+        }
+        let dir = (b - a) / len;
+        let mut t = 0.0;
+        while t < len {
+            let step = left.min(len - t);
+            if on {
+                piece(a + dir * t, a + dir * (t + step));
+            }
+            t += step;
+            left -= step;
+            if left <= 0.0 {
+                on = !on;
+                left = if on { dash } else { gap };
+                if left <= 0.0 {
+                    // Zero gap: solid.
+                    on = true;
+                    left = dash;
+                }
+            }
+        }
+    }
+}
+
 /// Rotated text for backends without it: each glyph upright, centered on
 /// the rotated baseline (no allocation beyond the backend's own text calls).
 /// `anchor` is relative to the unrotated text box, which turns about `pos`.
@@ -322,6 +372,36 @@ mod tests {
             total += ((b - a).x * (c - a).y - (b - a).y * (c - a).x).abs() / 2.0;
         });
         total
+    }
+
+    #[test]
+    fn dash_pattern_runs_across_vertices() {
+        let mut pieces = Vec::new();
+        // An L of 10 + 10 with dash 4 / gap 2: 0-4, 6-10 | 12-16, 18-20.
+        let pts = [pos2(0., 0.), pos2(10., 0.), pos2(10., 10.)];
+        dash_pieces(&pts, 4.0, 2.0, |a, b| pieces.push((a, b)));
+        assert_eq!(
+            pieces,
+            [
+                (pos2(0., 0.), pos2(4., 0.)),
+                (pos2(6., 0.), pos2(10., 0.)),
+                (pos2(10., 2.), pos2(10., 6.)),
+                (pos2(10., 8.), pos2(10., 10.)),
+            ]
+        );
+        // A dash crossing the vertex splits into two pieces.
+        pieces.clear();
+        dash_pieces(&pts, 12.0, 1.0, |a, b| pieces.push((a, b)));
+        assert_eq!(
+            pieces[..2],
+            [
+                (pos2(0., 0.), pos2(10., 0.)),
+                (pos2(10., 0.), pos2(10., 2.))
+            ]
+        );
+        pieces.clear();
+        dash_pieces(&pts[..1], 1.0, 1.0, |a, b| pieces.push((a, b)));
+        assert!(pieces.is_empty());
     }
 
     #[test]

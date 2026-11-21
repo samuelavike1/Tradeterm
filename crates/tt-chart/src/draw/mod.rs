@@ -48,6 +48,9 @@ pub(crate) struct Scene<'a> {
     pub time_axis: Rect,
     /// Series being displayed (raw or Heikin Ashi).
     pub display: &'a CandleSeries,
+    /// Renko / Line break: index (in `display`) of the first projection
+    /// (forming) brick.
+    pub projection_from: Option<usize>,
     /// Last *real* candle, for the last-price line.
     pub last_raw: Option<Candle>,
     pub bars: &'a [DrawBar],
@@ -953,6 +956,7 @@ mod tests {
             price_axis: Rect::from_min_max(pos2(800.0, 0.0), pos2(880.0, 500.0)),
             time_axis: Rect::from_min_max(pos2(0.0, 500.0), pos2(800.0, 528.0)),
             display: series,
+            projection_from: None,
             last_raw: series.last(),
             bars: &[],
             decimated: false,

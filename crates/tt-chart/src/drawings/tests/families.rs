@@ -440,6 +440,7 @@ fn every_line_fib_and_range_tool_renders() {
         price_axis: Rect::from_min_max(pos2(1000.0, 0.0), pos2(1080.0, 500.0)),
         time_axis: Rect::from_min_max(pos2(0.0, 500.0), pos2(1000.0, 528.0)),
         display: &s,
+        projection_from: None,
         last_raw: s.last(),
         bars: &[],
         decimated: false,
