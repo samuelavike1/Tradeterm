@@ -11,7 +11,8 @@ param(
     [Parameter(Mandatory)] [string]$Prefix,
     [string]$Query = 'BTC',
     [string]$Exe = 'F:\charting\target-logos\release\tradeterm.exe',
-    [int]$Wait = 10
+    [int]$Wait = 10,
+    [int]$SearchWait = 15
 )
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
@@ -86,7 +87,7 @@ try {
     Full "$Prefix-window.png"
     Fg
     [System.Windows.Forms.SendKeys]::SendWait($Query)
-    Start-Sleep -Seconds 6
+    Start-Sleep -Seconds $SearchWait
     Fg
     Full "$Prefix-search.png"
 } finally {
