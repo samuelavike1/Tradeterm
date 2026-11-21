@@ -87,3 +87,10 @@ Add to this list whenever something is skipped; remove an entry when it lands.
   menu with sections here; "Technicals" built-ins are limited to the indicators
   we have (no Bill Williams 3 Lines, Displaced EMA, MA Exp Ribbon, Swing
   Trading, Volume Based).
+
+## Chart settings (hidden until they work)
+- Bid and ask labels/lines: needs a Binance `bookTicker` stream (new MarketEvent,
+  throttled repaints). The model fields exist; the dialog rows are hidden.
+- Navigation buttons on the chart (zoom / scroll / reset at the bottom): setting
+  exists in the model, dialog row hidden.
+- Pre/post market and Plus button on the price scale (n/a for crypto / blocked).

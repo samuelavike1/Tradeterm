@@ -106,6 +106,9 @@ pub struct TradeTerm {
     pub(crate) layout_autosave: bool,
     /// Autosave off and the tabs differ from the saved layout.
     pub(crate) layout_dirty: bool,
+    /// "Save as default" and named presets of the indicator settings dialog.
+    pub(crate) indicator_defaults: tt_session::settings::IndicatorDefaults,
+    pub(crate) indicator_presets: tt_session::settings::IndicatorPresets,
     pub(crate) perf: bool,
     pub(crate) perf_stats: PerfStats,
     /// Quote chip of the symbol search, remembered between openings.
@@ -113,7 +116,7 @@ pub struct TradeTerm {
     /// Drawing tool and toggles (left toolbar), shared by all charts.
     pub(crate) draw: crate::drawing_toolbar::DrawMode,
     pub(crate) focus: FocusHandle,
-    _subscriptions: Vec<Subscription>,
+    pub(crate) _subscriptions: Vec<Subscription>,
     /// Owns the tokio thread; dropped after the tabs.
     _runtime: BackgroundRuntime,
 }
@@ -208,6 +211,12 @@ impl TradeTerm {
                 .path()
                 .map(tt_session::layouts::LayoutStore::path_next_to),
         );
+        // Drawing templates and the floating toolbar's place, shared by
+        // every chart (saved on change, see `observe_drawing_prefs`).
+        cx.set_global(tt_chart_gpui::DrawingPrefs {
+            templates: settings.drawing_templates.clone(),
+            toolbar_pos: settings.drawing_toolbar_pos,
+        });
         let mut app = Self {
             shared,
             tabs: Vec::new(),
@@ -230,6 +239,8 @@ impl TradeTerm {
             layout_name: settings.layout_name.clone(),
             layout_autosave: settings.layout_autosave,
             layout_dirty: false,
+            indicator_defaults: settings.indicator_defaults.clone(),
+            indicator_presets: settings.indicator_presets.clone(),
             perf: false,
             perf_stats: PerfStats::default(),
             search_quote: 0,
@@ -239,6 +250,7 @@ impl TradeTerm {
             _runtime: runtime,
         };
         ui::apply_theme(&app.theme, cx);
+        app.observe_drawing_prefs(cx);
         for (i, t) in settings.tabs.iter().enumerate() {
             let synthetic = (i == settings.active_tab).then_some(synthetic).flatten();
             let chart = app.make_chart(t, synthetic, window, cx);
@@ -290,12 +302,15 @@ impl TradeTerm {
                     app.open_chart_settings_page(crate::chart_settings::Page::Scales, window, cx)
                 }
                 ChartEvent::DrawingsChanged => app.drawings_changed(chart, cx),
-                // The drawing settings dialog is slice A.
-                ChartEvent::OpenDrawingSettings(_) => {}
+                // Double-click, the toolbar gear or "Settings…".
+                ChartEvent::OpenDrawingSettings(id) => {
+                    app.open_drawing_settings(chart.clone(), *id, window, cx)
+                }
             },
         );
         self._subscriptions.push(sub);
         self.apply_draw_mode_to(&chart, cx);
+        self.apply_drawing_defaults_to(&chart, cx);
         chart
     }
 
@@ -369,11 +384,17 @@ impl TradeTerm {
             indicator_templates: self.indicator_templates.clone(),
             layout_name: self.layout_name.clone(),
             layout_autosave: self.layout_autosave,
+            indicator_defaults: self.indicator_defaults.clone(),
+            indicator_presets: self.indicator_presets.clone(),
             ..AppSettings::default()
         };
         // Up/down colors live in the chart settings now.
         s.set_overrides(ThemeOverrides::default());
         s.chart_style = self.chart_style.clone();
+        if let Some(p) = cx.try_global::<tt_chart_gpui::DrawingPrefs>() {
+            s.drawing_templates = p.templates.clone();
+            s.drawing_toolbar_pos = p.toolbar_pos;
+        }
         if let Ok(store) = self.shared.drawings.lock() {
             s.drawings = store
                 .iter()
@@ -538,12 +559,14 @@ impl TradeTerm {
         });
     }
 
+    /// Adds an indicator of `kind`, from its saved default if there is one.
     pub fn add_indicator(&mut self, kind: tt_core::StudyKind, cx: &mut Context<Self>) {
+        let defaults = self.indicator_defaults.clone();
         self.with_tab(cx, |s, _| {
             s.tab
                 .chart
                 .indicators
-                .push(tt_chart::Indicator::new(kind.default_study()))
+                .push(tt_session::settings::new_indicator(kind, &defaults))
         });
     }
 
@@ -928,7 +951,7 @@ impl Render for TradeTerm {
                             .children(self.perf_overlay(cx)),
                     ),
             )
-            .child(self.status_bar(cx))
+            .child(self.status_bar(window, cx))
     }
 }
 

@@ -143,11 +143,15 @@ fn draw(
         legend_collapsed: false,
         main_collapsed: false,
         legend_hover: None,
+        legend_hover_button: None,
         price_axis: rect,
         time_axis: rect,
         display: series,
         projection_from,
         last_raw: series.last(),
+        raw: series,
+        labels: &crate::draw::NO_LABELS,
+        time_fmt: crate::scale::TimeFormat::default(),
         bars,
         decimated,
         crosshair: None,
@@ -158,6 +162,7 @@ fn draw(
         bar_close_ms: None,
         title: "",
         drawings: &drawings,
+        tz: crate::TzOffsets::utc_static(),
     };
     let mut c = Rec::default();
     super::series(&mut c, &s);

@@ -502,9 +502,8 @@ impl ChartStyle {
         if let Some(x) = v.scale_text {
             t.text_muted = x.to_color32();
         }
-        if let Some(x) = v.scale_lines {
-            t.border = x.to_color32();
-        }
+        // `scale_lines` is not a theme token: only the axis borders use it
+        // (separators and legend outlines keep `border`).
         t
     }
 

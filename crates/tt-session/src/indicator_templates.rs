@@ -9,7 +9,7 @@ use crate::templates::{NameError, validate_name};
 use serde::{Deserialize, Serialize};
 use tt_core::{Source, Study, Timeframe};
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct IndicatorTemplate {
     pub name: String,
@@ -21,18 +21,6 @@ pub struct IndicatorTemplate {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeframe: Option<Timeframe>,
     pub favorite: bool,
-}
-
-impl Default for IndicatorTemplate {
-    fn default() -> Self {
-        Self {
-            name: String::new(),
-            indicators: Vec::new(),
-            symbol: None,
-            timeframe: None,
-            favorite: false,
-        }
-    }
 }
 
 impl IndicatorTemplate {

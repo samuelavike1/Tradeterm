@@ -651,6 +651,14 @@ impl std::ops::BitOr for Caps {
     }
 }
 
+/// The controls two drawings have in common (multi-selection).
+impl std::ops::BitAnd for Caps {
+    type Output = Caps;
+    fn bitand(self, o: Caps) -> Caps {
+        Caps(self.0 & o.0)
+    }
+}
+
 impl Props {
     /// The tool's factory style (TradingView's defaults).
     pub fn defaults(tool: DrawingTool) -> Props {
@@ -803,7 +811,23 @@ impl Props {
     ) {
         if let Some(c) = color {
             // Legacy colors are premultiplied; ours were all opaque.
-            self.set_line_color(Rgba::from_color32(c));
+            let c = Rgba::from_color32(c);
+            self.set_line_color(c);
+            // Fills followed the line color before props existed: the
+            // rectangle at 20 %, ranges keeping their opacities.
+            match self {
+                Props::Shape(p) => {
+                    p.background = Fill {
+                        on: true,
+                        color: c.with_opacity(0.2),
+                    }
+                }
+                Props::Range(p) => {
+                    p.background.color = p.background.color.with_rgb_of(c);
+                    p.label_background.color = p.label_background.color.with_rgb_of(c);
+                }
+                _ => {}
+            }
         }
         if let Some(w) = width.filter(|w| w.is_finite()) {
             self.set_line_width(w.round().clamp(1.0, 4.0) as u8);
@@ -815,15 +839,12 @@ impl Props {
 
     pub fn capabilities(&self) -> Caps {
         match self {
-            Props::Line(_)
-            | Props::HLine(_)
-            | Props::VLine(_)
-            | Props::Cross(_)
-            | Props::Fib(_)
-            | Props::Path(_)
-            | Props::Position(_)
-            | Props::Range(_) => Caps::LINE,
-            Props::Channel(_) | Props::Shape(_) | Props::Brush(_) => Caps::LINE | Caps::FILL,
+            Props::Cross(_) | Props::Fib(_) | Props::Path(_) | Props::Position(_) => Caps::LINE,
+            Props::Line(_) | Props::HLine(_) | Props::VLine(_) => Caps::LINE | Caps::TEXT,
+            Props::Channel(_) | Props::Shape(_) | Props::Range(_) => {
+                Caps::LINE | Caps::FILL | Caps::TEXT
+            }
+            Props::Brush(_) => Caps::LINE | Caps::FILL,
             Props::TextBox(_) => Caps::TEXT | Caps::FILL,
         }
     }
@@ -881,27 +902,85 @@ impl Props {
         }
     }
 
-    /// Sets the main line color. Until the toolbar has its own background
-    /// button (slice A), backgrounds that followed the line color before
-    /// props existed (shapes, ranges) follow it here too, keeping their
-    /// opacity.
+    /// Sets the main line color (backgrounds have their own color, see
+    /// [`Self::set_fill_color`]).
     pub fn set_line_color(&mut self, c: Rgba) {
         match self {
             Props::TextBox(p) => p.text_style.color = c,
-            Props::Shape(p) => {
-                p.border.color = c;
-                p.background.color = p.background.color.with_rgb_of(c);
-            }
-            Props::Range(p) => {
-                p.line.color = c;
-                p.background.color = p.background.color.with_rgb_of(c);
-                p.label_background.color = p.label_background.color.with_rgb_of(c);
-            }
             _ => {
                 if let Some(s) = self.main_stroke_mut() {
                     s.color = c;
                 }
             }
+        }
+    }
+
+    /// The background (what the toolbar's background button edits).
+    pub fn fill(&self) -> Option<&Fill> {
+        match self {
+            Props::Channel(p) => Some(&p.background),
+            Props::Shape(p) => Some(&p.background),
+            Props::Brush(p) => Some(&p.background),
+            Props::TextBox(p) => Some(&p.background),
+            Props::Range(p) => Some(&p.background),
+            _ => None,
+        }
+    }
+
+    /// Sets the background color (and turns the background on).
+    pub fn set_fill_color(&mut self, c: Rgba) {
+        if let Some(f) = self.fill_mut() {
+            f.color = c;
+            f.on = true;
+        }
+    }
+
+    /// The text formatting (what the toolbar's text color button edits).
+    pub fn text_style(&self) -> Option<&TextStyle> {
+        match self {
+            Props::Line(p) => Some(&p.text_style),
+            Props::HLine(p) => Some(&p.text_style),
+            Props::VLine(p) => Some(&p.text_style),
+            Props::Channel(p) => Some(&p.text_style),
+            Props::Shape(p) => Some(&p.text_style),
+            Props::TextBox(p) => Some(&p.text_style),
+            Props::Range(p) => Some(&p.text_style),
+            Props::Cross(_) | Props::Fib(_) | Props::Brush(_) | Props::Path(_) => None,
+            Props::Position(_) => None,
+        }
+    }
+
+    pub fn set_text_color(&mut self, c: Rgba) {
+        if let Some(t) = self.text_style_mut() {
+            t.color = c;
+        }
+    }
+
+    /// Whether the drawing's text is shown (families with a text layout;
+    /// text boxes always show theirs).
+    pub fn text_on(&self) -> bool {
+        match self {
+            Props::Line(p) => p.text.on,
+            Props::HLine(p) => p.text.on,
+            Props::VLine(p) => p.text.on,
+            Props::Channel(p) => p.text.on,
+            Props::Shape(p) => p.text.on,
+            Props::Range(p) => p.text.on,
+            Props::TextBox(_) => true,
+            _ => false,
+        }
+    }
+
+    /// Turns the text layout on or off (no-op for families without one).
+    pub fn set_text_on(&mut self, on: bool) {
+        match self {
+            Props::Line(p) => p.text.on = on,
+            Props::HLine(p) => p.text.on = on,
+            Props::VLine(p) => p.text.on = on,
+            Props::Channel(p) => p.text.on = on,
+            Props::Shape(p) => p.text.on = on,
+            Props::Range(p) => p.text.on = on,
+            _ => {}
         }
     }
 

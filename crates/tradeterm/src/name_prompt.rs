@@ -69,10 +69,8 @@ pub fn open(
                         cx.notify();
                     }
                 }
-                InputEvent::PressEnter { .. } => {
-                    if this.run(window, cx) {
-                        window.close_dialog(cx);
-                    }
+                InputEvent::PressEnter { .. } if this.run(window, cx) => {
+                    window.close_dialog(cx);
                 }
                 _ => {}
             },

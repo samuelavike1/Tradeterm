@@ -403,8 +403,10 @@ impl Canvas for SkiaCanvas {
             SpreadMode::Pad,
             Transform::identity(),
         );
-        let mut p = Paint::default();
-        p.anti_alias = true;
+        let mut p = Paint {
+            anti_alias: true,
+            ..Default::default()
+        };
         match shader {
             Some(s) => p.shader = s,
             None => p.set_color(color(top)),
@@ -546,7 +548,7 @@ pub fn render(chart: &TabChart, ppp: f32, cx: &mut App) -> Option<Snapshot> {
         view.render_base(&mut c, full, ppp, data, &theme);
         let input = tt_chart::RenderInput {
             crosshair: None,
-            legend_hover: None,
+            ..Default::default()
         };
         view.render_overlay(&mut c, data, &theme, input);
         // Header: title left, time right, a border line under it.

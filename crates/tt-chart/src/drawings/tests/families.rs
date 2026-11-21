@@ -437,11 +437,15 @@ fn every_line_fib_and_range_tool_renders() {
         legend_collapsed: false,
         main_collapsed: false,
         legend_hover: None,
+        legend_hover_button: None,
         price_axis: Rect::from_min_max(pos2(1000.0, 0.0), pos2(1080.0, 500.0)),
         time_axis: Rect::from_min_max(pos2(0.0, 500.0), pos2(1000.0, 528.0)),
         display: &s,
         projection_from: None,
         last_raw: s.last(),
+        raw: &s,
+        labels: &crate::draw::NO_LABELS,
+        time_fmt: crate::scale::TimeFormat::default(),
         bars: &[],
         decimated: false,
         crosshair: None,
@@ -452,6 +456,7 @@ fn every_line_fib_and_range_tool_renders() {
         bar_close_ms: None,
         title: "",
         drawings: &ds,
+        tz: crate::TzOffsets::utc_static(),
     };
     let mut c = Recorder::default();
     draw_base(&mut c, &scene);

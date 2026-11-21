@@ -18,10 +18,38 @@ pub trait Canvas {
 
     fn fill_rect(&mut self, rect: Rect, color: Color32);
 
+    /// Fills `rect` with a vertical gradient, `top` to `bottom`. The default
+    /// draws 64 horizontal bands; backends override it with a real gradient.
+    fn fill_rect_gradient(&mut self, rect: Rect, top: Color32, bottom: Color32) {
+        if top == bottom {
+            self.fill_rect(rect, top);
+            return;
+        }
+        const BANDS: usize = 64;
+        let h = rect.height() / BANDS as f32;
+        for i in 0..BANDS {
+            let t = (i as f32 + 0.5) / BANDS as f32;
+            let y0 = rect.top() + h * i as f32;
+            let band = Rect::from_min_max(
+                emath::pos2(rect.left(), y0),
+                emath::pos2(rect.right(), (y0 + h + 0.5).min(rect.bottom())),
+            );
+            self.fill_rect(band, lerp_color(top, bottom, t));
+        }
+    }
+
     fn fill_rounded_rect(&mut self, rect: Rect, radius: f32, color: Color32);
 
     /// Rectangle outline drawn *inside* `rect`.
     fn stroke_rect(&mut self, rect: Rect, width: f32, color: Color32);
+
+    /// Rounded outline drawn *inside* `rect`, matching
+    /// [`Canvas::fill_rounded_rect`] with the same `radius` (no corners
+    /// poking out of the fill). Defaults to a square outline.
+    fn stroke_rounded_rect(&mut self, rect: Rect, radius: f32, width: f32, color: Color32) {
+        let _ = radius;
+        self.stroke_rect(rect, width, color);
+    }
 
     fn line(&mut self, a: Pos2, b: Pos2, width: f32, color: Color32);
 
@@ -169,6 +197,18 @@ pub trait Canvas {
         self.line(tip, back + side, width, color);
         self.line(tip, back - side, width, color);
     }
+}
+
+/// Linear blend of two colors (premultiplied channels), `t` in `0..=1`.
+pub fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
+    let t = t.clamp(0.0, 1.0);
+    let mix = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
+    Color32::from_rgba_premultiplied(
+        mix(a.r(), b.r()),
+        mix(a.g(), b.g()),
+        mix(a.b(), b.b()),
+        mix(a.a(), b.a()),
+    )
 }
 
 /// A stroke for [`Canvas::ellipse`].

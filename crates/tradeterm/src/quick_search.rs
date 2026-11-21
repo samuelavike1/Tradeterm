@@ -16,6 +16,8 @@ use tt_chart::ChartType;
 use tt_ui::prelude::*;
 use tt_ui::tokens::*;
 
+/// An action and the key context its binding is looked up in.
+type BoundAction = (Rc<Box<dyn Action>>, Option<&'static str>);
 type Run = Rc<dyn Fn(&mut TradeTerm, &mut Window, &mut Context<TradeTerm>)>;
 
 #[derive(Clone)]
@@ -26,7 +28,7 @@ pub struct Command {
     /// Extra words it is found by ("RSI").
     pub keywords: SharedString,
     /// Shortcut shown on the right (the bound action).
-    pub action: Option<(Rc<Box<dyn Action>>, Option<&'static str>)>,
+    pub action: Option<BoundAction>,
     run: Run,
 }
 

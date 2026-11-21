@@ -1,9 +1,12 @@
 //! The status bar and the F12 performance overlay.
 
 use crate::app::TradeTerm;
+use crate::source::now_ms;
 use crate::ui;
 use gpui_kit::component::{ActiveTheme as _, h_flex};
 use gpui_kit::*;
+use std::time::Duration;
+use tt_chart::style::TimeZoneSetting;
 use tt_chart_gpui::ChartSource as _;
 use tt_core::ConnectionStatus;
 use tt_ui::format_keys;
@@ -17,7 +20,13 @@ fn group_divider() -> Divider {
 }
 
 impl TradeTerm {
-    pub(crate) fn status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(crate) fn status_bar(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let app = cx.weak_entity();
+        let clock = window.use_keyed_state("tz-clock", cx, move |_, cx| TzClock::new(app, cx));
         let Some(chart) = self.tab_chart() else {
             return div();
         };
@@ -86,11 +95,33 @@ impl TradeTerm {
                 ))
                 .child(group_divider());
         }
-        bar.child(
-            div()
-                .text_color(muted)
-                .child(format!("{} · UTC", tab.source_name(&self.shared))),
-        )
+        bar.child(div().text_color(muted).child(tab.source_name(&self.shared)))
+            .child(group_divider())
+            .child(clock)
+    }
+
+    /// Status-bar zone menu: the active tab's Symbol › Time zone (its own
+    /// style, or the default when the result equals it).
+    pub(crate) fn set_time_zone(&mut self, zone: TimeZoneSetting, cx: &mut Context<Self>) {
+        let Some((tab, _, _, mut style)) = self.active_tab_style(cx) else {
+            return;
+        };
+        if style.symbol.data.time_zone != zone {
+            style.symbol.data.time_zone = zone;
+            self.commit_tab_style(tab, style, cx);
+        }
+    }
+
+    /// Clock text in the active tab's zone and that tab's zone setting.
+    fn clock(&self, cx: &App) -> Option<(String, TimeZoneSetting, Option<String>)> {
+        let tab = &self.tab_chart()?.read(cx).state.read(cx).source.tab;
+        let text = tt_session::tz::clock_text(tab.chart.time_zone(), now_ms());
+        let exchange = tab.symbol_info.as_ref().map(|i| i.timezone.clone());
+        Some((
+            text,
+            tab.chart.style.symbol.data.time_zone.clone(),
+            exchange,
+        ))
     }
 
     pub(crate) fn perf_overlay(&self, cx: &App) -> Option<impl IntoElement + use<>> {
@@ -142,5 +173,100 @@ impl TradeTerm {
                 .child(line("Data events", format!("{events}/s")))
                 .child(line("Bars", s.source.tab.series.len().to_string())),
         )
+    }
+}
+
+/// The status bar's time zone button: a live clock in the active chart's
+/// zone (`14:05:33 UTC+1`, like TradingView's) that opens the zone menu.
+/// Its own view, so the once-a-second tick repaints only this button.
+pub(crate) struct TzClock {
+    app: WeakEntity<TradeTerm>,
+}
+
+impl TzClock {
+    fn new(app: WeakEntity<TradeTerm>, cx: &mut Context<Self>) -> Self {
+        cx.spawn(async move |this, cx| {
+            loop {
+                // Wake just after each second boundary so the seconds tick evenly.
+                let wait = 1000 - now_ms().rem_euclid(1000) as u64 + 5;
+                cx.background_executor()
+                    .timer(Duration::from_millis(wait))
+                    .await;
+                if this.update(cx, |_, cx| cx.notify()).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+        Self { app }
+    }
+}
+
+/// Section of a zone id in the menu (its region).
+fn region(id: &str) -> &'static str {
+    match id.split('/').next().unwrap_or("") {
+        "Africa" => "AFRICA",
+        "America" | "US" => "AMERICAS",
+        "Asia" => "ASIA",
+        "Atlantic" => "ATLANTIC",
+        "Australia" => "AUSTRALIA",
+        "Europe" => "EUROPE",
+        "Pacific" => "PACIFIC",
+        _ => "OTHER",
+    }
+}
+
+impl Render for TzClock {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let Some(app) = self.app.upgrade() else {
+            return div().into_any_element();
+        };
+        let Some((text, _, _)) = app.read(cx).clock(cx) else {
+            return div().into_any_element();
+        };
+        let weak = self.app.clone();
+        let max_h = (window.viewport_size().height
+            - (H_TITLE_BAR + H_TOOLBAR + H_STATUS_BAR + S4).px())
+        .max((H_MENU_ROW * 6.).px());
+        ToolbarButton::text("tz-clock", text)
+            .size(ControlSize::Sm)
+            .tooltip("Time zone")
+            .menu_anchor(Anchor::BottomRight)
+            .menu(move |menu, _, cx| {
+                let Some(app) = weak.upgrade() else {
+                    return menu;
+                };
+                let Some((_, current, exchange)) = app.read(cx).clock(cx) else {
+                    return menu;
+                };
+                let mut menu = menu.id("tz-menu").width(MenuWidth::Md).max_h(max_h);
+                let mut section = "";
+                for (i, (zone, label)) in tt_session::tz::choices(exchange.as_deref(), now_ms())
+                    .into_iter()
+                    .enumerate()
+                {
+                    if let TimeZoneSetting::Iana(id) = &zone {
+                        let r = region(id);
+                        if r != section {
+                            section = r;
+                            menu = menu.section(r);
+                        }
+                    } else if i == 0 {
+                        menu = menu.section("TIME ZONE");
+                    }
+                    let checked = zone == current;
+                    let app = weak.clone();
+                    menu = menu.row(
+                        MenuRow::new(SharedString::from(format!("tz-{i}")), label)
+                            .checked(checked)
+                            .on_select(move |_, cx| {
+                                app.update(cx, |a, cx| a.set_time_zone(zone.clone(), cx))
+                                    .ok();
+                            }),
+                    );
+                }
+                menu
+            })
+            .into_any_element()
     }
 }

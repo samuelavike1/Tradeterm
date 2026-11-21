@@ -266,6 +266,19 @@ impl Canvas for GpuiCanvas<'_> {
         self.push(Item::Quad(gpui_kit::fill(bounds(rect), hsla(color))));
     }
 
+    fn fill_rect_gradient(&mut self, rect: Rect, top: Color32, bottom: Color32) {
+        if !self.clip.intersects(rect) {
+            return;
+        }
+        // 180°: the first stop at the top.
+        let bg = gpui_kit::linear_gradient(
+            180.,
+            gpui_kit::linear_color_stop(hsla(top), 0.),
+            gpui_kit::linear_color_stop(hsla(bottom), 1.),
+        );
+        self.push(Item::Quad(gpui_kit::fill(bounds(rect), bg)));
+    }
+
     fn fill_rounded_rect(&mut self, rect: Rect, radius: f32, color: Color32) {
         if color.a() == 0 {
             return;
@@ -279,6 +292,20 @@ impl Canvas for GpuiCanvas<'_> {
         self.push(Item::Quad(PaintQuad {
             bounds: bounds(rect),
             corner_radii: Corners::default(),
+            background: Background::from(Hsla::transparent_black()),
+            border_widths: Edges::all(px(width)),
+            border_color: hsla(color),
+            border_style: BorderStyle::Solid,
+        }));
+    }
+
+    fn stroke_rounded_rect(&mut self, rect: Rect, radius: f32, width: f32, color: Color32) {
+        if color.a() == 0 {
+            return;
+        }
+        self.push(Item::Quad(PaintQuad {
+            bounds: bounds(rect),
+            corner_radii: Corners::all(px(radius)),
             background: Background::from(Hsla::transparent_black()),
             border_widths: Edges::all(px(width)),
             border_color: hsla(color),

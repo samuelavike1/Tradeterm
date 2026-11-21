@@ -25,6 +25,9 @@ pub(crate) enum EditKind {
     Other,
     /// Arrow-key nudges (holding an arrow key is one undo step).
     Nudge,
+    /// Floating-toolbar edits of one control (dragging a color slider is
+    /// one undo step).
+    Style(u8),
 }
 
 #[derive(Debug, Clone)]
