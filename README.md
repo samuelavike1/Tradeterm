@@ -71,11 +71,16 @@ with a custom chart widget built to handle a million bars.
   legend; also Ctrl + double-click) and **maximize** (the other panes collapse).
   Collapsed panes are saved with the tab.
 - **Drawing tools** (left toolbar, like TradingView's): cross cursor; **Lines**
-  flyout with trend line (Alt + T), ray, extended line, horizontal line (Alt + H),
-  horizontal ray (Alt + J), vertical line (Alt + V) and cross line (Alt + C);
-  **Fib retracement** (Alt + F) with TradingView's levels and colors;
-  **Rectangle** (Alt + Shift + R); **Measurers**: price range, date range, date and
-  price range (change, %, bars, duration). Click to place each point, or drag out a
+  flyout with trend line (Alt + T), ray, info line (price change, %, pips, bars,
+  duration and angle), extended line, trend angle, horizontal line (Alt + H),
+  horizontal ray (Alt + J), vertical line (Alt + V), cross line (Alt + C), parallel
+  channel (3 clicks; 6 handles) and arrow. Lines support line ends / arrow heads,
+  extend left / right, middle point, price labels and a stats box (always or while
+  selected). **Fib** flyout: Fib retracement (Alt + F) and trend-based Fib
+  extension (3 clicks) with TradingView's 24 level slots, reverse, extend, labels,
+  prices, background and log-based levels; **Rectangle** (Alt + Shift + R);
+  **Measurers**: price range, date range, date and price range (change, %, pips,
+  bars, duration, volume; border, label background, extend). Click to place each point, or drag out a
   two-point drawing in one gesture. Click a drawing to select it: drag its body or
   handles, and a floating toolbar sets color, width, line style, lock and delete.
   Delete / Backspace removes it, Escape cancels placing or releases the tool. Below:

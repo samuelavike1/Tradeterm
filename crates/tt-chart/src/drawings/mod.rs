@@ -373,9 +373,7 @@ impl Drawings {
             };
             match drag.part {
                 DrawingPart::Handle(k) => {
-                    if let Some(pt) = d.points.get_mut(k) {
-                        *pt = m.snapped(p, self.magnet, series);
-                    }
+                    hit::drag_handle(d, k, m.snapped(p, self.magnet, series), m);
                 }
                 DrawingPart::Body => {
                     let dslot = (m.vp.index_at(p.x) as f64 - drag.start_slot).round();
