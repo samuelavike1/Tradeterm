@@ -6,9 +6,13 @@
 //! Ok. Save as… / Rename / Delete write `chart-templates.json` at once.
 
 use super::*;
-use gpui_kit::component::input::Input;
 use tt_session::templates::validate_name;
 use tt_ui::{Menu, MenuRow};
+
+/// The name prompt: TradingView's small comfortable dialog.
+const W_PROMPT: f32 = 400.0;
+const W_PROMPT_LABEL: f32 = 130.0;
+const W_PROMPT_FIELD: f32 = 230.0;
 
 /// Builds the menu each time it opens (the saved list can change).
 pub(super) fn menu(panel: &Entity<ChartSettingsPanel>, menu: Menu, cx: &mut App) -> Menu {
@@ -95,6 +99,7 @@ fn confirm_delete(app: WeakEntity<TradeTerm>, name: String, window: &mut Window,
     let text = format!("Delete the template “{name}”? This can't be undone.");
     let body = cx.new(|_| Message(text.into()));
     let footer = DialogFooter::new()
+        .comfortable()
         .cancel()
         .ok("Delete")
         .on_ok(move |_, cx| {
@@ -108,7 +113,10 @@ fn confirm_delete(app: WeakEntity<TradeTerm>, name: String, window: &mut Window,
     tt_ui::open_dialog(
         window,
         cx,
-        DialogOpts::new("Delete template", DialogSize::Sm).footer(footer),
+        DialogOpts::new("Delete template", DialogSize::Sm)
+            .comfortable()
+            .width(W_PROMPT)
+            .footer(footer),
         body,
     );
 }
@@ -119,6 +127,8 @@ struct Message(SharedString);
 impl Render for Message {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
+            .px(px(tokens::C_PAD_X))
+            .py(px(tokens::C_PAD_Y - tokens::S2))
             .text_size(px(tokens::TEXT_BODY))
             .text_color(hsla(cx.ui().text))
             .child(self.0.clone())
@@ -186,6 +196,7 @@ fn open_prompt(
     let focus = prompt.read(cx).input.read(cx).focus_handle(cx);
     let p = prompt.downgrade();
     let footer = DialogFooter::new()
+        .comfortable()
         .cancel()
         .ok(if renaming { "Rename" } else { "Save" })
         .on_ok(move |_, cx| p.update(cx, |p, cx| p.submit(cx)).unwrap_or(true));
@@ -198,6 +209,8 @@ fn open_prompt(
         window,
         cx,
         DialogOpts::new(title, size)
+            .comfortable()
+            .width(W_PROMPT)
             .footer(footer)
             .on_open(move |w, cx| focus.focus(w, cx)),
         prompt,
@@ -258,14 +271,18 @@ impl Render for TemplatePrompt {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = cx.ui().clone();
         let this = cx.entity().downgrade();
-        let mut col = v_flex().gap(px(tokens::S2));
+        let mut col = v_flex()
+            .px(px(tokens::C_PAD_X))
+            .pt(px(tokens::C_PAD_Y - tokens::S2))
+            .pb(px(tokens::S1));
         if let Some(from) = self.rename_from.clone() {
             let sel = Select::new(
                 "tpl-rename-from",
                 self.names.iter().map(|n| (n.clone(), n.clone())),
                 from,
             )
-            .width(tokens::W_FIELD_SELECT + tokens::S6 * 2.0)
+            .comfortable()
+            .width(W_PROMPT_FIELD)
             .on_change(move |v: String, w, cx| {
                 this.update(cx, |p, cx| {
                     p.rename_from = Some(v.clone());
@@ -275,7 +292,12 @@ impl Render for TemplatePrompt {
                 })
                 .ok();
             });
-            col = col.child(FormRow::new("Template").control(sel));
+            col = col.child(
+                FormRow::new("Template")
+                    .comfortable()
+                    .label_width(W_PROMPT_LABEL)
+                    .control(sel),
+            );
         }
         col.child(
             FormRow::new(if self.rename_from.is_some() {
@@ -283,10 +305,13 @@ impl Render for TemplatePrompt {
             } else {
                 "Template name"
             })
-            .control(div().flex_1().child(Input::new(&self.input))),
+            .comfortable()
+            .label_width(W_PROMPT_LABEL)
+            .control(Field::new(&self.input).width(W_PROMPT_FIELD)),
         )
         .children(self.error.clone().map(|e| {
             div()
+                .pl(px(W_PROMPT_LABEL))
                 .text_size(px(tokens::TEXT_SMALL))
                 .text_color(hsla(t.danger))
                 .child(e)

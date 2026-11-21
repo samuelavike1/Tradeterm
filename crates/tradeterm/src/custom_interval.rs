@@ -1,14 +1,15 @@
-//! "Add custom interval" dialog: a number and a unit (segmented control),
-//! footer Cancel / Add. Enter adds; an unsupported interval shows an error
-//! and keeps the dialog open.
+//! "Add custom interval" dialog, laid out like TradingView's
+//! (docs/specs/chart-settings-tv-ref.md, comfortable density): Type (unit
+//! select) and Interval (number), footer Cancel / Add. Enter adds; an
+//! unsupported interval shows an error and keeps the dialog open.
 
 use crate::app::TradeTerm;
-use gpui_kit::component::button::{Toggle, ToggleGroup};
 use gpui_kit::component::input::{InputEvent, InputState};
-use gpui_kit::component::{Sizable as _, Size, v_flex};
+use gpui_kit::component::v_flex;
 use gpui_kit::*;
 use tt_core::{TimeUnit, Timeframe};
 use tt_ui::prelude::*;
+use tt_ui::tokens::{C_PAD_X, C_PAD_Y, S1};
 use tt_ui::{DialogOpts, hsla};
 
 pub struct CustomInterval {
@@ -20,25 +21,22 @@ pub struct CustomInterval {
 }
 
 const UNITS: [(TimeUnit, &str); 6] = [
-    (TimeUnit::Second, "Seconds"),
-    (TimeUnit::Minute, "Minutes"),
-    (TimeUnit::Hour, "Hours"),
-    (TimeUnit::Day, "Days"),
-    (TimeUnit::Week, "Weeks"),
-    (TimeUnit::Month, "Months"),
+    (TimeUnit::Second, "seconds"),
+    (TimeUnit::Minute, "minutes"),
+    (TimeUnit::Hour, "hours"),
+    (TimeUnit::Day, "days"),
+    (TimeUnit::Week, "weeks"),
+    (TimeUnit::Month, "months"),
 ];
 
-const SIZE: DialogSize = DialogSize::Sm;
+/// TradingView's dialog width, label column and control width.
+const W_DIALOG: f32 = 400.0;
+const W_LABEL: f32 = 107.0;
+const W_CONTROL: f32 = 180.0;
 
 impl CustomInterval {
     pub fn new(app: WeakEntity<TradeTerm>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .step(1.)
-                .min(1.)
-                .max(1000.)
-                .default_value("2")
-        });
+        let input = cx.new(|cx| InputState::new(window, cx).default_value("2"));
         // Editing clears a previous error.
         let _sub = cx.subscribe(&input, |this, _, ev: &InputEvent, cx| {
             if let InputEvent::Change = ev
@@ -56,18 +54,21 @@ impl CustomInterval {
         }
     }
 
-    /// Opens the dialog (Sm, footer Cancel / Add) with the number focused.
+    /// Opens the dialog (footer Cancel / Add) with the number focused.
     pub fn open(panel: Entity<Self>, window: &mut Window, cx: &mut App) {
         let focus = panel.read(cx).input.read(cx).focus_handle(cx);
         let p = panel.downgrade();
         let footer = DialogFooter::new()
+            .comfortable()
             .cancel()
             .ok("Add")
             .on_ok(move |_, cx| p.update(cx, |p, cx| p.add(cx)).unwrap_or(true));
         tt_ui::open_dialog(
             window,
             cx,
-            DialogOpts::new("Add custom interval", SIZE)
+            DialogOpts::new("Add custom interval", DialogSize::Sm)
+                .comfortable()
+                .width(W_DIALOG)
                 .footer(footer)
                 .on_open(move |w, cx| focus.focus(w, cx)),
             panel,
@@ -100,37 +101,37 @@ impl CustomInterval {
 impl Render for CustomInterval {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = cx.ui().clone();
-        let units = ToggleGroup::new("interval-unit")
-            .segmented()
-            .single()
-            .with_size(Size::Small)
-            .children(UNITS.iter().map(|(unit, label)| {
-                Toggle::new(*label)
-                    .label(*label)
-                    .checked(*unit == self.unit)
-            }))
-            .on_click(cx.listener(|this, checked: &Vec<bool>, _, cx| {
-                // A click on the selected unit clears the group: keep it.
-                if let Some(i) = checked.iter().position(|c| *c) {
-                    this.unit = UNITS[i].0;
-                    this.error = None;
-                }
-                cx.notify();
-            }));
+        let this = cx.entity().downgrade();
+        let unit = Select::new("interval-unit", UNITS, self.unit)
+            .comfortable()
+            .width(W_CONTROL)
+            .on_change(move |u, _, cx| {
+                this.update(cx, |p, cx| {
+                    p.unit = u;
+                    p.error = None;
+                    cx.notify();
+                })
+                .ok();
+            });
         v_flex()
-            .gap(px(tokens::S2))
+            .px(px(C_PAD_X))
+            .pt(px(C_PAD_Y - S1 * 2.0))
+            .pb(px(S1))
             .child(
-                FormRow::new("Interval")
-                    .label_width(SIZE.label_width() / 2.0)
-                    .control(NumberField::new(&self.input)),
+                FormRow::new("Type")
+                    .comfortable()
+                    .label_width(W_LABEL)
+                    .control(unit),
             )
             .child(
-                FormRow::new("Unit")
-                    .label_width(SIZE.label_width() / 2.0)
-                    .control(units),
+                FormRow::new("Interval")
+                    .comfortable()
+                    .label_width(W_LABEL)
+                    .control(Field::new(&self.input).width(W_CONTROL)),
             )
             .children(self.error.clone().map(|e| {
                 div()
+                    .pl(px(W_LABEL))
                     .text_size(px(tokens::TEXT_SMALL))
                     .text_color(hsla(t.danger))
                     .child(e)

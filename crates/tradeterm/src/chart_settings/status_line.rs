@@ -1,7 +1,11 @@
-//! The Status line page: instrument readout and indicator legends.
+//! The Status line page: instrument readout and indicator legends
+//! (TradingView's order; ours adds Interval / Exchange under Title).
 
 use super::*;
 use tt_chart::style::TitleFormat;
+
+/// TradingView's legend background opacity slider.
+const W_OPACITY: f32 = 148.0;
 
 impl ChartSettingsPanel {
     pub(super) fn status_line_page(&mut self, cx: &mut Context<Self>) -> Rows {
@@ -14,31 +18,27 @@ impl ChartSettingsPanel {
                 |s, v| s.status_line.title_format = v,
                 cx,
             )
-            .width(W_SELECT_WIDE);
-        let mut rows = vec![
-            section("Symbol"),
-            check!(self, cx, "st.logo", "Logo", status_line.logo).into_any_element(),
+            .width(W_SELECT);
+        let mut rows: Rows = vec![
+            section("Instrument"),
+            check!(self, cx, "st.logo", "Logo", status_line.logo).into(),
             check!(self, cx, "st.title", "Title", status_line.title)
                 .control(format)
-                .into_any_element(),
-            check!(
-                self,
-                cx,
+                .into(),
+            self.sub_check(
                 "st.interval",
                 "Interval",
-                status_line.show_interval
-            )
-            .indent()
-            .into_any_element(),
-            check!(
-                self,
+                sl.show_interval,
+                |s, v| s.status_line.show_interval = v,
                 cx,
+            ),
+            self.sub_check(
                 "st.exchange",
                 "Exchange",
-                status_line.show_exchange
-            )
-            .indent()
-            .into_any_element(),
+                sl.show_exchange,
+                |s, v| s.status_line.show_exchange = v,
+                cx,
+            ),
             check!(
                 self,
                 cx,
@@ -46,7 +46,7 @@ impl ChartSettingsPanel {
                 "Open market status",
                 status_line.market_status
             )
-            .into_any_element(),
+            .into(),
             check!(
                 self,
                 cx,
@@ -54,7 +54,7 @@ impl ChartSettingsPanel {
                 "Chart values",
                 status_line.chart_values
             )
-            .into_any_element(),
+            .into(),
             check!(
                 self,
                 cx,
@@ -62,7 +62,8 @@ impl ChartSettingsPanel {
                 "Bar change values",
                 status_line.bar_change
             )
-            .into_any_element(),
+            .into(),
+            check!(self, cx, "st.volume", "Volume", status_line.volume).into(),
             check!(
                 self,
                 cx,
@@ -70,8 +71,7 @@ impl ChartSettingsPanel {
                 "Last day change values",
                 status_line.last_day_change
             )
-            .into_any_element(),
-            check!(self, cx, "st.volume", "Volume", status_line.volume).into_any_element(),
+            .into(),
             section("Indicators"),
             check!(
                 self,
@@ -80,15 +80,14 @@ impl ChartSettingsPanel {
                 "Titles",
                 status_line.indicator_titles
             )
-            .into_any_element(),
-            check!(
-                self,
-                cx,
+            .into(),
+            self.sub_check(
                 "lg.inputs",
                 "Inputs",
-                status_line.indicator_inputs
-            )
-            .into_any_element(),
+                sl.indicator_inputs,
+                |s, v| s.status_line.indicator_inputs = v,
+                cx,
+            ),
             check!(
                 self,
                 cx,
@@ -96,19 +95,30 @@ impl ChartSettingsPanel {
                 "Values",
                 status_line.indicator_values
             )
-            .into_any_element(),
+            .into(),
         ];
-        // Transparency in 10 % steps, shown as opacity (TradingView's slider).
+        // Background opacity: TradingView's slider (transparent → color).
+        let t = cx.ui().clone();
         let opacity = 100 - sl.indicator_background_transparency.min(100);
-        let sel = self
-            .select(
-                "lg.bg_opacity",
-                (0..=10u8).map(|i| (i * 10, format!("{}%", i * 10))),
-                (opacity / 10) * 10,
-                |s, v| s.status_line.indicator_background_transparency = 100 - v,
-                cx,
-            )
-            .width(W_SELECT_SM);
+        let fill = hsla(t.bg);
+        let this = cx.entity().downgrade();
+        let slider = RangeSlider::single("lg.bg_opacity", 0.0, 100.0, opacity as f32)
+            .step(1.0)
+            .width(W_OPACITY)
+            .track_fill(linear_gradient(
+                90.,
+                linear_color_stop(tt_ui::picker::with_alpha(fill, 0.0), 0.),
+                linear_color_stop(tt_ui::picker::with_alpha(hsla(t.text), 1.0), 1.),
+            ))
+            .on_change(move |_, v, _, cx| {
+                let v = v.round().clamp(0.0, 100.0) as u8;
+                this.update(cx, |p, cx| {
+                    p.edit(cx, |s| {
+                        s.status_line.indicator_background_transparency = 100 - v
+                    })
+                })
+                .ok();
+            });
         rows.push(
             check!(
                 self,
@@ -117,9 +127,8 @@ impl ChartSettingsPanel {
                 "Background",
                 status_line.indicator_background
             )
-            .control(sel)
-            .unit("opacity")
-            .into_any_element(),
+            .control(slider)
+            .into(),
         );
         rows
     }
