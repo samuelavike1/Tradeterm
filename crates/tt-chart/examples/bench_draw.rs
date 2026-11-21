@@ -139,15 +139,13 @@ fn run(
     };
     let (mut base, mut overlay, mut prims) = (Vec::new(), Vec::new(), 0);
     for frame in 0..(FRAMES + 5) {
-        // Live forming-bar update. (Not with indicators: RSI and MACD
-        // recompute fully on every tick, which would hide the drawing cost.)
-        if !indicators || frame < 5 {
-            let mut last = series.last().expect("non-empty");
-            last.close *= 1.0 + if frame % 2 == 0 { 1e-4 } else { -1e-4 };
-            last.high = last.high.max(last.close);
-            last.low = last.low.min(last.close);
-            series.upsert(last);
-        }
+        // Live forming-bar update; every indicator resumes from its
+        // checkpoint, so this measures the tick's real cost.
+        let mut last = series.last().expect("non-empty");
+        last.close *= 1.0 + if frame % 2 == 0 { 1e-4 } else { -1e-4 };
+        last.high = last.high.max(last.close);
+        last.low = last.low.min(last.close);
+        series.upsert(last);
         let data = ChartData {
             series,
             title: "BENCH · 1m",

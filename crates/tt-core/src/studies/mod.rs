@@ -21,6 +21,7 @@ mod ma_simple;
 mod macd;
 mod obv;
 mod rsi;
+mod state;
 mod stoch;
 mod volume;
 mod vwap;
@@ -28,6 +29,7 @@ mod vwap;
 use crate::CandleSeries;
 use meta::{InputKind, InputValue, StudyMeta};
 use serde::{Deserialize, Serialize};
+pub use state::StudyState;
 use std::fmt::Write as _;
 
 /// Price input for a study.
@@ -370,8 +372,25 @@ impl Study {
     }
 
     /// Fills `out` (one Vec per output, resized to `src.len()`) from index
-    /// `from` onward. Earlier values must already be correct.
+    /// `from` onward. Earlier values must already be correct. Without a
+    /// checkpoint, studies with hidden recursive state (RSI, MACD, SMA…)
+    /// recompute from bar 0; a live feed should use [`Self::compute_with`].
     pub fn compute(&self, src: &CandleSeries, out: &mut Vec<Vec<f64>>, from: usize) {
+        self.compute_with(src, out, &mut StudyState::default(), from);
+    }
+
+    /// [`Self::compute`] that resumes from, and refreshes, the checkpoint in
+    /// `state` (see [`StudyState`]): after any call, computing again from
+    /// the then-last bar (it was updated, and bars may have been appended)
+    /// costs O(1) or O(window) per bar and is bit-identical to a full
+    /// recompute. `from == 0` recomputes everything and resets `state`.
+    pub fn compute_with(
+        &self,
+        src: &CandleSeries,
+        out: &mut Vec<Vec<f64>>,
+        state: &mut StudyState,
+        from: usize,
+    ) {
         let n = src.len();
         let k = self.meta().plots.len();
         out.resize_with(k, Vec::new);
@@ -379,35 +398,33 @@ impl Study {
             o.resize(n, f64::NAN);
         }
         let from = from.min(n);
+        if from == n {
+            return;
+        }
+        let st = state;
         match *self {
-            Study::Volume { ma_length, .. } => volume::compute(src, out, from, ma_length),
-            Study::Sma { length, source } => ma_simple::sma(src, out, from, length, source),
+            Study::Volume { ma_length, .. } => volume::compute(src, out, from, ma_length, st),
+            Study::Sma { length, source } => ma_simple::sma(src, out, from, length, source, st),
             Study::Ema { length, source } => ma_simple::ema(src, out, from, length, source),
             Study::BollingerBands {
                 length,
                 mult,
                 source,
             } => bb::compute(src, out, from, length, mult, source),
-            Study::Vwap => vwap::compute(src, out, from),
-            Study::Rsi { length, source } => rsi::compute(src, out, length, source),
+            Study::Vwap => vwap::compute(src, out, from, st),
+            Study::Rsi { length, source } => rsi::compute(src, out, from, length, source, st),
             Study::Macd {
                 fast,
                 slow,
                 signal,
                 source,
-            } => macd::compute(src, out, from, fast, slow, signal, source),
-            Study::Stochastic { k, k_smooth, d } => stoch::compute(src, out, k, k_smooth, d),
+            } => macd::compute(src, out, from, [fast, slow, signal], source, st),
+            Study::Stochastic { k, k_smooth, d } => {
+                stoch::compute(src, out, from, [k, k_smooth, d], st)
+            }
             Study::Atr { length } => atr::compute(src, out, from, length),
             Study::Obv => obv::compute(src, out, from),
         }
-    }
-
-    /// Outputs that need a full recompute even for a tail update.
-    pub fn recompute_fully(&self) -> bool {
-        matches!(
-            self,
-            Study::Rsi { .. } | Study::Macd { .. } | Study::Stochastic { .. }
-        )
     }
 }
 
@@ -456,50 +473,205 @@ mod tests {
     use super::meta::{FillEdge, PlotKind};
     use super::test_util::*;
     use super::*;
+    use crate::Candle;
 
+    /// Every study with its defaults and with edge-case inputs (length 1 and
+    /// 2, windows longer than the history, fast > slow, every source).
+    fn study_variants() -> Vec<Study> {
+        let mut v: Vec<Study> = StudyKind::ALL.iter().map(|k| k.default_study()).collect();
+        for (j, len) in [1, 2, 3, 7, 50, 400].into_iter().enumerate() {
+            let source = Source::ALL[j % Source::ALL.len()];
+            let source2 = Source::ALL[(j + 3) % Source::ALL.len()];
+            v.extend([
+                Study::Volume {
+                    ma_length: len,
+                    color_by_prev_close: false,
+                    show_ma: true,
+                },
+                Study::Sma {
+                    length: len,
+                    source,
+                },
+                Study::Ema {
+                    length: len,
+                    source: source2,
+                },
+                Study::BollingerBands {
+                    length: len,
+                    mult: 1.5,
+                    source,
+                },
+                Study::Rsi {
+                    length: len,
+                    source: source2,
+                },
+                Study::Macd {
+                    fast: len,
+                    slow: [26, 1, 3, 5, 9, 2][j],
+                    signal: [9, 1, 2, 4, 30, 3][j],
+                    source,
+                },
+                Study::Stochastic {
+                    k: len,
+                    k_smooth: [1, 2, 3, 4, 1, 3][j],
+                    d: [3, 1, 2, 5, 40, 3][j],
+                },
+                Study::Atr { length: len },
+            ]);
+        }
+        v
+    }
+
+    /// xorshift64 in [0, 1).
+    fn rng(seed: u64) -> impl FnMut() -> f64 {
+        let mut s = seed | 1;
+        move || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            (s >> 11) as f64 / (1u64 << 53) as f64
+        }
+    }
+
+    fn random_bar(rnd: &mut impl FnMut() -> f64, t: i64, prev: f64) -> Candle {
+        let open = prev;
+        let close = open * (1.0 + (rnd() - 0.5) * 0.05);
+        Candle {
+            open_time_ms: t,
+            open,
+            high: open.max(close) + rnd() * 2.0,
+            low: open.min(close) - rnd() * 2.0,
+            close,
+            // Sometimes zero (VWAP and VWMA edge cases).
+            volume: if rnd() < 0.1 { 0.0 } else { rnd() * 100.0 },
+        }
+    }
+
+    fn same(a: f64, b: f64) -> bool {
+        a.to_bits() == b.to_bits() || (a.is_nan() && b.is_nan())
+    }
+
+    /// A live feed (the forming bar updated many times, single and burst
+    /// appends, across UTC days) computed incrementally from the last bar
+    /// with a checkpointed state is bit-identical to a full recompute.
     #[test]
     fn incremental_tail_matches_full() {
+        for (v, study) in study_variants().into_iter().enumerate() {
+            for seed in 1..=6u64 {
+                let mut rnd = rng(seed * 7919 + v as u64);
+                // Bars every 7 minutes cross 00:00 UTC regularly; start
+                // short so warm-ups end during the feed.
+                let start = (rnd() * 40.0) as usize;
+                let mut s = CandleSeries::new();
+                let mut price = 100.0;
+                let mut t = 86_400_000 - 30 * 420_000;
+                for _ in 0..start {
+                    let c = random_bar(&mut rnd, t, price);
+                    price = c.close;
+                    t += 420_000;
+                    s.upsert(c);
+                }
+                let mut out = Vec::new();
+                let mut state = StudyState::default();
+                study.compute_with(&s, &mut out, &mut state, 0);
+                for step in 0..120 {
+                    let len = s.len();
+                    let r = rnd();
+                    let appends = if s.is_empty() || r < 0.2 {
+                        1
+                    } else if r < 0.25 {
+                        2 + (rnd() * 3.0) as usize
+                    } else {
+                        0
+                    };
+                    if appends == 0 {
+                        // Update the forming bar.
+                        let mut c = s.last().unwrap();
+                        c.close *= 1.0 + (rnd() - 0.5) * 0.02;
+                        c.high = c.high.max(c.close);
+                        c.low = c.low.min(c.close);
+                        c.volume += rnd() * 5.0;
+                        s.upsert(c);
+                    }
+                    for _ in 0..appends {
+                        let c = random_bar(&mut rnd, t, price);
+                        price = c.close;
+                        t += 420_000;
+                        s.upsert(c);
+                    }
+                    // As `Indicator::sync`: from the previously last bar.
+                    study.compute_with(&s, &mut out, &mut state, len.saturating_sub(1));
+                    assert_eq!(state.checkpoint(), checkpoint_of(&study, &s));
+                    let full = run(&study, &s);
+                    for (k, (a, b)) in out.iter().zip(&full).enumerate() {
+                        assert_eq!(a.len(), b.len());
+                        for i in 0..s.len() {
+                            assert!(
+                                same(a[i], b[i]),
+                                "{study:?} seed {seed} step {step} output {k} bar {i}/{}: \
+                                 {} vs {}",
+                                s.len(),
+                                a[i],
+                                b[i]
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Where `state` must resume after a compute over `s` (stateless studies
+    /// keep none).
+    fn checkpoint_of(study: &Study, s: &CandleSeries) -> Option<usize> {
+        let stateful = matches!(
+            study,
+            Study::Volume { .. }
+                | Study::Sma { .. }
+                | Study::Vwap
+                | Study::Rsi { .. }
+                | Study::Macd { .. }
+                | Study::Stochastic { .. }
+        );
+        (stateful && !s.is_empty()).then(|| s.len() - 1)
+    }
+
+    /// The defaults are defined at the last bar of a modest history, and a
+    /// stale or missing checkpoint falls back to a full pass (still exact).
+    #[test]
+    fn defaults_defined_and_stale_state_is_safe() {
+        let closes: Vec<f64> = (0..120)
+            .map(|i| 100.0 + (i as f64 * 0.37).sin() * 7.0)
+            .collect();
         for kind in StudyKind::ALL {
             let study = kind.default_study();
-            let mut s = series(
-                &(0..120)
-                    .map(|i| 100.0 + (i as f64 * 0.37).sin() * 7.0)
-                    .collect::<Vec<_>>(),
-            );
+            let mut s = series(&closes);
             let mut out = Vec::new();
-            study.compute(&s, &mut out, 0);
-            // Live tick on the last bar, then a new bar.
-            for step in 0..4 {
+            let mut state = StudyState::default();
+            study.compute_with(&s, &mut out, &mut state, 0);
+            for (k, o) in out.iter().enumerate() {
+                assert!(o[119].is_finite(), "{kind:?} output {k} at the last bar");
+            }
+            // Two bars appended at once, then a tail request from the
+            // first of them (not the checkpoint, the bar before it), and one
+            // without any state.
+            for _ in 0..2 {
                 let mut c = s.last().unwrap();
-                if step % 2 == 1 {
-                    c.open_time_ms += 60_000;
-                }
+                c.open_time_ms += 60_000;
                 c.close += 1.3;
-                c.high = c.high.max(c.close);
-                c.volume += 2.0;
                 s.upsert(c);
-                let from = if study.recompute_fully() {
-                    0
-                } else {
-                    s.len() - 2
-                };
-                study.compute(&s, &mut out, from);
-                let full = run(&study, &s);
-                for (k, o) in full.iter().enumerate() {
-                    assert!(
-                        o[s.len() - 1].is_finite(),
-                        "{kind:?} output {k} undefined at the last bar"
-                    );
-                }
-                for (k, (a, b)) in out.iter().zip(&full).enumerate() {
-                    for i in 0..s.len() {
-                        assert!(
-                            (a[i].is_nan() && b[i].is_nan()) || close(a[i], b[i]),
-                            "{kind:?} output {k} bar {i}: {} vs {}",
-                            a[i],
-                            b[i]
-                        );
-                    }
+            }
+            let full = run(&study, &s);
+            study.compute_with(&s, &mut out, &mut state, s.len() - 2);
+            let mut fresh = full.clone();
+            for o in fresh.iter_mut() {
+                o[s.len() - 2..].fill(0.0);
+            }
+            study.compute(&s, &mut fresh, s.len() - 2);
+            for (k, ((a, b), c)) in out.iter().zip(&full).zip(&fresh).enumerate() {
+                for i in 0..s.len() {
+                    assert!(same(a[i], b[i]), "{kind:?} output {k} bar {i}");
+                    assert!(same(c[i], b[i]), "{kind:?} stateless output {k} bar {i}");
                 }
             }
         }
