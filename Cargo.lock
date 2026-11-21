@@ -6947,6 +6947,7 @@ dependencies = [
  "tt-theme",
  "tt-ui",
  "ttf-parser",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

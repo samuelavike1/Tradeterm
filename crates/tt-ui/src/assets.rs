@@ -70,6 +70,8 @@ icons!(
     "draw-eye",
     "draw-eye-off",
     "draw-trash",
+    "alarm-clock",
+    "alarm-clock-plus",
     "go-to-date",
     "panel-watchlist",
     "panel-alerts",

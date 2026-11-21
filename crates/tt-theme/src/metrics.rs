@@ -330,6 +330,37 @@ pub const fn control_for_icon(icon: f32) -> f32 {
     }
 }
 
+// ---- alerts: "Create alert" dialog and the Alerts panel (docs/specs/alerts.md)
+//
+// Measured on TradingView (2026-11, CSS px, computed styles).
+
+/// "Create alert" dialog: 480 wide, radius `C_R_DIALOG`, 20 px padding.
+pub const AL_W_DIALOG: f32 = 480.0;
+/// Label column ("Condition", "Trigger", …) and the control column.
+pub const AL_W_LABEL: f32 = 131.0;
+pub const AL_W_CONTROL: f32 = 305.0;
+/// Half of the control column: "Value" select | number field, 8 apart.
+pub const AL_W_HALF: f32 = 148.0;
+/// Summary rows (Trigger, Expiration, Message, Notifications): 30 tall,
+/// label 14 muted, value 14 with a chevron.
+pub const AL_H_ROW: f32 = 30.0;
+/// Alerts panel: 300 wide; content 16 from its edges.
+pub const AL_W_PANEL: f32 = 300.0;
+pub const AL_PAD_X: f32 = 16.0;
+/// "Alerts | Log" segmented control: 34 tall, radius 8, 3 px inset; the
+/// selected segment 28 tall, radius 5, weight 500.
+pub const AL_H_SEGMENT: f32 = 34.0;
+pub const AL_R_SEGMENT: f32 = 8.0;
+pub const AL_H_SEGMENT_BUTTON: f32 = 28.0;
+pub const AL_R_SEGMENT_BUTTON: f32 = 5.0;
+/// Panel toolbar: 38 px buttons with 28 px icons, 8 from the panel edge.
+pub const AL_TOOL_BUTTON: f32 = 38.0;
+/// Empty state: 120 px illustration, 16 px text in a 260 column, a 34 tall
+/// radius 8 dark button 20 below.
+pub const AL_EMPTY_ICON: f32 = 120.0;
+pub const AL_EMPTY_TEXT: f32 = 16.0;
+pub const AL_W_EMPTY: f32 = 260.0;
+
 #[cfg(test)]
 mod tests {
     use super::*;

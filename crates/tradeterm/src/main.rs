@@ -1,5 +1,7 @@
 //! tradeterm — native desktop charting on gpui.
 
+mod alert_dialog;
+mod alerts;
 mod alerts_panel;
 mod app;
 mod chart_settings;

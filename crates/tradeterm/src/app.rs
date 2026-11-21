@@ -304,8 +304,14 @@ impl TradeTerm {
             async {}
         });
         app._subscriptions.push(quit);
+        app.init_alerts(window, cx);
         app.focus.focus(window, cx);
         app
+    }
+
+    /// Where `settings.json` lives (`None`: not saved).
+    pub(crate) fn settings_path(&self) -> Option<std::path::PathBuf> {
+        self.store.path().map(Path::to_path_buf)
     }
 
     pub(crate) fn make_chart(
@@ -342,11 +348,18 @@ impl TradeTerm {
                 ChartEvent::OpenSettings => {
                     app.open_chart_settings_page(crate::chart_settings::Page::Scales, window, cx)
                 }
-                ChartEvent::DrawingsChanged => app.drawings_changed(chart, cx),
+                ChartEvent::DrawingsChanged => {
+                    app.drawings_changed(chart, cx);
+                    app.sync_drawing_alerts(chart, cx);
+                }
                 // Double-click, the toolbar gear or "Settings…".
                 ChartEvent::OpenDrawingSettings(id) => {
                     app.open_drawing_settings(chart.clone(), *id, window, cx)
                 }
+                ChartEvent::AlertClicked(_)
+                | ChartEvent::AlertMoved { .. }
+                | ChartEvent::AddAlertAt(_)
+                | ChartEvent::AddDrawingAlert(_) => app.on_alert_chart_event(chart, ev, window, cx),
             },
         );
         self._subscriptions.push(sub);
@@ -422,6 +435,7 @@ impl TradeTerm {
             self.sidebar_views.ticked(cx);
             cx.notify();
         }
+        self.alerts_after_drain(cx);
     }
 
     fn settings_snapshot(&self, cx: &App) -> AppSettings {

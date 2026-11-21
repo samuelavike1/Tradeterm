@@ -562,7 +562,7 @@ impl Scene<'_> {
 }
 
 /// Snaps a coordinate to the center of a physical pixel for crisp 1px lines.
-fn crisp(v: f32, ppp: f32) -> f32 {
+pub(crate) fn crisp(v: f32, ppp: f32) -> f32 {
     ((v * ppp).floor() + 0.5) / ppp
 }
 

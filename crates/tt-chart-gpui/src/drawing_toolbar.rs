@@ -4,8 +4,8 @@
 //! position is remembered), template menu, line / background / text colors
 //! (an icon with a color bar, palette + opacity), "— 1px" line width, line
 //! style, settings, lock, remove and a "…" menu (clone, copy, visual order,
-//! visibility on intervals, hide). TradingView's "Add alert" is left out
-//! until tradeterm has alerts (BACKLOG.md).
+//! visibility on intervals, hide) and "Add alert" on line drawings
+//! (horizontal line / ray, trend line, ray, extended line).
 //!
 //! Buttons follow the selection's [`Caps`] (with a multi-selection, the
 //! controls all of them have); an edit applies to every selected drawing.
@@ -94,6 +94,16 @@ impl ColorKind {
             ColorKind::Text => Glyph::TYPE,
         }
     }
+}
+
+/// Line drawings an alert can follow (horizontal line / ray, trend line,
+/// ray, extended line).
+pub fn supports_alert(tool: tt_chart::DrawingTool) -> bool {
+    use tt_chart::DrawingTool as T;
+    matches!(
+        tool,
+        T::HorizontalLine | T::HorizontalRay | T::TrendLine | T::Ray | T::ExtendedLine
+    )
 }
 
 fn dash(s: LineStyle) -> LineDash {
@@ -333,6 +343,22 @@ impl<S: ChartSource> Chart<S> {
                 })
                 .into_any_element(),
         );
+        // TradingView's "Add alert" (clock-plus), for the line tools a
+        // price alert can follow.
+        if drawings.len() == 1 && supports_alert(primary.tool) {
+            let t = this.clone();
+            buttons.push(
+                IconButton::new("dt-alert", Glyph::ALARM_PLUS)
+                    .size(ControlSize::Xl)
+                    .tooltip("Add alert")
+                    .on_click(move |_, _, cx| {
+                        t.update(cx, |_, cx| cx.emit(ChartEvent::AddDrawingAlert(id)))
+                            .ok();
+                    })
+                    .into_any_element(),
+            );
+            buttons_w += FT_BUTTON;
+        }
         let locked = drawings.iter().all(|d| d.locked);
         let t = this.clone();
         buttons.push(
