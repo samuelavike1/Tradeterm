@@ -15,7 +15,7 @@ impl TradeTerm {
     pub fn open_search(&mut self, initial: &str, window: &mut Window, cx: &mut Context<Self>) {
         let app = cx.entity().downgrade();
         let (source, handle) = (self.shared.source.clone(), self.shared.handle.clone());
-        let (theme, recent) = (self.theme.clone(), search::recent_rows(&self.recent));
+        let recent = search::recent_rows(&self.recent);
         // Opened from the ticker: the current symbol, selected.
         let select_all = initial.is_empty();
         let initial = if select_all {
@@ -28,20 +28,14 @@ impl TradeTerm {
         let quote = self.search_quote;
         let panel = cx.new(|cx| {
             SymbolSearch::new(
-                app, source, handle, theme, recent, &initial, quote, select_all, window, cx,
+                app, source, handle, recent, &initial, quote, select_all, window, cx,
             )
         });
-        let focus_once = std::cell::Cell::new(true);
-        window.open_dialog(cx, move |dialog, window, cx| {
-            if focus_once.replace(false) {
-                SymbolSearch::focus_input(&panel, window, cx);
-            }
-            dialog
-                .title("Symbol Search")
-                .w(px(680.))
-                .entrance(DialogEntrance::FadeSlide)
-                .child(panel.clone())
-        });
+        let focus = panel.clone();
+        // Picker dialog: no footer, Enter picks (§3.6).
+        let opts = tt_ui::DialogOpts::new("Symbol search", tt_ui::DialogSize::Md)
+            .on_open(move |window, cx| SymbolSearch::focus_input(&focus, window, cx));
+        tt_ui::open_dialog(window, cx, opts, panel);
     }
 
     /// "Indicators, metrics, and strategies" (toolbar button or "/").

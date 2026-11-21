@@ -1,4 +1,4 @@
-use crate::bars::{collect_bars, price_extent};
+use crate::bars::{collect_bars, price_extent, price_source};
 use crate::derived::Derived;
 use crate::draw::{self, LegendButton, LegendHit, Pane, Scene};
 use crate::drawings::{DrawingPress, Drawings, Mapper, Mods, Repaint};
@@ -436,9 +436,13 @@ impl ChartView {
     ) -> Option<R> {
         let (vp, interval) = self.frame.as_ref().map(|fr| (fr.vp, fr.bar_interval_ms))?;
         let mut derived = std::mem::take(&mut self.derived);
-        let display: &CandleSeries = derived
-            .sync(self.chart_type, data.series)
-            .unwrap_or(data.series);
+        derived.update(
+            self.chart_type,
+            &self.style.symbol,
+            data.tick_size,
+            data.series,
+        );
+        let display: &CandleSeries = derived.series(self.chart_type).unwrap_or(data.series);
         let m = Mapper {
             vp,
             slots: SlotTimes::new(display.open_times(), interval),
@@ -609,7 +613,8 @@ impl ChartView {
     ) -> Option<R> {
         let series = data.series;
         let mut derived = std::mem::take(&mut self.derived);
-        let display: &CandleSeries = derived.sync(self.chart_type, series).unwrap_or(series);
+        derived.update(self.chart_type, &self.style.symbol, data.tick_size, series);
+        let display: &CandleSeries = derived.series(self.chart_type).unwrap_or(series);
         let out = self.frame.as_ref().map(|fr| {
             let scene = Scene {
                 vp: fr.vp,
@@ -628,6 +633,7 @@ impl ChartView {
                 price_axis: fr.price_axis,
                 time_axis: fr.time_axis,
                 display,
+                projection_from: derived.projection_from(self.chart_type),
                 last_raw: series.last(),
                 bars: &fr.bars,
                 decimated: fr.decimated,
@@ -663,7 +669,8 @@ impl ChartView {
         // Some chart types display a derived series (Heikin Ashi, Renko, Line
         // break) whose bar count can differ from the raw one.
         let mut derived = std::mem::take(&mut self.derived);
-        let display: &CandleSeries = derived.sync(self.chart_type, series).unwrap_or(series);
+        derived.update(self.chart_type, &self.style.symbol, data.tick_size, series);
+        let display: &CandleSeries = derived.series(self.chart_type).unwrap_or(series);
         let n = display.len();
         if self.scale_mode != self.last_scale_mode {
             self.manual_range = None;
@@ -737,24 +744,25 @@ impl ChartView {
         self.last_price_scale = vp.scale;
         // Bars narrower than ~2 px are drawn as per-pixel min/max columns.
         let decimated = self.bar_spacing * ppp < DECIMATE_BELOW_PX;
+        let source = price_source(&self.style.symbol, self.chart_type);
         let bars = if decimated {
             if self.lod_kind != lod_kind {
                 self.lod = Lod::new();
                 self.lod_kind = lod_kind;
             }
-            self.lod.sync(display);
+            self.lod.sync(display, source);
             self.lod.columns(display, range.clone(), &vp, ppp)
         } else {
-            collect_bars(display, range.clone(), &vp)
+            collect_bars(display, range.clone(), &vp, source)
         };
 
         // ---- vertical range -------------------------------------------------
         // Indicator lines are drawn with about one point per pixel column;
         // fit to the same samples.
         let stride = (1.0 / (self.bar_spacing * ppp)).ceil().max(1.0) as usize;
-        let close_only = self.chart_type.uses_close_only();
+        let source_only = self.chart_type.uses_source_only();
         // Price-pane overlays (moving averages, bands…) take part in auto-fit.
-        let mut extent = price_extent(&bars, close_only);
+        let mut extent = price_extent(&bars, source_only);
         for ind in self.indicators.iter().filter(|i| i.visible) {
             if ind.placement() == Placement::Overlay
                 && let Some((lo, hi)) = ind.extent_sampled(range.clone(), stride)
@@ -992,14 +1000,12 @@ impl ChartView {
     }
 }
 
-/// Value range of an indicator pane: the visible values (plus guide levels
-/// for bounded oscillators) with some padding.
+/// Value range of an indicator pane: the visible values (plus its visible
+/// levels, e.g. RSI 30/70) with some padding.
 fn pane_range(ind: &Indicator, range: std::ops::Range<usize>, stride: usize) -> (f64, f64) {
     let mut ext = ind.extent_sampled(range, stride);
-    if let Some((_, _, levels)) = ind.study.bounds()
-        && let (Some(a), Some(b)) = (levels.first(), levels.last())
-    {
-        ext = Some(ext.map_or((*a, *b), |(lo, hi)| (lo.min(*a), hi.max(*b))));
+    if let Some((a, b)) = ind.hline_extent() {
+        ext = Some(ext.map_or((a, b), |(lo, hi)| (lo.min(a), hi.max(b))));
     }
     let (lo, hi) = ext.unwrap_or((0.0, 1.0));
     let span = hi - lo;

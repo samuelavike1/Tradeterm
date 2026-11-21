@@ -1,0 +1,29 @@
+{
+  "tabs": [
+    {
+      "symbol": "BTCUSDT",
+      "indicators": [
+        {"study":{"type":"Volume","ma_length":20,"color_by_prev_close":true,"show_ma":true},
+         "visible":true,"colors":[[1,1,1,255],[10,20,30,255]],"pane_weight":1.0,"pane_collapsed":false},
+        {"study":{"type":"Sma","length":50,"source":"Close"},
+         "visible":true,"colors":[[200,100,0,128]],"pane_weight":1.0,"pane_collapsed":false},
+        {"study":{"type":"Ema","length":9,"source":"Close"},
+         "visible":false,"colors":[[41,98,255,255]],"pane_weight":1.0,"pane_collapsed":false},
+        {"study":{"type":"BollingerBands","length":20,"mult":2.0,"source":"Close"},
+         "visible":true,"colors":[[255,0,0,255],[0,255,0,255],[0,0,255,255]],"pane_weight":1.0,"pane_collapsed":false},
+        {"study":{"type":"Vwap"},
+         "visible":true,"colors":[[9,9,9,255]],"pane_weight":1.0,"pane_collapsed":false},
+        {"study":{"type":"Rsi","length":14,"source":"Close"},
+         "visible":true,"colors":[[255,235,59,255]],"pane_weight":2.0,"pane_collapsed":false},
+        {"study":{"type":"Macd","fast":12,"slow":26,"signal":9,"source":"Close"},
+         "visible":true,"colors":[[0,200,0,255],[1,2,3,255],[4,5,6,255]],"pane_weight":1.0,"pane_collapsed":true},
+        {"study":{"type":"Stochastic","k":14,"k_smooth":1,"d":3},
+         "visible":true,"colors":[[7,8,9,255],[255,109,0,255]],"pane_weight":1.0,"pane_collapsed":false},
+        {"study":{"type":"Atr","length":14},
+         "visible":true,"colors":[[100,100,100,255]],"pane_weight":1.0,"pane_collapsed":false},
+        {"study":{"type":"Obv"},
+         "visible":true,"colors":[],"pane_weight":1.0,"pane_collapsed":false}
+      ]
+    }
+  ]
+}

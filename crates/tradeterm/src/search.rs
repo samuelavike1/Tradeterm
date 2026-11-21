@@ -1,29 +1,71 @@
 //! Symbol search dialog, TradingView-style: a search field, quote filter
 //! chips, results with the match highlighted, recent symbols when empty.
-//! ↑/↓ move the selection, Enter opens it (if a search is still running, the
-//! top result once it arrives), Esc closes.
+//! ↑/↓ and PageUp/PageDown move the selection (Home/End too once a row is
+//! selected) and preview it in the field, Enter opens it (if a search is
+//! still running, the top result once it arrives), Esc closes.
 
 use crate::app::TradeTerm;
 use crate::ui::badge_color;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::{Icon, IconName, WindowExt as _, h_flex, v_flex};
+use gpui_kit::component::{WindowExt as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use std::ops::Range;
 use std::sync::Arc;
 use tt_brokers::{BinanceSource, MarketDataSource};
-use tt_chart_gpui::hsla;
 use tt_core::{Symbol, SymbolInfo};
-use tt_theme::Theme;
+use tt_ui::hsla;
+use tt_ui::prelude::*;
+use tt_ui::tokens::*;
 
 const QUOTES: [&str; 7] = ["All", "USDT", "USDC", "FDUSD", "BTC", "ETH", "BNB"];
+
+/// Rows a PageUp / PageDown moves (about one screen of 48 px rows).
+const PAGE: usize = 7;
+
+/// Keyboard selection over a list of `len` rows, kept in view through the
+/// list's [`ScrollHandle`] (row `i` must be the list's child `i`).
+#[derive(Default)]
+struct ListNav {
+    selected: Option<usize>,
+    scroll: ScrollHandle,
+}
+
+impl ListNav {
+    fn reset(&mut self) {
+        self.selected = None;
+    }
+
+    /// Applies a navigation key; returns whether it was one. Moves clamp at
+    /// the ends; from no selection, down / page down start at the top and
+    /// up / page up at the bottom. Home / End only act once a row is
+    /// selected, so they still move the caret while typing.
+    fn key(&mut self, key: &str, len: usize) -> bool {
+        let last = len.saturating_sub(1);
+        let next = match (key, self.selected) {
+            ("down" | "pagedown", None) => 0,
+            ("up" | "pageup", None) => last,
+            ("down", Some(i)) => (i + 1).min(last),
+            ("up", Some(i)) => i.saturating_sub(1),
+            ("pagedown", Some(i)) => (i + PAGE).min(last),
+            ("pageup", Some(i)) => i.saturating_sub(PAGE),
+            ("home", Some(_)) => 0,
+            ("end", Some(_)) => last,
+            _ => return false,
+        };
+        if len > 0 {
+            self.selected = Some(next);
+            self.scroll.scroll_to_item(next);
+        }
+        true
+    }
+}
 
 pub struct SymbolSearch {
     app: WeakEntity<TradeTerm>,
     input: Entity<InputState>,
     source: Arc<BinanceSource>,
     handle: tokio::runtime::Handle,
-    theme: Theme,
     recent: Vec<SymbolInfo>,
     query: String,
     /// Results of `results_for`; replaced when a newer search finishes.
@@ -32,13 +74,12 @@ pub struct SymbolSearch {
     searching: bool,
     error: Option<String>,
     quote: usize,
-    selected: Option<usize>,
+    nav: ListNav,
     /// Enter was pressed while a search was in flight.
     enter_pending: bool,
     /// The field shows a highlighted row's symbol (↑/↓ preview); the next
     /// change event is ours, not typing.
     previewing: bool,
-    scroll: ScrollHandle,
     _sub: Subscription,
 }
 
@@ -48,7 +89,6 @@ impl SymbolSearch {
         app: WeakEntity<TradeTerm>,
         source: Arc<BinanceSource>,
         handle: tokio::runtime::Handle,
-        theme: Theme,
         recent: Vec<SymbolInfo>,
         initial: &str,
         quote: usize,
@@ -85,7 +125,6 @@ impl SymbolSearch {
             input,
             source,
             handle,
-            theme,
             recent,
             query: String::new(),
             results: Vec::new(),
@@ -93,10 +132,9 @@ impl SymbolSearch {
             searching: false,
             error: None,
             quote: quote.min(QUOTES.len() - 1),
-            selected: None,
+            nav: ListNav::default(),
             enter_pending: false,
             previewing: false,
-            scroll: ScrollHandle::new(),
             _sub,
         };
         if !initial.is_empty() {
@@ -127,7 +165,7 @@ impl SymbolSearch {
             return;
         }
         self.query = query.clone();
-        self.selected = None;
+        self.nav.reset();
         self.enter_pending = false;
         if query.is_empty() {
             self.searching = false;
@@ -178,20 +216,16 @@ impl SymbolSearch {
             .collect()
     }
 
-    fn move_selection(&mut self, down: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let n = self.rows().len();
-        if n == 0 {
-            return;
+    /// A navigation key; returns whether it was one.
+    fn nav_key(&mut self, key: &str, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let before = self.nav.selected;
+        if !self.nav.key(key, self.rows().len()) {
+            return false;
         }
-        let last = n - 1;
-        self.selected = Some(match (self.selected, down) {
-            (None, true) => 0,
-            (None, false) => last,
-            (Some(i), true) => (i + 1).min(last),
-            (Some(i), false) => i.saturating_sub(1),
-        });
-        if let Some(i) = self.selected {
-            self.scroll.scroll_to_item(i);
+        if self.nav.selected == before {
+            return true;
+        }
+        if let Some(i) = self.nav.selected {
             // Preview the highlighted symbol in the field (no new search).
             if let Some(sym) = self.rows().get(i).map(|s| s.symbol.to_string()) {
                 self.previewing = true;
@@ -199,16 +233,28 @@ impl SymbolSearch {
             }
         }
         cx.notify();
+        true
+    }
+
+    fn set_quote(&mut self, i: usize, cx: &mut Context<Self>) {
+        self.quote = i;
+        self.nav.reset();
+        // Remembered for the next opening.
+        let app = self.app.clone();
+        cx.defer(move |cx| {
+            app.update(cx, |a, _| a.search_quote = i).ok();
+        });
+        cx.notify();
     }
 
     fn enter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let _ = window;
-        if self.searching && self.selected.is_none() {
+        if self.searching && self.nav.selected.is_none() {
             // Like TradingView: open the top result once it arrives.
             self.enter_pending = true;
             return;
         }
-        match self.selected {
+        match self.nav.selected {
             Some(i) => {
                 if let Some(s) = self.rows().get(i).map(|s| (*s).clone()) {
                     self.choose(s, cx);
@@ -276,156 +322,164 @@ fn highlighted(text: String, needle: &str, accent: Hsla) -> StyledText {
     }))
 }
 
+impl SymbolSearch {
+    /// One result: initial badge, symbol and "BASE / QUOTE" with the query
+    /// highlighted, SPOT tag, exchange.
+    fn row(&self, i: usize, s: &SymbolInfo, cx: &mut Context<Self>) -> ListRow {
+        let t = cx.ui();
+        let (active, muted) = (hsla(t.active), hsla(t.text_muted));
+        let key = if s.base.is_empty() {
+            s.symbol.to_string()
+        } else {
+            s.base.clone()
+        };
+        let initial = key.chars().next().unwrap_or('?').to_string();
+        let badge = div()
+            .size(px(28.))
+            .flex_none()
+            .rounded(px(R_FULL))
+            .bg(hsla(badge_color(t, &key)))
+            .flex()
+            .items_center()
+            .justify_center()
+            .text_size(px(TEXT_SMALL))
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(hsla(t.text_on_accent))
+            .child(initial);
+        let text = v_flex()
+            .flex_1()
+            .min_w_0()
+            .overflow_hidden()
+            .child(
+                div()
+                    .text_size(px(TEXT_BODY))
+                    .whitespace_nowrap()
+                    .child(highlighted(s.symbol.to_string(), &self.query, active)),
+            )
+            .child(
+                h_flex()
+                    .gap(px(S1_5))
+                    .text_size(px(TEXT_SMALL))
+                    .text_color(muted)
+                    .whitespace_nowrap()
+                    .child(highlighted(
+                        format!("{} / {}", s.base, s.quote),
+                        &self.query,
+                        active,
+                    ))
+                    .child(Tag::new("SPOT")),
+            );
+        // ListRow's primary / secondary are plain strings; the highlighted
+        // texts ride in the leading slot, which takes (almost) all of the
+        // width from the row's empty text column.
+        let leading = h_flex()
+            .flex_1()
+            .min_w_0()
+            .gap(px(S3))
+            .map(|mut d| {
+                d.style().flex_grow = Some(1000.);
+                d
+            })
+            .child(badge)
+            .child(text);
+        let info = s.clone();
+        let this = cx.entity().downgrade();
+        ListRow::new(("result", i))
+            .tall()
+            .selected(self.nav.selected == Some(i))
+            .leading(leading)
+            .trailing(
+                div()
+                    .flex_none()
+                    .text_size(px(TEXT_SMALL))
+                    .text_color(muted)
+                    .child("Binance"),
+            )
+            .on_click(move |_, _, cx| {
+                this.update(cx, |this, cx| this.choose(info.clone(), cx))
+                    .ok();
+            })
+    }
+}
+
 impl Render for SymbolSearch {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let t = self.theme.clone();
-        let accent = hsla(t.series_palette[0]);
-        let muted = hsla(t.text_muted);
+        let muted = hsla(cx.ui().text_muted);
         let rows: Vec<SymbolInfo> = self.rows().into_iter().cloned().collect();
-        let needle = self.query.clone();
 
-        let mut chips = h_flex().gap_1p5().py_1();
-        for (i, q) in QUOTES.iter().enumerate() {
-            let selected = i == self.quote;
-            chips = chips.child(
-                div()
-                    .id(("quote-chip", i))
-                    .px_3()
-                    .py_1()
-                    .rounded_full()
-                    .text_size(px(12.5))
-                    .cursor_pointer()
-                    .bg(hsla(if selected { t.text } else { t.selection }))
-                    .text_color(hsla(if selected { t.bg } else { t.text }))
-                    .hover(|s| s.opacity(0.85))
-                    .child(*q)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.quote = i;
-                        this.selected = None;
-                        // Remembered for the next opening.
-                        let app = this.app.clone();
-                        cx.defer(move |cx| {
-                            app.update(cx, |a, _| a.search_quote = i).ok();
-                        });
-                        cx.notify();
-                    })),
-            );
-        }
+        let this = cx.entity().downgrade();
+        let chips = h_flex()
+            .flex_none()
+            .gap(px(S1))
+            .children(QUOTES.iter().enumerate().map(|(i, q)| {
+                let this = this.clone();
+                Chip::new(("quote-chip", i), *q)
+                    .selected(i == self.quote)
+                    .on_click(move |_, _, cx| {
+                        this.update(cx, |this, cx| this.set_quote(i, cx)).ok();
+                    })
+            }));
 
-        let mut list = v_flex()
-            .id("search-results")
-            .h(px(420.))
-            .overflow_y_scroll()
-            .track_scroll(&self.scroll);
-        if let Some(e) = &self.error {
-            list = list.child(
-                div()
-                    .p_4()
-                    .text_color(muted)
-                    .child(format!("Search failed: {e}")),
-            );
+        let empty = if let Some(e) = &self.error {
+            Some(format!("Search failed: {e}"))
         } else if rows.is_empty() {
-            let msg = if self.query.is_empty() {
-                "Type a symbol or asset, e.g. BTC, ETHUSDT, SOL"
-            } else if self.searching || self.results_for != self.query {
-                "Searching… (the first search loads the symbol list)"
-            } else {
-                "No symbols match your criteria"
-            };
-            list = list.child(div().p_6().text_color(muted).child(msg));
-        } else if self.query.is_empty() {
-            list = list.child(
-                div()
-                    .px_3()
-                    .py_1()
-                    .text_size(px(12.))
-                    .text_color(muted)
-                    .child("Recent"),
-            );
-        }
-        for (i, s) in rows.into_iter().enumerate() {
-            let selected = self.selected == Some(i);
-            let key = if s.base.is_empty() {
-                s.symbol.to_string()
-            } else {
-                s.base.clone()
-            };
-            let initial = key.chars().next().unwrap_or('?').to_string();
-            let info = s.clone();
-            list = list.child(
-                h_flex()
-                    .id(("result", i))
-                    .h(px(48.))
-                    .px_3()
-                    .gap_3()
-                    .flex_none()
-                    .rounded(px(6.))
-                    .cursor_pointer()
-                    .when(selected, |d| d.bg(hsla(t.selection)))
-                    .hover(|d| d.bg(hsla(t.selection)))
-                    .child(
-                        div()
-                            .size(px(30.))
-                            .flex_none()
-                            .rounded_full()
-                            .bg(hsla(badge_color(&t, &key)))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .text_size(px(13.))
-                            .text_color(hsla(t.text_on_accent))
-                            .child(initial),
-                    )
-                    .child(
-                        v_flex()
-                            .flex_1()
-                            .child(div().text_size(px(14.5)).child(highlighted(
-                                s.symbol.to_string(),
-                                &needle,
-                                accent,
-                            )))
-                            .child(
-                                h_flex()
-                                    .gap_2()
-                                    .text_size(px(12.))
-                                    .text_color(muted)
-                                    .child(highlighted(
-                                        format!("{} / {}", s.base, s.quote),
-                                        &needle,
-                                        accent,
-                                    ))
-                                    .child(
-                                        div()
-                                            .px_1()
-                                            .rounded(px(3.))
-                                            .bg(hsla(t.border))
-                                            .text_size(px(9.5))
-                                            .child("SPOT"),
-                                    ),
-                            ),
-                    )
-                    .child(div().text_size(px(12.5)).text_color(muted).child("Binance"))
-                    .on_click(cx.listener(move |this, _, _, cx| this.choose(info.clone(), cx))),
-            );
-        }
-
-        v_flex()
-            .gap_2()
-            .capture_key_down(cx.listener(|this, e: &KeyDownEvent, window, cx| {
-                match e.keystroke.key.as_str() {
-                    "up" => this.move_selection(false, window, cx),
-                    "down" => this.move_selection(true, window, cx),
-                    _ => return,
+            Some(
+                if self.query.is_empty() {
+                    "Type a symbol or asset, e.g. BTC, ETHUSDT, SOL"
+                } else if self.searching || self.results_for != self.query {
+                    "Searching… (the first search loads the symbol list)"
+                } else {
+                    "No symbols match your criteria"
                 }
-                cx.stop_propagation();
-            }))
-            .child(
-                Input::new(&self.input)
-                    .prefix(Icon::new(IconName::Search))
-                    .cleanable(true),
+                .to_owned(),
             )
-            .child(chips)
-            .child(list)
+        } else {
+            None
+        };
+        let recent_header = empty.is_none() && self.query.is_empty();
+        let body = match empty {
+            Some(msg) => EmptyState::new(msg).into_any_element(),
+            None => {
+                let list_rows: Vec<ListRow> = rows
+                    .iter()
+                    .enumerate()
+                    .map(|(i, s)| self.row(i, s, cx))
+                    .collect();
+                // Rows are the list's only children, so row i is item i for
+                // scroll-into-view.
+                v_flex()
+                    .id("search-results")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.nav.scroll)
+                    .children(list_rows)
+                    .into_any_element()
+            }
+        };
+
+        DialogFrame::new(DialogSize::Md).id("symbol-search").body(
+            v_flex()
+                .size_full()
+                .gap(px(S2))
+                .capture_key_down(cx.listener(|this, e: &KeyDownEvent, window, cx| {
+                    let k = &e.keystroke;
+                    if k.modifiers.control || k.modifiers.alt || k.modifiers.shift {
+                        return;
+                    }
+                    if this.nav_key(k.key.as_str(), window, cx) {
+                        cx.stop_propagation();
+                    }
+                }))
+                .child(
+                    Input::new(&self.input)
+                        .prefix(glyph(Glyph::SEARCH, ICON_SM).color(muted))
+                        .cleanable(true),
+                )
+                .child(chips)
+                .when(recent_header, |d| d.child(SectionHeader::new("Recent")))
+                .child(body),
+        )
     }
 }
 

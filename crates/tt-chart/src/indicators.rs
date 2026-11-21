@@ -1,43 +1,15 @@
-//! Indicators attached to a chart: a configured [`Study`], its colors and
+//! Indicators attached to a chart: a configured [`Study`], its style and
 //! visibility, and cached outputs that are updated incrementally.
 
+use crate::indicator_style::{IndicatorStyle, ResolvedPlot};
 use crate::scale::{format_price, format_volume};
+use crate::style::Rgba;
 use ecolor::Color32;
 use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
-use tt_core::{CandleSeries, Placement, Plot, Study};
+use tt_core::{CandleSeries, InputValue, Placement, PlotDef, Study, ValueFormat};
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
-
-// TradingView's default indicator colors.
-const BLUE: Color32 = Color32::from_rgb(0x29, 0x62, 0xff);
-const ORANGE: Color32 = Color32::from_rgb(0xff, 0x6d, 0x00);
-const RED: Color32 = Color32::from_rgb(0xf2, 0x36, 0x45);
-const TEAL: Color32 = Color32::from_rgb(0x08, 0x99, 0x81);
-const PURPLE: Color32 = Color32::from_rgb(0x7e, 0x57, 0xc2);
-const LIGHT_BLUE: Color32 = Color32::from_rgb(0x21, 0x96, 0xf3);
-const DARK_RED: Color32 = Color32::from_rgb(0xb7, 0x1c, 0x1c);
-const GREEN: Color32 = Color32::from_rgb(0x26, 0xa6, 0x9a);
-const SALMON: Color32 = Color32::from_rgb(0xff, 0x52, 0x52);
-
-/// Default colors, one per output (histogram / volume outputs use their
-/// color for the positive side and the theme for the rest).
-pub fn default_colors(study: &Study) -> Vec<Color32> {
-    match study {
-        Study::Volume { .. } => vec![TEAL, LIGHT_BLUE],
-        Study::Sma { .. } | Study::Ema { .. } | Study::Vwap | Study::Obv => vec![BLUE],
-        Study::BollingerBands { .. } => vec![LIGHT_BLUE, RED, TEAL],
-        Study::Rsi { .. } => vec![PURPLE],
-        Study::Macd { .. } => vec![GREEN, BLUE, ORANGE],
-        Study::Stochastic { .. } => vec![BLUE, ORANGE],
-        Study::Atr { .. } => vec![DARK_RED],
-    }
-}
-
-/// Negative-side color of a histogram whose positive color is [`GREEN`].
-pub(crate) fn histogram_down() -> Color32 {
-    SALMON
-}
 
 #[derive(Debug, Clone, Default)]
 struct Cache {
@@ -55,8 +27,9 @@ pub struct Indicator {
     pub id: u64,
     pub study: Study,
     pub visible: bool,
-    /// One color per output; see [`default_colors`].
-    pub colors: Vec<Color32>,
+    /// Per-plot / level / fill style. Not part of the compute cache: editing
+    /// it only repaints.
+    pub style: IndicatorStyle,
     /// Relative height of its pane (pane studies; the price pane is 3).
     pub pane_weight: f32,
     /// Its pane is collapsed to a strip with just the legend.
@@ -68,9 +41,9 @@ impl Indicator {
     pub fn new(study: Study) -> Self {
         Self {
             id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
-            colors: default_colors(&study),
             study,
             visible: true,
+            style: IndicatorStyle::default(),
             pane_weight: 1.0,
             pane_collapsed: false,
             cache: Cache::default(),
@@ -81,26 +54,80 @@ impl Indicator {
         self.study.placement()
     }
 
-    /// Color of output `k` (falls back to the default if the list is short).
+    /// Definition of output `k`.
+    #[inline]
+    pub fn plot_def(&self, k: usize) -> Option<&'static PlotDef> {
+        self.study.meta().plots.get(k)
+    }
+
+    /// Effective style of output `k` (the metadata default for an unknown
+    /// index is never needed by callers that iterate `meta().plots`).
+    #[inline]
+    pub fn plot_style(&self, k: usize) -> Option<ResolvedPlot> {
+        self.plot_def(k).map(|d| self.style.plot(d))
+    }
+
+    /// Whether output `k` is drawn: enabled by the inputs (Volume MA needs
+    /// "show MA") and visible in the style.
+    pub fn output_enabled(&self, k: usize) -> bool {
+        self.plot_def(k).is_some_and(|d| {
+            d.enabled_if.is_none_or(|f| f(&self.study)) && self.style.plot(d).visible
+        })
+    }
+
+    /// Main color of output `k`. Compatibility accessor for the settings
+    /// dialog, which edits one color per output.
     pub fn color(&self, k: usize) -> Color32 {
-        self.colors
-            .get(k)
-            .copied()
-            .or_else(|| default_colors(&self.study).get(k).copied())
-            .unwrap_or(BLUE)
+        self.plot_style(k)
+            .map_or(Color32::from_rgb(0x29, 0x62, 0xff), |p| {
+                p.color().to_color32()
+            })
+    }
+
+    /// Sets the main color of output `k` (see [`Self::color`]).
+    pub fn set_color(&mut self, k: usize, c: Color32) {
+        if let Some(d) = self.plot_def(k) {
+            self.style.set_plot_color(d.id, 0, Rgba::from_color32(c));
+        }
+    }
+
+    /// Plot offset in bars (the study's `offset` input; 0 if it has none):
+    /// value `i` is drawn at bar `i + offset`.
+    #[inline]
+    pub fn offset(&self) -> i64 {
+        match self.study.get("offset") {
+            Some(InputValue::Int(o)) => o,
+            _ => 0,
+        }
+    }
+
+    /// Value of output `k` shown at bar `bar` (honours the offset).
+    pub fn value_at(&self, k: usize, bar: usize) -> Option<f64> {
+        let j = usize::try_from(bar as i64 - self.offset()).ok()?;
+        self.outputs().get(k)?.get(j).copied()
+    }
+
+    /// Formats a value with this indicator's precision.
+    pub fn format(&self, v: f64, price_precision: usize) -> String {
+        format_value_with(&self.study, self.style.precision(), v, price_precision)
+    }
+
+    /// (min, max) of the visible levels, for the pane's auto-fit.
+    pub fn hline_extent(&self) -> Option<(f64, f64)> {
+        let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+        for def in self.study.meta().hlines {
+            let h = self.style.hline(def);
+            if h.visible {
+                lo = lo.min(h.value);
+                hi = hi.max(h.value);
+            }
+        }
+        (lo <= hi).then_some((lo, hi))
     }
 
     /// Outputs computed by the last [`Self::sync`].
     pub fn outputs(&self) -> &[Vec<f64>] {
         &self.cache.outputs
-    }
-
-    /// Whether output `k` is drawn (Volume MA is optional).
-    pub fn output_enabled(&self, k: usize) -> bool {
-        match self.study {
-            Study::Volume { show_ma, .. } => k == 0 || show_ma,
-            _ => true,
-        }
     }
 
     /// Brings outputs up to date with `src`: a full recompute after inputs
@@ -125,7 +152,8 @@ impl Indicator {
         c.last = src.last();
     }
 
-    /// (min, max) of the drawn outputs over `range` (histograms include 0).
+    /// (min, max) of the drawn outputs over the bars `range` (columns,
+    /// histograms and areas include 0).
     pub fn extent(&self, range: Range<usize>) -> Option<(f64, f64)> {
         self.extent_sampled(range, 1)
     }
@@ -135,8 +163,17 @@ impl Indicator {
     /// zoomed far out. Keeps auto-fit O(pixels) instead of O(bars).
     pub fn extent_sampled(&self, range: Range<usize>, stride: usize) -> Option<(f64, f64)> {
         let stride = stride.max(1);
+        let off = self.offset();
+        // Bars → value indices.
+        let shift = |b: usize| (b as i64 - off).max(0) as usize;
+        let range = shift(range.start)..shift(range.end);
         let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
-        for (k, (out, (_, plot))) in self.outputs().iter().zip(self.study.outputs()).enumerate() {
+        for (k, (out, def)) in self
+            .outputs()
+            .iter()
+            .zip(self.study.meta().plots)
+            .enumerate()
+        {
             if !self.output_enabled(k) {
                 continue;
             }
@@ -150,7 +187,7 @@ impl Indicator {
                     hi = hi.max(v);
                 }
             }
-            if *plot != Plot::Line && lo.is_finite() {
+            if self.style.plot(def).from_zero() && lo.is_finite() {
                 lo = lo.min(0.0);
                 hi = hi.max(0.0);
             }
@@ -159,21 +196,47 @@ impl Indicator {
     }
 }
 
-/// Formats a study value for legends and axis labels.
+/// Formats a study value for legends and axis labels (default precision).
 pub fn format_value(study: &Study, v: f64, price_precision: usize) -> String {
+    format_value_with(study, None, v, price_precision)
+}
+
+/// Formats a study value; `precision` (decimals) overrides the study's
+/// default format. Volume formats stay abbreviated (`1.234K`).
+pub fn format_value_with(
+    study: &Study,
+    precision: Option<u8>,
+    v: f64,
+    price_precision: usize,
+) -> String {
     if !v.is_finite() {
         return "∅".into();
     }
-    match study {
-        Study::Volume { .. } | Study::Obv => {
-            if v < 0.0 {
-                format!("−{}", format_volume(-v))
-            } else {
-                format_volume(v)
-            }
+    match (study.meta().format, precision) {
+        (ValueFormat::Volume, p) => {
+            let abs = match p {
+                None => format_volume(v.abs()),
+                Some(d) => abbreviated(v.abs(), d as usize),
+            };
+            if v < 0.0 { format!("−{abs}") } else { abs }
         }
-        Study::Rsi { .. } | Study::Stochastic { .. } => format!("{v:.2}"),
-        _ => format_price(v, price_precision),
+        (_, Some(d)) => format_price(v, d as usize),
+        (ValueFormat::Fixed(d), None) => format!("{v:.*}", d as usize),
+        (ValueFormat::Price, None) => format_price(v, price_precision),
+    }
+}
+
+/// `format_volume` with `d` decimals.
+fn abbreviated(v: f64, d: usize) -> String {
+    let a = v.abs();
+    if a >= 1e9 {
+        format!("{:.d$}B", v / 1e9)
+    } else if a >= 1e6 {
+        format!("{:.d$}M", v / 1e6)
+    } else if a >= 1e3 {
+        format!("{:.d$}K", v / 1e3)
+    } else {
+        format!("{v:.d$}")
     }
 }
 
@@ -238,6 +301,21 @@ mod tests {
         assert_ne!(ind.outputs()[0][49], -1.0, "a tick recomputes");
     }
 
+    /// Style edits only repaint: they never invalidate the outputs.
+    #[test]
+    fn style_edits_do_not_recompute() {
+        let s = series(50);
+        let mut ind = Indicator::new(StudyKind::Macd.default_study());
+        ind.sync(&s);
+        ind.cache.outputs[1][49] = -1.0;
+        ind.set_color(1, Color32::RED);
+        ind.style.plot_mut("hist").plot_type = Some(tt_core::PlotType::Line);
+        ind.style.precision = Some(4);
+        ind.sync(&s);
+        assert_eq!(ind.outputs()[1][49], -1.0);
+        assert_eq!(ind.color(1), Color32::RED);
+    }
+
     #[test]
     fn extent_includes_zero_for_histograms_and_skips_disabled_outputs() {
         let s = series(100);
@@ -250,33 +328,49 @@ mod tests {
         assert_eq!(vol.extent(0..100), Some((0.0, 5.0)));
         assert!(!vol.output_enabled(1));
         assert_eq!(format_value(&vol.study, 1500.0, 2), "1.50K");
+        // Hidden in the style: not drawn, not fitted.
+        let mut rsi = Indicator::new(StudyKind::Rsi.default_study());
+        rsi.sync(&s);
+        assert!(rsi.extent(0..100).is_some());
+        rsi.style.plot_mut("rsi").visible = Some(false);
+        assert!(!rsi.output_enabled(0));
+        assert_eq!(rsi.extent(0..100), None);
+        assert_eq!(rsi.hline_extent(), Some((30.0, 70.0)));
+        rsi.style.hline_mut("upper").value = Some(85.0);
+        rsi.style.hline_mut("lower").visible = Some(false);
+        assert_eq!(rsi.hline_extent(), Some((50.0, 85.0)));
+    }
+
+    #[test]
+    fn precision_overrides_the_format() {
+        let mut rsi = Indicator::new(StudyKind::Rsi.default_study());
+        assert_eq!(rsi.format(12.3456, 5), "12.35");
+        rsi.style.precision = Some(0);
+        assert_eq!(rsi.format(12.3456, 5), "12");
+        let mut obv = Indicator::new(StudyKind::Obv.default_study());
+        obv.style.precision = Some(3);
+        assert_eq!(obv.format(-1234.5, 2), "−1.234K");
+        let mut sma = Indicator::new(StudyKind::Sma.default_study());
+        assert_eq!(sma.format(1234.5, 1), "1,234.5");
+        sma.style.precision = Some(3);
+        assert_eq!(sma.format(1234.5, 1), "1,234.500");
     }
 
     /// The study metadata describes what this module and the renderer do
-    /// today (colors, enabled outputs, value format).
+    /// (enabled outputs, value format).
     #[test]
-    fn study_meta_matches_current_defaults() {
-        use tt_core::ValueFormat;
+    fn study_meta_drives_defaults() {
         for kind in StudyKind::ALL {
             let study = kind.default_study();
             let meta = study.meta();
-            let colors = default_colors(&study);
-            assert_eq!(colors.len(), meta.plots.len(), "{kind:?}");
-            for (k, (plot, color)) in meta.plots.iter().zip(&colors).enumerate() {
-                if kind == StudyKind::Volume && k == 0 {
-                    continue; // columns follow the theme's volume colors
-                }
-                assert_eq!(
-                    plot.default.color,
-                    color.to_srgba_unmultiplied(),
-                    "{kind:?} {}",
-                    plot.id
-                );
-            }
             let ind = Indicator::new(study.clone());
             for (k, plot) in meta.plots.iter().enumerate() {
-                let enabled = plot.enabled_if.is_none_or(|f| f(&study));
+                let enabled = plot.enabled_if.is_none_or(|f| f(&study)) && plot.default.visible;
                 assert_eq!(enabled, ind.output_enabled(k), "{kind:?} {}", plot.id);
+                assert_eq!(
+                    ind.plot_style(k).unwrap().color().to_core(),
+                    plot.default.color
+                );
             }
             let want = match meta.format {
                 ValueFormat::Volume => format_volume(1234.0),
