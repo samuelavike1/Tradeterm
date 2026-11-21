@@ -271,6 +271,18 @@ impl ChartSettingsPanel {
             )
             .into_any_element(),
         );
+        // Session breaks (TradingView's Events tab): day boundaries in the
+        // chart's time zone, intraday charts only.
+        rows.push(
+            check!(
+                self,
+                cx,
+                "sc.session_breaks",
+                "Session breaks",
+                events.session_breaks.visible
+            )
+            .into_any_element(),
+        );
         let sel = self.select(
             "sc.date_format",
             DateFormat::ALL.iter().map(|v| (*v, v.label())),
