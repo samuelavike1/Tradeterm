@@ -815,6 +815,7 @@ impl RenderOnce for TextStyleBar {
 pub struct LineWidthButton {
     id: ElementId,
     width: u8,
+    boxed: bool,
     on_change: Option<WidthHandler>,
 }
 
@@ -823,8 +824,16 @@ impl LineWidthButton {
         Self {
             id: id.into(),
             width,
+            boxed: false,
             on_change: None,
         }
+    }
+
+    /// The dialog variant (TradingView's Fib "Levels line"): a bordered
+    /// `C_CONTROL` button showing only the line.
+    pub fn boxed(mut self) -> Self {
+        self.boxed = true;
+        self
     }
 
     pub fn on_change(mut self, f: impl Fn(u8, &mut Window, &mut App) + 'static) -> Self {
@@ -838,28 +847,37 @@ impl RenderOnce for LineWidthButton {
         let t = cx.ui().clone();
         let now = self.width;
         let fg = hsla(t.text);
-        let trigger = bare_button(
-            child_id(&self.id, "btn"),
-            FT_W_WIDTH_BUTTON,
-            FT_BUTTON,
-            0.0,
-            &t,
-            cx,
-        )
-        .child(
-            h_flex()
-                .w_full()
-                .pl(px(10.0))
-                .gap(px(7.0))
-                .items_center()
-                .child(line_preview(18.0, now as f32, LineDash::Solid, fg))
-                .child(
-                    div()
-                        .text_size(px(TEXT_BODY))
-                        .whitespace_nowrap()
-                        .child(format!("{now}px")),
-                ),
-        )
+        let trigger = if self.boxed {
+            boxed_button(child_id(&self.id, "btn"), W_BOXED_WIDTH, &t, cx).child(line_preview(
+                30.0,
+                now as f32,
+                LineDash::Solid,
+                fg,
+            ))
+        } else {
+            bare_button(
+                child_id(&self.id, "btn"),
+                FT_W_WIDTH_BUTTON,
+                FT_BUTTON,
+                0.0,
+                &t,
+                cx,
+            )
+            .child(
+                h_flex()
+                    .w_full()
+                    .pl(px(10.0))
+                    .gap(px(7.0))
+                    .items_center()
+                    .child(line_preview(18.0, now as f32, LineDash::Solid, fg))
+                    .child(
+                        div()
+                            .text_size(px(TEXT_BODY))
+                            .whitespace_nowrap()
+                            .child(format!("{now}px")),
+                    ),
+            )
+        }
         .tooltip("Line width");
         let f = self.on_change;
         menu_with(self.id, trigger, window, cx, move |mut menu, cx| {
@@ -889,6 +907,7 @@ impl RenderOnce for LineWidthButton {
 pub struct LineStyleButton {
     id: ElementId,
     dash: LineDash,
+    boxed: bool,
     on_change: Option<DashHandler>,
 }
 
@@ -897,8 +916,15 @@ impl LineStyleButton {
         Self {
             id: id.into(),
             dash,
+            boxed: false,
             on_change: None,
         }
+    }
+
+    /// The dialog variant: a bordered `C_CONTROL` square.
+    pub fn boxed(mut self) -> Self {
+        self.boxed = true;
+        self
     }
 
     pub fn on_change(mut self, f: impl Fn(LineDash, &mut Window, &mut App) + 'static) -> Self {
@@ -911,9 +937,13 @@ impl RenderOnce for LineStyleButton {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let t = cx.ui().clone();
         let now = self.dash;
-        let trigger = bare_button(child_id(&self.id, "btn"), FT_BUTTON, FT_BUTTON, 0.0, &t, cx)
-            .child(line_preview(20.0, 1.0, now, hsla(t.text)))
-            .tooltip("Line style");
+        let trigger = if self.boxed {
+            boxed_button(child_id(&self.id, "btn"), C_CONTROL, &t, cx)
+        } else {
+            bare_button(child_id(&self.id, "btn"), FT_BUTTON, FT_BUTTON, 0.0, &t, cx)
+        }
+        .child(line_preview(20.0, 1.0, now, hsla(t.text)))
+        .tooltip("Line style");
         let f = self.on_change;
         menu_with(self.id, trigger, window, cx, move |mut menu, cx| {
             let fg = hsla(cx.ui().text);
@@ -936,8 +966,112 @@ impl RenderOnce for LineStyleButton {
     }
 }
 
+/// Width of the boxed [`LineWidthButton`].
+const W_BOXED_WIDTH: f32 = 54.0;
+
+/// A bordered dialog button (`C_CONTROL` tall, `C_R_TOGGLE`).
+fn boxed_button(id: ElementId, w: f32, t: &Theme, cx: &App) -> Button {
+    bare_button(id, w, C_CONTROL, C_R_TOGGLE, t, cx)
+        .border_1()
+        .border_color(toggle_border(t))
+}
+
+type EndHandler = Rc<dyn Fn(bool, &mut Window, &mut App)>;
+
+/// A line end preview: a short line with a dot (normal) or an arrow head
+/// at its right / left end.
+fn line_end_preview(right: bool, arrow: bool, fg: Hsla) -> AnyElement {
+    let line = div().w(px(12.0)).h(px(1.0)).bg(fg);
+    let end: AnyElement = if arrow {
+        glyph(
+            if right {
+                Glyph::CHEVRON_RIGHT
+            } else {
+                Glyph::CHEVRON_LEFT
+            },
+            ICON_SM,
+        )
+        .color(fg)
+        .into_any_element()
+    } else {
+        div()
+            .size(px(5.0))
+            .rounded_full()
+            .border_1()
+            .border_color(fg)
+            .into_any_element()
+    };
+    let row = h_flex().items_center();
+    if right {
+        row.child(line).child(end)
+    } else {
+        row.child(end).child(line)
+    }
+    .into_any_element()
+}
+
+/// TradingView's line end select (the icons after a line picker): a
+/// bordered `C_CONTROL` square previewing the end; its menu offers Normal
+/// and Arrow.
+#[derive(IntoElement)]
+pub struct LineEndSelect {
+    id: ElementId,
+    right: bool,
+    arrow: bool,
+    on_change: Option<EndHandler>,
+}
+
+impl LineEndSelect {
+    /// `right`: the line's right end (else its left end); `arrow`: the
+    /// current end.
+    pub fn new(id: impl Into<ElementId>, right: bool, arrow: bool) -> Self {
+        Self {
+            id: id.into(),
+            right,
+            arrow,
+            on_change: None,
+        }
+    }
+
+    /// The new end: `true` for an arrow.
+    pub fn on_change(mut self, f: impl Fn(bool, &mut Window, &mut App) + 'static) -> Self {
+        self.on_change = Some(Rc::new(f));
+        self
+    }
+}
+
+impl RenderOnce for LineEndSelect {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let t = cx.ui().clone();
+        let (right, now) = (self.right, self.arrow);
+        let trigger = boxed_button(child_id(&self.id, "btn"), C_CONTROL, &t, cx)
+            .child(line_end_preview(right, now, hsla(t.text)))
+            .tooltip(if right { "Right end" } else { "Left end" });
+        let f = self.on_change;
+        menu_with(self.id, trigger, window, cx, move |mut menu, cx| {
+            let fg = hsla(cx.ui().text);
+            menu = menu.width(MenuWidth::Sm);
+            for (i, (arrow, label)) in [(false, "Normal"), (true, "Arrow")].into_iter().enumerate()
+            {
+                let f = f.clone();
+                menu = menu.row(
+                    MenuRow::new(("line-end-opt", i), label)
+                        .leading_element(move || line_end_preview(right, arrow, fg))
+                        .checked(arrow == now)
+                        .on_select(move |win, cx| {
+                            if let Some(f) = &f {
+                                f(arrow, win, cx)
+                            }
+                        }),
+                );
+            }
+            menu
+        })
+    }
+}
+
 /// A kit [`Menu`] below `trigger` (keyboard nav state under `id`).
-fn menu_with(
+pub(crate) fn menu_with(
     id: ElementId,
     trigger: Button,
     window: &mut Window,

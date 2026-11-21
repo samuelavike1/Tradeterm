@@ -1,10 +1,10 @@
 //! Shapes: rectangle (and later circle, ellipse, polyline).
 
 use super::Drawing;
-use super::props::{Props, ShapeProps};
+use super::props::{HAlign, Props, ShapeProps, VAlign};
 use super::render::styled_line;
-use crate::render::Canvas;
-use emath::{Pos2, Rect, pos2};
+use crate::render::{Canvas, TextOpts};
+use emath::{Align, Align2, Pos2, Rect, pos2};
 
 /// The rectangle: background (`ShapeProps::background`), border, optional
 /// middle line, extended left / right to the pane's edges.
@@ -60,4 +60,36 @@ pub(super) fn rectangle(c: &mut dyn Canvas, d: &Drawing, pts: &[Pos2], pane: Rec
             m.style,
         );
     }
+    if sp.text.on && !d.text.is_empty() {
+        rect_text(c, r, d, sp);
+    }
+}
+
+/// The rectangle's text (TradingView): above it (Top), inside it, or
+/// below it (Bottom); left, centered or right.
+fn rect_text(c: &mut dyn Canvas, r: Rect, d: &Drawing, sp: &ShapeProps) {
+    const PAD: f32 = 4.0;
+    let (x, hx) = match sp.text.h {
+        HAlign::Left => (r.left() + PAD, Align::Min),
+        HAlign::Center => (r.center().x, Align::Center),
+        HAlign::Right => (r.right() - PAD, Align::Max),
+    };
+    let (y, vy) = match sp.text.v {
+        VAlign::Top => (r.top() - PAD, Align::Max),
+        VAlign::Middle => (r.center().y, Align::Center),
+        VAlign::Bottom => (r.bottom() + PAD, Align::Min),
+    };
+    let ts = &sp.text_style;
+    c.text_rich(
+        pos2(x, y),
+        Align2([hx, vy]),
+        &d.text,
+        ts.size as f32,
+        ts.color.to_color32(),
+        TextOpts {
+            bold: ts.bold,
+            italic: ts.italic,
+            rotation: 0.0,
+        },
+    );
 }

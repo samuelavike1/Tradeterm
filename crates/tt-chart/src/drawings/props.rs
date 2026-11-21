@@ -214,7 +214,7 @@ impl Default for LevelsLine {
 }
 
 /// Trend line, ray, extended line, info line, trend angle, arrow.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LineProps {
     pub line: Stroke,
@@ -225,6 +225,26 @@ pub struct LineProps {
     pub stats: Stats,
     pub text_style: TextStyle,
     pub text: TextLayout,
+}
+
+impl Default for LineProps {
+    /// TradingView's line tools: text above the line, centered.
+    fn default() -> Self {
+        Self {
+            line: Stroke::default(),
+            ends: Ends::default(),
+            extend: Extend::default(),
+            middle_point: false,
+            price_labels: false,
+            stats: Stats::default(),
+            text_style: TextStyle::default(),
+            text: TextLayout {
+                h: HAlign::Center,
+                v: VAlign::Top,
+                ..TextLayout::default()
+            },
+        }
+    }
 }
 
 /// Horizontal line and horizontal ray.
@@ -274,10 +294,11 @@ impl Default for VLineProps {
             extend: true,
             time_label: true,
             text_style: TextStyle::default(),
+            // TradingView: on the line, along it (which breaks behind it).
             text: TextLayout {
                 on: false,
-                h: HAlign::Right,
-                v: VAlign::Top,
+                h: HAlign::Center,
+                v: VAlign::Middle,
                 vertical: true,
             },
         }
@@ -324,19 +345,24 @@ impl Default for ChannelProps {
         };
         Self {
             line: Stroke::default(),
+            // In coefficient order, as TradingView lists them.
             levels: vec![
-                level(0.0, true, None),
-                level(0.5, true, Some(Stroke::new(BLUE, 1, LineStyle::Dashed))),
-                level(1.0, true, None),
                 level(-0.25, false, None),
+                level(0.0, true, None),
                 level(0.25, false, None),
+                level(0.5, true, Some(Stroke::new(BLUE, 1, LineStyle::Dashed))),
                 level(0.75, false, None),
+                level(1.0, true, None),
                 level(1.25, false, None),
             ],
             extend: Extend::default(),
             background: Fill::default(),
             text_style: TextStyle::default(),
-            text: TextLayout::default(),
+            text: TextLayout {
+                h: HAlign::Left,
+                v: VAlign::Top,
+                ..TextLayout::default()
+            },
         }
     }
 }
@@ -378,8 +404,9 @@ impl Default for FibProps {
             })
             .collect();
         // The hidden slots (colors are a palette cycle until checked in TV).
+        // TradingView's slot order (its grid fills row by row).
         let hidden = [
-            1.272, 1.414, 2.0, 2.272, 2.414, 3.0, 3.272, 3.414, 4.0, 4.272, 4.414, 4.618, 4.764,
+            1.272, 1.414, 2.272, 2.414, 2.0, 3.0, 3.272, 3.414, 4.0, 4.272, 4.414, 4.618, 4.764,
         ];
         for (k, coeff) in hidden.into_iter().enumerate() {
             levels.push(Level {
@@ -431,8 +458,10 @@ impl ShapeProps {
             middle_line: Stroke::new(c, 1, LineStyle::Dashed),
             extend: Extend::default(),
             text_style: TextStyle::new(c, 14),
+            // TradingView: inside, on the right.
             text: TextLayout {
-                h: HAlign::Left,
+                h: HAlign::Right,
+                v: VAlign::Middle,
                 ..TextLayout::default()
             },
         }
@@ -598,6 +627,7 @@ impl Default for RangeProps {
                 pips: true,
                 bars: true,
                 date_time: true,
+                volume: true,
                 ..Stats::default()
             },
             label: TextStyle::new(Color32::WHITE, 12),
@@ -761,6 +791,7 @@ impl Props {
                 stats: Stats {
                     bars: true,
                     date_time: true,
+                    volume: true,
                     ..Stats::default()
                 },
                 ..RangeProps::default()

@@ -31,15 +31,15 @@ pub use dialog::{
     open_dialog,
 };
 pub use divider::Divider;
-pub use form::{CheckBox, ColorField, Field, FormRow, NumberField, PALETTE, Select};
+pub use form::{CheckBox, CheckSelect, ColorField, Field, FormRow, NumberField, PALETTE, Select};
 pub use glyph::{Glyph, GlyphEl, ICON_FONT, glyph, register_icon_font};
 pub use list::{EmptyState, ListKey, ListNav, ListRow, Tag};
 pub use menu::{Menu, MenuNav, MenuRow, MenuWidth, SectionHeader};
 pub use overlay::{Overlay, PaneControls};
 pub use picker::{
-    ColorBarButton, ColorPalette, ColorSwatchButton, LineDash, LinePicker, LineStyleButton,
-    LineValue, LineWidthButton, TV_PALETTE, TextStyleBar, TextStyleValue, ToggleSquare,
-    line_preview,
+    ColorBarButton, ColorPalette, ColorSwatchButton, LineDash, LineEndSelect, LinePicker,
+    LineStyleButton, LineValue, LineWidthButton, TV_PALETTE, TextStyleBar, TextStyleValue,
+    ToggleSquare, line_preview,
 };
 pub use slider::{RangeField, RangeSlider};
 pub use theme::{ActiveUiTheme, UiTheme, hsla};
@@ -56,7 +56,7 @@ pub mod prelude {
     pub use crate::button::{Chip, ControlSize, IconButton, ToolbarButton};
     pub use crate::dialog::{DialogFooter, DialogFrame, DialogOpts, DialogSize, NavTabs};
     pub use crate::divider::Divider;
-    pub use crate::form::{CheckBox, ColorField, Field, FormRow, NumberField, Select};
+    pub use crate::form::{CheckBox, CheckSelect, ColorField, Field, FormRow, NumberField, Select};
     pub use crate::glyph::{Glyph, glyph};
     pub use crate::list::{EmptyState, ListKey, ListNav, ListRow, Tag};
     pub use crate::menu::{Menu, MenuRow, MenuWidth, SectionHeader};

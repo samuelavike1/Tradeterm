@@ -11,18 +11,19 @@
 //! row labels.
 
 use super::model::{Anchor, DrawingTool, Rgba};
-use super::props::{Level, Props, Stroke};
+use super::props::{Caps, Level, Props, Stroke};
 use crate::time_axis::SlotTimes;
 use serde_json::Value;
 use tt_core::{TimeUnit, civil_from_days, days_from_civil};
 
 /// Font sizes offered (TradingView's).
-pub const FONT_SIZES: [u8; 10] = [10, 11, 12, 14, 16, 20, 24, 28, 32, 40];
+pub const FONT_SIZES: [u8; 13] = [8, 10, 11, 12, 14, 16, 18, 20, 22, 24, 28, 32, 40];
 
 /// The control of a field.
 #[derive(Debug, Clone, PartialEq)]
 pub enum FieldKind {
-    /// A section header (`label` is the title; no value).
+    /// A section caption (`label` is the title; no value): TradingView's
+    /// "INFO".
     Section,
     /// A checkbox (bool).
     Check,
@@ -34,15 +35,36 @@ pub enum FieldKind {
     WidthStyle,
     /// One of fixed values: (saved string, label).
     Choice(&'static [(&'static str, &'static str)]),
+    /// Two selects on one row: this field's `path` with `first`, then
+    /// `second_path` with `second` ("Text alignment", the Fib "Labels").
+    Pair {
+        first: &'static [(&'static str, &'static str)],
+        second_path: String,
+        second: &'static [(&'static str, &'static str)],
+    },
+    /// TradingView's checkable menu: each item a bool at `(path, label)`;
+    /// the trigger shows the checked labels, or `none` ("Don't extend",
+    /// "Hidden"). `path` is the items' parent.
+    CheckMenu {
+        items: &'static [(&'static str, &'static str)],
+        none: &'static str,
+    },
     /// A number.
     Number { min: f64, max: f64, step: f64 },
-    /// A `0.0..=1.0` fraction shown as a percent.
+    /// A `0.0..=1.0` fraction shown as a percent (an opacity slider in the
+    /// comfortable layout).
     Percent,
     /// A font size from [`FONT_SIZES`].
     FontSize,
-    /// A `TextStyle`: color, size, bold, italic.
+    /// A `TextStyle` as color + size (range labels; the generic layout adds
+    /// bold and italic).
     TextStyle,
-    /// The levels list (`/levels`): on, coefficient and color per level.
+    /// The Text tab's `[color][size][B][I]` bar (a `TextStyle`).
+    TextBar,
+    /// The drawing's own text (the Text tab's text area; `path` unused).
+    TextArea,
+    /// The levels list (`/levels`): on, coefficient and color (Fib) or
+    /// line (channel) per level.
     Levels,
 }
 
@@ -58,6 +80,9 @@ pub struct Field {
     pub check: Option<String>,
     /// Nested option (indented).
     pub indent: bool,
+    /// Line ends after a line control (`/ends/left`, `/ends/right`), on
+    /// the line's row as TradingView shows them.
+    pub ends: bool,
 }
 
 impl Field {
@@ -68,6 +93,7 @@ impl Field {
             kind,
             check: None,
             indent: false,
+            ends: false,
         }
     }
 
@@ -79,8 +105,38 @@ impl Field {
         Self::new(title, "", FieldKind::Section)
     }
 
+    fn menu(
+        label: &'static str,
+        parent: &str,
+        items: &'static [(&'static str, &'static str)],
+        none: &'static str,
+    ) -> Self {
+        Self::new(label, parent, FieldKind::CheckMenu { items, none })
+    }
+
+    fn pair(
+        label: &'static str,
+        (path, first): (&str, &'static [(&'static str, &'static str)]),
+        (second_path, second): (&str, &'static [(&'static str, &'static str)]),
+    ) -> Self {
+        Self::new(
+            label,
+            path,
+            FieldKind::Pair {
+                first,
+                second_path: second_path.to_owned(),
+                second,
+            },
+        )
+    }
+
     fn with_check(mut self, path: &str) -> Self {
         self.check = Some(path.to_owned());
+        self
+    }
+
+    fn with_ends(mut self) -> Self {
+        self.ends = true;
         self
     }
 
@@ -88,56 +144,118 @@ impl Field {
         self.indent = true;
         self
     }
+
+    /// Every JSON pointer this field reads or writes.
+    pub fn paths(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        match &self.kind {
+            FieldKind::Section | FieldKind::TextArea => {}
+            FieldKind::CheckMenu { items, .. } => {
+                out.extend(items.iter().map(|(p, _)| p.to_string()))
+            }
+            FieldKind::Pair { second_path, .. } => {
+                out.push(self.path.clone());
+                out.push(second_path.clone());
+            }
+            _ => out.push(self.path.clone()),
+        }
+        out.extend(self.check.clone());
+        if self.ends {
+            out.push("/ends/left".into());
+            out.push("/ends/right".into());
+        }
+        out
+    }
+
+    /// The checkable menu's trigger text: TradingView joins the checked
+    /// items ("Extend left line, extend right line").
+    pub fn menu_summary(&self, v: &Value) -> String {
+        let FieldKind::CheckMenu { items, none } = &self.kind else {
+            return String::new();
+        };
+        let mut s = String::new();
+        for (_, label) in items.iter().filter(|(p, _)| get_bool(v, p)) {
+            if s.is_empty() {
+                s.push_str(label);
+            } else {
+                s.push_str(", ");
+                s.push_str(&label.to_lowercase());
+            }
+        }
+        if s.is_empty() { none.to_string() } else { s }
+    }
 }
 
 const ENDS: &[(&str, &str)] = &[("Normal", "Normal"), ("Arrow", "Arrow")];
-const STATS_POSITION: &[(&str, &str)] =
-    &[("Left", "Left"), ("Center", "Center"), ("Right", "Right")];
-const STATS_POSITION_AUTO: &[(&str, &str)] = &[
+/// TradingView offers Auto for every line tool.
+const STATS_POSITION: &[(&str, &str)] = &[
     ("Left", "Left"),
     ("Center", "Center"),
     ("Right", "Right"),
     ("Auto", "Auto"),
 ];
-const H_ALIGN: &[(&str, &str)] = &[("Left", "Left"), ("Center", "Center"), ("Right", "Right")];
-const V_ALIGN: &[(&str, &str)] = &[("Top", "Top"), ("Middle", "Middle"), ("Bottom", "Bottom")];
+pub const H_ALIGN: &[(&str, &str)] = &[("Left", "Left"), ("Center", "Center"), ("Right", "Right")];
+pub const V_ALIGN: &[(&str, &str)] = &[("Top", "Top"), ("Middle", "Middle"), ("Bottom", "Bottom")];
+/// Shapes and channels: the middle is "Inside".
+const V_ALIGN_INSIDE: &[(&str, &str)] =
+    &[("Top", "Top"), ("Middle", "Inside"), ("Bottom", "Bottom")];
 const ORIENTATION: &[(&str, &str)] = &[("false", "Horizontal"), ("true", "Vertical")];
 const LEVEL_LABELS: &[(&str, &str)] = &[("false", "Values"), ("true", "Percents")];
+const EXTEND_LINE: &[(&str, &str)] = &[
+    ("/extend/left", "Extend left line"),
+    ("/extend/right", "Extend right line"),
+];
+const EXTEND_LINES: &[(&str, &str)] = &[
+    ("/extend/left", "Extend lines left"),
+    ("/extend/right", "Extend lines right"),
+];
+const EXTEND_SIDES: &[(&str, &str)] = &[
+    ("/extend/left", "Extend left"),
+    ("/extend/right", "Extend right"),
+];
+/// The date range extends up and down (`extend.left` / `right` are top /
+/// bottom).
+const EXTEND_TOP_BOTTOM: &[(&str, &str)] = &[
+    ("/extend/left", "Extend top"),
+    ("/extend/right", "Extend bottom"),
+];
+const DONT_EXTEND: &str = "Don't extend";
 
-/// The stats a tool's checklist offers: (field, label).
+/// The stats a tool's menu offers: (path, label), TradingView's order.
 fn stats_options(tool: DrawingTool) -> &'static [(&'static str, &'static str)] {
     use DrawingTool::*;
     const LINE: &[(&str, &str)] = &[
-        ("price_range", "Price range"),
-        ("percent", "Percent change"),
-        ("pips", "Change in pips"),
-        ("bars", "Bars range"),
-        ("date_time", "Date/time range"),
-        ("angle", "Angle"),
+        ("/stats/price_range", "Price range"),
+        ("/stats/percent", "Percent change"),
+        ("/stats/pips", "Change in pips"),
+        ("/stats/bars", "Bars range"),
+        ("/stats/date_time", "Date/time range"),
+        ("/stats/distance", "Distance"),
+        ("/stats/angle", "Angle"),
     ];
     const ANGLE: &[(&str, &str)] = &[
-        ("price_range", "Price range"),
-        ("percent", "Percent change"),
-        ("pips", "Change in pips"),
-        ("bars", "Bars range"),
+        ("/stats/price_range", "Price range"),
+        ("/stats/percent", "Percent change"),
+        ("/stats/pips", "Change in pips"),
+        ("/stats/bars", "Bars range"),
     ];
     const PRICE: &[(&str, &str)] = &[
-        ("price_range", "Price range"),
-        ("percent", "Percent change"),
-        ("pips", "Change in pips"),
+        ("/stats/price_range", "Price range"),
+        ("/stats/percent", "Percent change"),
+        ("/stats/pips", "Change in pips"),
     ];
     const DATE: &[(&str, &str)] = &[
-        ("bars", "Bars range"),
-        ("date_time", "Date/time range"),
-        ("volume", "Volume"),
+        ("/stats/bars", "Bars range"),
+        ("/stats/date_time", "Date/time range"),
+        ("/stats/volume", "Volume"),
     ];
     const BOTH: &[(&str, &str)] = &[
-        ("price_range", "Price range"),
-        ("percent", "Percent change"),
-        ("pips", "Change in pips"),
-        ("bars", "Bars range"),
-        ("date_time", "Date/time range"),
-        ("volume", "Volume"),
+        ("/stats/price_range", "Price range"),
+        ("/stats/percent", "Percent change"),
+        ("/stats/pips", "Change in pips"),
+        ("/stats/bars", "Bars range"),
+        ("/stats/date_time", "Date/time range"),
+        ("/stats/volume", "Volume"),
     ];
     match tool {
         TrendAngle => ANGLE,
@@ -148,16 +266,16 @@ fn stats_options(tool: DrawingTool) -> &'static [(&'static str, &'static str)] {
     }
 }
 
+/// "INFO", the stats menu and (line tools) position and "Always show
+/// stats".
 fn stats_fields(tool: DrawingTool, out: &mut Vec<Field>) {
-    out.push(Field::section("Stats"));
-    for (key, label) in stats_options(tool) {
-        out.push(Field::check(label, &format!("/stats/{key}")));
-    }
-    let positions = if tool == DrawingTool::TrendAngle {
-        STATS_POSITION_AUTO
-    } else {
-        STATS_POSITION
-    };
+    out.push(Field::section("INFO"));
+    out.push(Field::menu(
+        "Stats",
+        "/stats",
+        stats_options(tool),
+        "Hidden",
+    ));
     if !matches!(
         tool,
         DrawingTool::PriceRange | DrawingTool::DateRange | DrawingTool::DateAndPriceRange
@@ -165,25 +283,26 @@ fn stats_fields(tool: DrawingTool, out: &mut Vec<Field>) {
         out.push(Field::new(
             "Stats position",
             "/stats/position",
-            FieldKind::Choice(positions),
+            FieldKind::Choice(STATS_POSITION),
         ));
         out.push(Field::check("Always show stats", "/stats/always"));
     }
 }
 
-/// The Style tab of a drawing.
+/// The Style tab of a drawing, in TradingView's order
+/// (docs/specs/drawings-tv-ref.md).
 pub fn style_fields(tool: DrawingTool, props: &Props) -> Vec<Field> {
     use FieldKind::*;
     let mut f = Vec::new();
     match props {
         Props::Line(_) => {
-            f.push(Field::new("Line", "/line", Line));
-            if tool != DrawingTool::TrendAngle {
-                f.push(Field::new("Left end", "/ends/left", Choice(ENDS)));
-                f.push(Field::new("Right end", "/ends/right", Choice(ENDS)));
-            }
-            f.push(Field::check("Extend left", "/extend/left"));
-            f.push(Field::check("Extend right", "/extend/right"));
+            let line = Field::new("Line", "/line", Line);
+            f.push(if tool == DrawingTool::TrendAngle {
+                line
+            } else {
+                line.with_ends()
+            });
+            f.push(Field::menu("Extend", "/extend", EXTEND_LINE, DONT_EXTEND));
             f.push(Field::check("Middle point", "/middle_point"));
             f.push(Field::check("Price labels", "/price_labels"));
             stats_fields(tool, &mut f);
@@ -194,7 +313,7 @@ pub fn style_fields(tool: DrawingTool, props: &Props) -> Vec<Field> {
         }
         Props::VLine(_) => {
             f.push(Field::new("Line", "/line", Line));
-            f.push(Field::check("Extend through all panes", "/extend"));
+            f.push(Field::check("Extend", "/extend"));
             f.push(Field::check("Time label", "/time_label"));
         }
         Props::Cross(_) => {
@@ -203,20 +322,18 @@ pub fn style_fields(tool: DrawingTool, props: &Props) -> Vec<Field> {
             f.push(Field::check("Time label", "/time_label"));
         }
         Props::Channel(_) => {
-            f.push(Field::new("Line", "/line", Line));
+            // The 0 and 1 levels' pickers are the channel's line.
+            f.push(Field::new("Levels", "/levels", Levels));
+            f.push(Field::menu("Extend", "/extend", EXTEND_LINE, DONT_EXTEND));
             f.push(
                 Field::new("Background", "/background/color", Color).with_check("/background/on"),
             );
-            f.push(Field::check("Extend left", "/extend/left"));
-            f.push(Field::check("Extend right", "/extend/right"));
-            f.push(Field::section("Levels"));
-            f.push(Field::new("Levels", "/levels", Levels));
         }
         Props::Fib(_) => {
             f.push(Field::new("Trend line", "/trend_line", Line).with_check("/trend_line_on"));
             f.push(Field::new("Levels line", "/levels_line", WidthStyle));
-            f.push(Field::check("Extend left", "/extend/left"));
-            f.push(Field::check("Extend right", "/extend/right"));
+            f.push(Field::menu("Extend", "/extend", EXTEND_LINES, DONT_EXTEND));
+            f.push(Field::new("Levels", "/levels", Levels));
             f.push(
                 Field::new("Background", "/background_opacity", Percent)
                     .with_check("/background_on"),
@@ -226,21 +343,21 @@ pub fn style_fields(tool: DrawingTool, props: &Props) -> Vec<Field> {
             f.push(
                 Field::new("Levels", "/percents", Choice(LEVEL_LABELS)).with_check("/show_levels"),
             );
-            f.push(Field::new("Labels horizontal", "/label_h", Choice(H_ALIGN)));
-            f.push(Field::new("Labels vertical", "/label_v", Choice(V_ALIGN)));
+            f.push(Field::pair(
+                "Labels",
+                ("/label_h", H_ALIGN),
+                ("/label_v", V_ALIGN),
+            ));
             f.push(Field::new("Font size", "/font_size", FontSize));
             f.push(Field::check("Fib levels based on log scale", "/log_scale"));
-            f.push(Field::section("Levels"));
-            f.push(Field::new("Levels", "/levels", Levels));
         }
         Props::Shape(_) => {
+            f.push(Field::menu("Extend", "/extend", EXTEND_SIDES, DONT_EXTEND));
             f.push(Field::new("Border", "/border", Line));
+            f.push(Field::new("Middle line", "/middle_line", Line).with_check("/middle_line_on"));
             f.push(
                 Field::new("Background", "/background/color", Color).with_check("/background/on"),
             );
-            f.push(Field::new("Middle line", "/middle_line", Line).with_check("/middle_line_on"));
-            f.push(Field::check("Extend left", "/extend/left"));
-            f.push(Field::check("Extend right", "/extend/right"));
         }
         Props::Brush(_) => {
             f.push(Field::new("Line", "/line", Line));
@@ -305,25 +422,25 @@ pub fn style_fields(tool: DrawingTool, props: &Props) -> Vec<Field> {
         }
         Props::Range(_) => {
             f.push(Field::new("Line", "/line", Line));
-            f.push(Field::new("Border", "/border", Line).with_check("/border_on"));
+            if tool == DrawingTool::DateAndPriceRange {
+                f.push(Field::new("Border", "/border", Line).with_check("/border_on"));
+            }
             f.push(
                 Field::new("Background", "/background/color", Color).with_check("/background/on"),
             );
-            f.push(Field::new("Down color", "/down_color", Color));
             match tool {
                 DrawingTool::PriceRange => {
-                    f.push(Field::check("Extend left", "/extend/left"));
-                    f.push(Field::check("Extend right", "/extend/right"));
+                    f.push(Field::menu("Extend", "/extend", EXTEND_SIDES, DONT_EXTEND))
                 }
-                DrawingTool::DateRange => {
-                    // Extend's left / right are top / bottom here.
-                    f.push(Field::check("Extend top", "/extend/left"));
-                    f.push(Field::check("Extend bottom", "/extend/right"));
-                }
+                DrawingTool::DateRange => f.push(Field::menu(
+                    "Extend",
+                    "/extend",
+                    EXTEND_TOP_BOTTOM,
+                    DONT_EXTEND,
+                )),
                 _ => {}
             }
             stats_fields(tool, &mut f);
-            f.push(Field::section("Label"));
             f.push(Field::new("Label", "/label", TextStyle));
             f.push(
                 Field::new("Label background", "/label_background/color", Color)
@@ -334,43 +451,44 @@ pub fn style_fields(tool: DrawingTool, props: &Props) -> Vec<Field> {
     f
 }
 
-/// The Text tab's formatting fields (the text itself is the drawing's
-/// `text`). Empty: the family has no Text tab.
+/// The Text tab (empty: the tool has none): TradingView's `[color][size]
+/// [B][I]` bar, the text, then alignment.
 pub fn text_fields(tool: DrawingTool, props: &Props) -> Vec<Field> {
     use FieldKind::*;
     let mut f = Vec::new();
-    let layout = |f: &mut Vec<Field>| {
-        f.push(Field::new(
-            "Horizontal alignment",
-            "/text/h",
-            Choice(H_ALIGN),
+    let bar = |f: &mut Vec<Field>| {
+        f.push(Field::new("Text style", "/text_style", TextBar));
+        f.push(Field::new("Text", "", TextArea));
+    };
+    let align = |f: &mut Vec<Field>, v: &'static [(&'static str, &'static str)]| {
+        f.push(Field::pair(
+            "Text alignment",
+            ("/text/v", v),
+            ("/text/h", H_ALIGN),
         ));
-        f.push(Field::new("Vertical alignment", "/text/v", Choice(V_ALIGN)));
     };
     match props {
-        Props::Line(_) if tool == DrawingTool::TrendAngle => {
-            // The angle label's style (spec 3.5).
-            f.push(Field::new("Angle label", "/text_style", TextStyle));
-        }
-        Props::Line(_)
-        | Props::HLine(_)
-        | Props::Channel(_)
-        | Props::Shape(_)
-        | Props::Range(_) => {
-            f.push(Field::check("Show text", "/text/on"));
-            f.push(Field::new("Text style", "/text_style", TextStyle));
-            layout(&mut f);
+        // The angle label has no Text tab (TradingView).
+        Props::Line(_) if tool == DrawingTool::TrendAngle => {}
+        Props::Line(_) | Props::HLine(_) => {
+            bar(&mut f);
+            align(&mut f, V_ALIGN);
         }
         Props::VLine(_) => {
-            f.push(Field::check("Show text", "/text/on"));
-            f.push(Field::new("Text style", "/text_style", TextStyle));
-            layout(&mut f);
+            bar(&mut f);
+            align(&mut f, V_ALIGN);
             f.push(Field::new(
                 "Text orientation",
                 "/text/vertical",
                 Choice(ORIENTATION),
             ));
         }
+        Props::Channel(_) | Props::Shape(_) => {
+            bar(&mut f);
+            align(&mut f, V_ALIGN_INSIDE);
+        }
+        // Range text joins the label (no alignment).
+        Props::Range(_) => bar(&mut f),
         Props::TextBox(_) => f.push(Field::new("Text style", "/text_style", TextStyle)),
         Props::Cross(_) | Props::Fib(_) | Props::Brush(_) | Props::Path(_) | Props::Position(_) => {
         }
@@ -380,27 +498,46 @@ pub fn text_fields(tool: DrawingTool, props: &Props) -> Vec<Field> {
 
 /// Whether the Text tab has a text box (the drawing's own text).
 pub fn has_text_content(tool: DrawingTool, props: &Props) -> bool {
-    tool != DrawingTool::TrendAngle && !text_fields(tool, props).is_empty()
+    matches!(props, Props::TextBox(_))
+        || text_fields(tool, props)
+            .iter()
+            .any(|f| f.kind == FieldKind::TextArea)
 }
 
 /// Which layout the settings dialog uses for a tool.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DialogLayout {
-    /// The field list (every tool until it opts in).
+    /// The field list (tools not rolled out yet).
     Generic,
-    /// TradingView-measured (docs/specs/ui-guidelines.md §2.10): one line
-    /// picker per line, text bar / text / alignment row, price + bar
-    /// coordinates, visibility with ticks, ranges and range sliders.
+    /// TradingView-measured (docs/specs/ui-guidelines.md §2.10, per-tool
+    /// arrangement in docs/specs/drawings-tv-ref.md): line pickers, check
+    /// menus, text bar / text / alignment row, price + bar coordinates,
+    /// visibility with ticks, ranges and range sliders.
     Comfortable,
 }
 
-/// The dialog layout of `tool`. The horizontal ray is the reference; a
-/// tool opts in by returning `Comfortable` here (its generic fields keep
-/// working inside the new layout).
+/// The dialog layout of `tool`: every available tool uses TradingView's.
 pub fn dialog_layout(tool: DrawingTool) -> DialogLayout {
+    if tool.is_available() {
+        DialogLayout::Comfortable
+    } else {
+        DialogLayout::Generic
+    }
+}
+
+/// The floating toolbar's style buttons of `tool` (TradingView shows no
+/// style button on channels, Fibs and ranges, and no text color on the
+/// trend angle).
+pub fn toolbar_caps(tool: DrawingTool, props: &Props) -> Caps {
+    use DrawingTool::*;
+    let caps = props.capabilities();
     match tool {
-        DrawingTool::HorizontalRay | DrawingTool::HorizontalLine => DialogLayout::Comfortable,
-        _ => DialogLayout::Generic,
+        TrendAngle => Caps::LINE,
+        ParallelChannel | PriceRange | DateRange | DateAndPriceRange => {
+            Caps::LINE_COLOR | Caps::LINE_WIDTH | (caps & (Caps::FILL | Caps::TEXT))
+        }
+        FibRetracement | FibExtension => Caps::LINE_COLOR | Caps::LINE_WIDTH,
+        _ => caps,
     }
 }
 
@@ -543,6 +680,41 @@ pub mod level {
         *l != before
     }
 
+    /// A channel's 0 and 1 levels are its own two lines (no checkbox;
+    /// their line is the channel's).
+    pub fn is_main(props: &Props, i: usize) -> bool {
+        matches!(props, Props::Channel(p) if p.levels.get(i).is_some_and(|l| l.coeff == 0.0 || l.coeff == 1.0))
+    }
+
+    /// A channel level's line (its own, or the channel's).
+    pub fn stroke(props: &Props, i: usize) -> Option<Stroke> {
+        match props {
+            Props::Channel(p) => p.levels.get(i).map(|l| l.stroke.unwrap_or(p.line)),
+            _ => None,
+        }
+    }
+
+    /// Sets a channel level's line; the main levels set the channel's
+    /// line (both lines follow it).
+    pub fn set_stroke(props: &mut Props, i: usize, s: Stroke) -> bool {
+        let main = is_main(props, i);
+        let Props::Channel(p) = props else {
+            return false;
+        };
+        let Some(l) = p.levels.get_mut(i) else {
+            return false;
+        };
+        let before = (p.line, *l);
+        if main {
+            p.line = s;
+            l.stroke = None;
+        } else {
+            l.stroke = Some(s);
+        }
+        l.color = s.color;
+        (p.line, p.levels[i]) != before
+    }
+
     /// "Use one color": every level in `c`.
     pub fn set_all_colors(props: &mut Props, c: Rgba) -> bool {
         let n = levels(props).len();
@@ -562,6 +734,43 @@ pub fn coordinate_parts(tool: DrawingTool, k: usize) -> (bool, bool) {
         HorizontalLine => (false, true),
         VerticalLine => (true, false),
         _ => (true, true),
+    }
+}
+
+/// How many `#k (price, bar)` rows the comfortable Coordinates tab shows:
+/// a parallel channel shows its first two points and then "Price offset"
+/// (its third point).
+pub fn coordinate_rows(tool: DrawingTool, points: usize) -> usize {
+    if tool == DrawingTool::ParallelChannel {
+        points.min(2)
+    } else {
+        points
+    }
+}
+
+/// The channel's "Price offset": the third point's price minus line 0's
+/// price at its bar (`bars`: the three points' bar numbers).
+pub fn channel_offset(points: &[Anchor], bars: [f64; 3]) -> Option<f64> {
+    let (a, b, c) = (points.first()?, points.get(1)?, points.get(2)?);
+    Some(c.price - line_price(a.price, b.price, bars))
+}
+
+/// Moves the channel's third point to `offset` from line 0 (its bar
+/// stays).
+pub fn set_channel_offset(points: &mut [Anchor], bars: [f64; 3], offset: f64) -> bool {
+    if points.len() < 3 || !offset.is_finite() {
+        return false;
+    }
+    let p = line_price(points[0].price, points[1].price, bars) + offset;
+    set_point(points, 2, None, Some(p))
+}
+
+fn line_price(a: f64, b: f64, bars: [f64; 3]) -> f64 {
+    let span = bars[1] - bars[0];
+    if span.abs() < f64::EPSILON {
+        a
+    } else {
+        a + (b - a) * (bars[2] - bars[0]) / span
     }
 }
 

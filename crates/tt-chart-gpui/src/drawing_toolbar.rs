@@ -16,6 +16,7 @@ use crate::chart::{Chart, ChartEvent, ChartSource};
 use crate::drawing_prefs::{DrawingPrefs, TemplateTarget, template_menu};
 use gpui_kit::*;
 use std::rc::Rc;
+use tt_chart::drawings::form;
 use tt_chart::{Caps, Drawing, LineStyle, Props, Rgba, VisibilityPreset, VisualOrder};
 use tt_ui::prelude::*;
 use tt_ui::tokens::*;
@@ -228,9 +229,12 @@ impl<S: ChartSource> Chart<S> {
         let plot = layout.plot;
         let this = cx.entity().downgrade();
 
-        let caps = drawings.iter().fold(primary.props.capabilities(), |c, d| {
-            c & d.props.capabilities()
-        });
+        // TradingView's buttons per tool (docs/specs/drawings-tv-ref.md).
+        let caps = drawings
+            .iter()
+            .fold(form::toolbar_caps(primary.tool, &primary.props), |c, d| {
+                c & form::toolbar_caps(d.tool, &d.props)
+            });
         let same_tool = drawings.iter().all(|d| d.tool == primary.tool);
         let p = &primary.props;
 
