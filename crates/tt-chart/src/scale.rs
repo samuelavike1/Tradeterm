@@ -1,6 +1,7 @@
 //! Axis tick selection and label formatting. Backend agnostic.
 
 use crate::ScaleMode;
+use crate::style::{DateFormat, HoursFormat};
 use crate::viewport::Viewport;
 
 /// A "nice" step (1, 2 or 5 × 10ⁿ) that splits `span` into roughly `target` intervals.
@@ -265,6 +266,106 @@ pub fn format_full_time(ms: i64, bar_interval_ms: i64) -> String {
     }
 }
 
+/// How dates and times are written (Scales and lines › Time scale): one
+/// value per frame, passed to the label formatters. The time zone (slice S9)
+/// plugs in here too, so every label path takes one options struct.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TimeFormat {
+    pub date: DateFormat,
+    pub hours: HoursFormat,
+    /// Weekday before the date ("Fri 20 Nov '26").
+    pub day_of_week: bool,
+}
+
+impl Default for TimeFormat {
+    fn default() -> Self {
+        Self {
+            date: DateFormat::DayMonYy,
+            hours: HoursFormat::H24,
+            day_of_week: true,
+        }
+    }
+}
+
+impl TimeFormat {
+    pub fn from_style(s: &crate::style::ScalesStyle) -> Self {
+        Self {
+            date: s.date_format,
+            hours: s.hours_format,
+            day_of_week: s.day_of_week,
+        }
+    }
+}
+
+/// The date of `ms` in `fmt` ("Fri 20 Nov '26", "2026-11-20", …).
+pub fn format_date(ms: i64, fmt: TimeFormat) -> String {
+    use std::fmt::Write as _;
+    let dt = DateTime::from_unix_ms(ms);
+    let (d, m, y, yy) = (dt.day, dt.month, dt.year, dt.year.rem_euclid(100));
+    let mon = dt.month_name();
+    let mut out = String::with_capacity(20);
+    if fmt.day_of_week {
+        out.push_str(DateTime::weekday_name(ms));
+        out.push(' ');
+    }
+    let _ = match fmt.date {
+        DateFormat::DayMonYy => write!(out, "{d} {mon} '{yy:02}"),
+        DateFormat::MonDdYyyy => write!(out, "{mon} {d:02}, {y}"),
+        DateFormat::DdMonYyyy => write!(out, "{d:02} {mon} {y}"),
+        DateFormat::Iso => write!(out, "{y}-{m:02}-{d:02}"),
+        DateFormat::YyMmDd => write!(out, "{yy:02}-{m:02}-{d:02}"),
+        DateFormat::YyyySlash => write!(out, "{y}/{m:02}/{d:02}"),
+        DateFormat::DdMmYyyyDot => write!(out, "{d:02}.{m:02}.{y}"),
+        DateFormat::DdMmYyDot => write!(out, "{d:02}.{m:02}.{yy:02}"),
+        DateFormat::DdMmYyyySlash => write!(out, "{d:02}/{m:02}/{y}"),
+        DateFormat::DdMmYySlash => write!(out, "{d:02}/{m:02}/{yy:02}"),
+        DateFormat::MmDdYyyySlash => write!(out, "{m:02}/{d:02}/{y}"),
+        DateFormat::MmDdYySlash => write!(out, "{m:02}/{d:02}/{yy:02}"),
+        DateFormat::DdMmYyyyDash => write!(out, "{d:02}-{m:02}-{y}"),
+    };
+    out
+}
+
+/// Clock time of `ms`: `14:05` (24 h) or `2:05 PM` (12 h).
+pub fn format_time(ms: i64, hours: HoursFormat) -> String {
+    let dt = DateTime::from_unix_ms(ms);
+    match hours {
+        HoursFormat::H24 => format!("{:02}:{:02}", dt.hour, dt.minute),
+        HoursFormat::H12 => {
+            let (h, ampm) = hour12(dt.hour);
+            format!("{h}:{:02} {ampm}", dt.minute)
+        }
+    }
+}
+
+/// Time-axis tick label: like [`format_time`], but 12 h ticks on the hour
+/// drop the minutes (`3 PM`), as TradingView does.
+pub fn format_tick_time(ms: i64, hours: HoursFormat) -> String {
+    let dt = DateTime::from_unix_ms(ms);
+    match hours {
+        HoursFormat::H12 if dt.minute == 0 => {
+            let (h, ampm) = hour12(dt.hour);
+            format!("{h} {ampm}")
+        }
+        _ => format_time(ms, hours),
+    }
+}
+
+fn hour12(h: u32) -> (u32, &'static str) {
+    let ampm = if h < 12 { "AM" } else { "PM" };
+    (if h.is_multiple_of(12) { 12 } else { h % 12 }, ampm)
+}
+
+/// Crosshair label in `fmt`: the date, plus the time below daily bars.
+pub fn format_full_time_with(ms: i64, bar_interval_ms: i64, fmt: TimeFormat) -> String {
+    let mut date = format_date(ms, fmt);
+    if bar_interval_ms < DAY_MS {
+        date.push_str("  ");
+        date.push_str(&format_time(ms, fmt.hours));
+    }
+    date
+}
+
 /// Time left until a bar closes: `mm:ss`, or `hh:mm:ss` from one hour up,
 /// or `Nd hh:mm` beyond a day.
 pub fn format_countdown(remaining_ms: i64) -> String {
@@ -410,5 +511,66 @@ mod tests {
         assert_eq!(DateTime::weekday_name(0), "Thu");
         assert_eq!(DateTime::from_unix_ms(0).year, 1970);
         assert_eq!(DateTime::from_unix_ms(-1).year, 1969);
+    }
+
+    #[test]
+    fn date_and_hour_formats() {
+        let ms = 1_795_183_500_000; // Fri 2026-11-20 14:05 UTC
+        let f = TimeFormat::default();
+        assert_eq!(
+            format_full_time_with(ms, MINUTE_MS, f),
+            format_full_time(ms, MINUTE_MS),
+            "the default is today's crosshair format"
+        );
+        let no_wd = TimeFormat {
+            day_of_week: false,
+            ..f
+        };
+        let cases = [
+            (DateFormat::DayMonYy, "20 Nov '26"),
+            (DateFormat::MonDdYyyy, "Nov 20, 2026"),
+            (DateFormat::DdMonYyyy, "20 Nov 2026"),
+            (DateFormat::Iso, "2026-11-20"),
+            (DateFormat::YyMmDd, "26-11-20"),
+            (DateFormat::YyyySlash, "2026/11/20"),
+            (DateFormat::DdMmYyyyDot, "20.11.2026"),
+            (DateFormat::DdMmYyDot, "20.11.26"),
+            (DateFormat::DdMmYyyySlash, "20/11/2026"),
+            (DateFormat::DdMmYySlash, "20/11/26"),
+            (DateFormat::MmDdYyyySlash, "11/20/2026"),
+            (DateFormat::MmDdYySlash, "11/20/26"),
+            (DateFormat::DdMmYyyyDash, "20-11-2026"),
+        ];
+        assert_eq!(cases.len(), DateFormat::ALL.len());
+        for (date, want) in cases {
+            assert_eq!(format_date(ms, TimeFormat { date, ..no_wd }), want);
+        }
+        assert_eq!(
+            format_date(
+                ms,
+                TimeFormat {
+                    date: DateFormat::Iso,
+                    ..f
+                }
+            ),
+            "Fri 2026-11-20"
+        );
+        let h12 = TimeFormat {
+            hours: HoursFormat::H12,
+            ..f
+        };
+        assert_eq!(
+            format_full_time_with(ms, MINUTE_MS, h12),
+            "Fri 20 Nov '26  2:05 PM"
+        );
+        assert_eq!(format_full_time_with(ms, DAY_MS, h12), "Fri 20 Nov '26");
+        assert_eq!(format_time(0, HoursFormat::H12), "12:00 AM");
+        assert_eq!(format_time(12 * HOUR_MS, HoursFormat::H12), "12:00 PM");
+        assert_eq!(format_tick_time(15 * HOUR_MS, HoursFormat::H12), "3 PM");
+        assert_eq!(
+            format_tick_time(15 * HOUR_MS + 30 * MINUTE_MS, HoursFormat::H12),
+            "3:30 PM"
+        );
+        assert_eq!(format_tick_time(15 * HOUR_MS, HoursFormat::H24), "15:00");
     }
 }

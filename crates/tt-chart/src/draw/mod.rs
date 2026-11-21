@@ -3,8 +3,12 @@
 use crate::bars::{DrawBar, max_volume};
 use crate::indicators::Indicator;
 use crate::render::Canvas;
-use crate::scale::{self, format_countdown, format_full_time, format_percent, format_price};
-use crate::style::LineKind;
+use crate::scale::{
+    self, TimeFormat, format_countdown, format_full_time_with, format_percent, format_price,
+};
+use crate::style::{
+    BackgroundKind, HoursFormat, LastValueMode, LineKind, LineLabel, Visibility3, resolve,
+};
 use crate::time_axis;
 use crate::viewport::Viewport;
 use crate::{ChartStyle, ChartType, ScaleMode};
@@ -57,6 +61,12 @@ pub(crate) struct Scene<'a> {
     pub projection_from: Option<usize>,
     /// Last *real* candle, for the last-price line.
     pub last_raw: Option<Candle>,
+    /// The raw series (previous day close).
+    pub raw: &'a CandleSeries,
+    /// Ticker, currency and description (name labels, watermark).
+    pub labels: &'a crate::view::SymbolLabels,
+    /// Date and hours format of time labels.
+    pub time_fmt: TimeFormat,
     pub bars: &'a [DrawBar],
     /// `true` when bars are per-pixel-column aggregates.
     pub decimated: bool,
@@ -129,8 +139,14 @@ pub(crate) fn draw(c: &mut dyn Canvas, s: &Scene<'_>) -> Vec<LegendHit> {
 /// the overlay while the mouse moves, like TradingView's paired canvases.
 pub(crate) fn draw_base(c: &mut dyn Canvas, s: &Scene<'_>) {
     let t = s.theme;
+    let cv = &s.style.canvas;
     c.set_clip(s.full);
-    c.fill_rect(s.full, t.bg);
+    match cv.background_kind {
+        BackgroundKind::Solid => c.fill_rect(s.full, t.bg),
+        BackgroundKind::Gradient => {
+            c.fill_rect_gradient(s.full, t.bg, resolve(cv.background_bottom, t.bg))
+        }
+    }
 
     if s.display.is_empty() {
         c.text(
@@ -145,12 +161,18 @@ pub(crate) fn draw_base(c: &mut dyn Canvas, s: &Scene<'_>) {
 
     let price_ticks = price_ticks(s);
     let time_ticks = time_ticks(c, s);
+    // Previous day close, visible high / low and average close: (value,
+    // style, axis label prefix). Computed once per frame, only when on.
+    let marks = price_marks(s);
 
     let pane_ticks: Vec<Vec<(f32, String)>> = s.panes.iter().map(|p| pane_ticks(s, p)).collect();
 
+    if cv.watermark.visible && !s.main_collapsed {
+        watermark(c, s);
+    }
+
     // Grid: one line per price label and per time label, like TradingView.
     let ppp = c.pixels_per_point();
-    let cv = &s.style.canvas;
     let grid_h = (s.style.grid_color(t, false), cv.grid_h_kind);
     let grid_v = (s.style.grid_color(t, true), cv.grid_v_kind);
     if cv.grid_lines.horizontal() {
@@ -199,6 +221,9 @@ pub(crate) fn draw_base(c: &mut dyn Canvas, s: &Scene<'_>) {
             }
         }
         last_price_line(c, s);
+        for (value, ll, _, color) in &marks {
+            mark_line(c, s, *value, ll, *color);
+        }
         crate::drawings::draw_base(c, s);
     }
     for pane in &s.panes {
@@ -210,13 +235,38 @@ pub(crate) fn draw_base(c: &mut dyn Canvas, s: &Scene<'_>) {
     }
     // Pane dividers across plot and price axis.
     c.set_clip(s.full);
+    let separator = resolve(cv.separators, t.border);
     for pane in &s.panes {
         let y = crisp(pane.rect().top(), ppp) - 0.5 / ppp;
         c.line(
             pos2(s.full.left(), y),
             pos2(s.full.right(), y),
             1.0 / ppp,
-            t.border,
+            separator,
+        );
+    }
+    // Scale lines (Canvas › Scales › Lines): only when picked, so the
+    // default look (no axis borders) stays.
+    if let Some(lines) = cv.scale_lines {
+        let col = lines.to_color32();
+        let x = if s.price_axis.left() >= s.plot.right() {
+            s.price_axis.left()
+        } else {
+            s.price_axis.right()
+        };
+        let x = crisp(x, ppp) - 0.5 / ppp;
+        c.line(
+            pos2(x, s.full.top()),
+            pos2(x, s.time_axis.top()),
+            1.0 / ppp,
+            col,
+        );
+        let y = crisp(s.time_axis.top(), ppp) - 0.5 / ppp;
+        c.line(
+            pos2(s.full.left(), y),
+            pos2(s.full.right(), y),
+            1.0 / ppp,
+            col,
         );
     }
 
@@ -224,13 +274,26 @@ pub(crate) fn draw_base(c: &mut dyn Canvas, s: &Scene<'_>) {
     // be hidden. (The crosshair's tags are opaque and drawn by the overlay.)
     c.set_clip(s.full);
     // Axis tags per pane (0 = price pane), spread so they don't overlap.
-    let mut grouped = if s.style.scales.indicators.shows_value() {
+    let ind_mode = s.style.scales.indicators;
+    let mut grouped = if ind_mode.shows_value() || ind_mode.shows_name() {
         study_tags(s)
     } else {
         Vec::new()
     };
     if let Some(tag) = last_price_tag(c, s) {
         grouped.push((0, tag));
+    }
+    for (value, ll, label, color) in &marks {
+        if ll.label && !s.main_collapsed {
+            let y = crisp(s.vp.y_of(*value), ppp);
+            if y >= s.plot.top() && y <= s.vp.plot.bottom {
+                let mut lines = vec![axis_value_label(s, *value)];
+                if let Some(l) = label {
+                    lines[0] = format!("{l} {}", lines[0]);
+                }
+                grouped.push((0, price_axis_tag(s, y, lines, *color)));
+            }
+        }
     }
     // Collapsed panes show no tags.
     grouped.retain(|(pane, _)| match pane {
@@ -266,12 +329,176 @@ pub(crate) fn draw_base(c: &mut dyn Canvas, s: &Scene<'_>) {
         price_labels(c, s, ticks, &tags, (r.top(), r.bottom()));
     }
     time_labels(c, s, &time_ticks, None);
+    if s.style.scales.currency_label == Visibility3::Always && !s.main_collapsed {
+        currency_label(c, s);
+    }
     for tag in &tags {
         draw_tag(c, s, tag);
     }
     for tag in crate::drawings::axis_tags(s) {
         draw_tag(c, s, &tag);
     }
+}
+
+/// A price mark: price, style, axis label prefix and color.
+type Mark = (f64, LineLabel, Option<&'static str>, Color32);
+
+/// Previous day close, visible high / low and average close lines and
+/// labels that are switched on: (price, style, label prefix).
+fn price_marks(s: &Scene<'_>) -> Vec<Mark> {
+    let sc = &s.style.scales;
+    let muted = s.theme.text_muted;
+    let on = |l: &LineLabel| l.label || l.line;
+    let mut out = Vec::new();
+    if on(&sc.prev_close)
+        && let Some(v) = prev_day_close(s.raw.open_times(), s.raw.closes(), s.bar_interval_ms)
+    {
+        out.push((
+            v,
+            sc.prev_close,
+            None,
+            resolve(sc.prev_close.color, PREV_CLOSE_COLOR),
+        ));
+    }
+    if on(&sc.high_low)
+        && let Some((lo, hi)) = visible_high_low(s.bars)
+    {
+        let col = resolve(sc.high_low.color, muted);
+        out.push((hi, sc.high_low, Some("H"), col));
+        out.push((lo, sc.high_low, Some("L"), col));
+    }
+    if on(&sc.avg_close)
+        && let Some(v) = average(s.display.closes().get(s.range.clone()).unwrap_or(&[]))
+    {
+        out.push((v, sc.avg_close, None, resolve(sc.avg_close.color, muted)));
+    }
+    out
+}
+
+/// TradingView's previous-close line color.
+const PREV_CLOSE_COLOR: Color32 = Color32::from_rgb(0x55, 0x55, 0x55);
+
+/// A dashed horizontal price line across the price pane.
+fn mark_line(c: &mut dyn Canvas, s: &Scene<'_>, value: f64, ll: &LineLabel, color: Color32) {
+    if !ll.line {
+        return;
+    }
+    let ppp = c.pixels_per_point();
+    let y = crisp(s.vp.y_of(value), ppp);
+    if y < s.plot.top() || y > s.vp.plot.bottom {
+        return;
+    }
+    stroke_kind(
+        c,
+        pos2(s.plot.left(), y),
+        pos2(s.plot.right(), y),
+        ll.width.max(1.0 / ppp),
+        color,
+        LineKind::Dashed,
+    );
+}
+
+/// Close of the previous (UTC) day: the last bar before the last bar's
+/// day began; on daily and longer bars, the previous bar's close.
+pub(crate) fn prev_day_close(times: &[i64], closes: &[f64], interval_ms: i64) -> Option<f64> {
+    let last = *times.last()?;
+    let k = if interval_ms >= scale::DAY_MS {
+        times.len().checked_sub(1)?
+    } else {
+        let day_start = last.div_euclid(scale::DAY_MS) * scale::DAY_MS;
+        times.partition_point(|t| *t < day_start)
+    };
+    closes.get(k.checked_sub(1)?).copied()
+}
+
+/// Highest high and lowest low of the drawn bars (or columns).
+pub(crate) fn visible_high_low(bars: &[DrawBar]) -> Option<(f64, f64)> {
+    let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+    for b in bars {
+        if b.low.is_finite() && b.high.is_finite() {
+            lo = lo.min(b.low);
+            hi = hi.max(b.high);
+        }
+    }
+    (lo <= hi).then_some((lo, hi))
+}
+
+/// Mean of the finite values.
+pub(crate) fn average(values: &[f64]) -> Option<f64> {
+    let (mut sum, mut n) = (0.0, 0usize);
+    for v in values.iter().filter(|v| v.is_finite()) {
+        sum += v;
+        n += 1;
+    }
+    (n > 0).then(|| sum / n as f64)
+}
+
+/// A straight line in a settings line kind (dash lengths follow the width).
+fn stroke_kind(c: &mut dyn Canvas, a: Pos2, b: Pos2, width: f32, color: Color32, kind: LineKind) {
+    let w = width.max(0.5);
+    match kind {
+        LineKind::Solid => c.line(a, b, width, color),
+        LineKind::Dashed => c.dashed_line(a, b, width, color, 4.0 * w, 4.0 * w),
+        LineKind::Dotted => c.dashed_line(a, b, width, color, w, 2.0 * w),
+    }
+}
+
+/// The watermark: ticker and interval large in the middle of the price
+/// pane, the description below.
+fn watermark(c: &mut dyn Canvas, s: &Scene<'_>) {
+    let wm = &s.style.canvas.watermark;
+    let color = resolve(wm.color, tt_theme::with_alpha(s.theme.text, 0.06));
+    let r = s.vp_rect();
+    let big = (r.height() / 6.0).clamp(18.0, 72.0);
+    let small = (big * 0.4).max(12.0);
+    let first = wm.ticker_interval && !s.labels.ticker_interval.is_empty();
+    let second = wm.description && !s.labels.description.is_empty();
+    let h = if first { big } else { 0.0 } + if second { small + 4.0 } else { 0.0 };
+    let mut y = r.center().y - h / 2.0;
+    c.set_clip(r);
+    if first {
+        c.text_styled(
+            pos2(r.center().x, y + big / 2.0),
+            Align2::CENTER_CENTER,
+            &s.labels.ticker_interval,
+            big,
+            color,
+            true,
+        );
+        y += big + 4.0;
+    }
+    if second {
+        c.text(
+            pos2(r.center().x, y + small / 2.0),
+            Align2::CENTER_CENTER,
+            &s.labels.description,
+            small,
+            color,
+        );
+    }
+    c.set_clip(s.full);
+}
+
+/// The currency and unit label ("USDT") at the top of the price axis.
+fn currency_label(c: &mut dyn Canvas, s: &Scene<'_>) {
+    let text = s.labels.currency.as_str();
+    if text.is_empty() {
+        return;
+    }
+    let size = s.style.scales.text_size;
+    let h = size + 6.0;
+    let rect = Rect::from_min_max(
+        pos2(s.price_axis.left() + 1.0, s.plot.top() + 2.0),
+        pos2(s.price_axis.right() - 1.0, s.plot.top() + 2.0 + h),
+    );
+    c.fill_rect(rect, s.theme.bg);
+    c.text(
+        pos2(s.price_axis.left() + 8.0, rect.center().y),
+        Align2::LEFT_CENTER,
+        text,
+        size,
+        s.theme.text_muted,
+    );
 }
 
 /// The pointer layer, drawn over [`draw_base`]: crosshair lines and their
@@ -289,6 +516,12 @@ pub(crate) fn draw_overlay(c: &mut dyn Canvas, s: &Scene<'_>) -> Vec<LegendHit> 
     c.set_clip(s.full);
     let hovered_slot = s.crosshair.map(|p| s.vp.slot_at(p.x));
     let hovered = s.crosshair.and_then(|p| s.vp.bar_at(p.x));
+    if s.crosshair.is_some()
+        && s.style.scales.currency_label == Visibility3::OnHover
+        && !s.main_collapsed
+    {
+        currency_label(c, s);
+    }
     if let Some(p) = s.crosshair {
         let (price_tag, time_tag) = crosshair(c, s, p, hovered_slot);
         draw_tag(c, s, &price_tag);
@@ -356,12 +589,12 @@ fn pane_ticks(s: &Scene<'_>, pane: &Pane) -> Vec<(f32, String)> {
         .collect()
 }
 
-/// One grid line: dotted (1 px on, 3 px off) or solid, per the style.
+/// One grid line: solid, dashed or dotted (1 px on, 3 px off), per the style.
 fn grid_line(c: &mut dyn Canvas, (color, kind): (Color32, LineKind), a: Pos2, b: Pos2) {
-    if kind == LineKind::Solid {
-        c.line(a, b, 1.0, color);
-    } else {
-        c.dotted_line(a, b, color);
+    match kind {
+        LineKind::Solid => c.line(a, b, 1.0, color),
+        LineKind::Dashed => c.dashed_line(a, b, 1.0, color, 4.0, 3.0),
+        LineKind::Dotted => c.dotted_line(a, b, color),
     }
 }
 
@@ -385,15 +618,34 @@ fn time_ticks(c: &mut dyn Canvas, s: &Scene<'_>) -> Vec<time_axis::TimeTick> {
     let typical = c.text_size("00:00", size).x;
     let gap = (s.style.time_label_spacing - typical).max(16.0);
     let slots = time_axis::SlotTimes::new(s.display.open_times(), s.bar_interval_ms);
-    time_axis::time_ticks(
+    let hours = s.time_fmt.hours;
+    // 12-hour clock: wider labels, so ticks are placed with their width.
+    let mut ticks = time_axis::time_ticks(
         &slots,
         vp.visible_slots(),
         (s.plot.left(), s.plot.right()),
         stride,
         gap,
         |i| crisp(vp.x_of(i as f32), ppp),
-        |text| c.text_size_styled(text, size, true).x,
-    )
+        |text| {
+            let w = c.text_size_styled(text, size, true).x;
+            if hours == HoursFormat::H12 && text.contains(':') {
+                w * 1.6
+            } else {
+                w
+            }
+        },
+    );
+    if hours == HoursFormat::H12 {
+        for t in &mut ticks {
+            if t.weight < time_axis::TickWeight::Day
+                && let Some(ms) = slots.time_at(t.index)
+            {
+                t.label = scale::format_tick_time(ms, hours);
+            }
+        }
+    }
+    ticks
 }
 
 /// Moves overlapping axis tags apart (keeping their order) within
@@ -420,13 +672,46 @@ fn spread_tags(tags: &mut [Tag], top: f32, bottom: f32) {
 #[derive(Clone)]
 pub(crate) struct Tag {
     rect: Rect,
+    /// Value lines; empty for a name-only label.
     lines: Vec<String>,
     bg: Color32,
     /// Text aligned with the price labels (price axis) vs. centered (time axis).
     on_price_axis: bool,
+    /// Name label ("BTCUSDT", "RSI") drawn in a box beside the price axis,
+    /// on the plot side, at the tag's height.
+    name: Option<&'static str>,
+    /// `name` is the symbol's ticker (owned by the scene's labels).
+    ticker: bool,
 }
 
 pub(crate) fn draw_tag(c: &mut dyn Canvas, s: &Scene<'_>, tag: &Tag) {
+    let name = if tag.ticker {
+        Some(s.labels.ticker.as_str()).filter(|t| !t.is_empty())
+    } else {
+        tag.name
+    };
+    if let Some(name) = name {
+        let size = s.style.scales.text_size;
+        let w = c.text_size(name, size).x + 12.0;
+        let left_axis = s.price_axis.right() <= s.plot.left();
+        let (l, r) = if left_axis {
+            (s.price_axis.right() + 1.0, s.price_axis.right() + 1.0 + w)
+        } else {
+            (s.price_axis.left() - 1.0 - w, s.price_axis.left() - 1.0)
+        };
+        let rect = Rect::from_x_y_ranges(l..=r, tag.rect.y_range());
+        c.fill_rounded_rect(rect, tt_theme::metrics::R_XS, tag.bg);
+        c.text(
+            rect.center(),
+            Align2::CENTER_CENTER,
+            name,
+            size,
+            s.theme.text_on_accent,
+        );
+    }
+    if tag.lines.is_empty() {
+        return;
+    }
     c.fill_rounded_rect(tag.rect, tt_theme::metrics::R_XS, tag.bg);
     let line_h = s.style.scales.text_size + 3.0;
     let top = tag.rect.center().y - line_h * tag.lines.len() as f32 / 2.0;
@@ -461,6 +746,8 @@ pub(crate) fn price_axis_tag(s: &Scene<'_>, y: f32, lines: Vec<String>, bg: Colo
         lines,
         bg,
         on_price_axis: true,
+        name: None,
+        ticker: false,
     }
 }
 
@@ -480,7 +767,7 @@ fn price_labels(
         // Hidden under the last-price / crosshair tags, as on TradingView.
         if tags
             .iter()
-            .any(|t| *y + half > t.rect.top() && *y - half < t.rect.bottom())
+            .any(|t| !t.lines.is_empty() && *y + half > t.rect.top() && *y - half < t.rect.bottom())
         {
             continue;
         }
@@ -531,32 +818,38 @@ fn axis_value_label(s: &Scene<'_>, price: f64) -> String {
     }
 }
 
-/// Dotted last-price line across the plot in the last candle's color.
+/// Dotted last-price line across the plot: the picked color and width, or
+/// the last candle's color at 1 px.
 fn last_price_line(c: &mut dyn Canvas, s: &Scene<'_>) {
-    if !s.style.scales.symbol_label.shows_line() {
+    let sc = &s.style.scales;
+    if !sc.symbol_label.shows_line() {
         return;
     }
     let Some(last) = s.last_raw else { return };
-    let (color, _) = s.colors(last.is_bullish());
+    let (bar, _) = s.colors(last.is_bullish());
+    let color = resolve(sc.price_line_color, bar);
     let ppp = c.pixels_per_point();
     let y = crisp(s.vp.y_of(last.close), ppp);
     if y < s.plot.top() || y > s.vp.plot.bottom {
         return;
     }
-    let px = 1.0 / ppp;
+    // Width 1 = one physical pixel (the default look).
+    let w = sc.price_line_width.max(1.0) / ppp;
     c.dashed_line(
         pos2(s.plot.left(), y),
         pos2(s.plot.right(), y),
-        px,
+        w,
         color,
-        px,
-        2.0 * px,
+        w,
+        2.0 * w,
     );
 }
 
 /// Last-price tag: price plus the time left until the bar closes.
 fn last_price_tag(c: &mut dyn Canvas, s: &Scene<'_>) -> Option<Tag> {
-    if !s.style.scales.symbol_label.shows_value() {
+    let sc = &s.style.scales;
+    let (value, name) = (sc.symbol_label.shows_value(), sc.symbol_label.shows_name());
+    if !value && !name {
         return None;
     }
     let last = s.last_raw?;
@@ -565,40 +858,54 @@ fn last_price_tag(c: &mut dyn Canvas, s: &Scene<'_>) -> Option<Tag> {
     if y < s.plot.top() || y > s.vp.plot.bottom {
         return None;
     }
+    if !value {
+        let mut tag = price_axis_tag(s, y, Vec::new(), color);
+        tag.ticker = true;
+        return Some(tag);
+    }
     let mut lines = vec![axis_value_label(s, last.close)];
-    if let (true, Some(now), Some(close)) = (s.style.scales.countdown, s.now_ms, s.bar_close_ms) {
+    if sc.symbol_value_mode == LastValueMode::PriceAndPercent
+        && let Some(base) = prev_day_close(s.raw.open_times(), s.raw.closes(), s.bar_interval_ms)
+        && base != 0.0
+    {
+        lines.push(format_percent((last.close / base - 1.0) * 100.0));
+    }
+    if let (true, Some(now), Some(close)) = (sc.countdown, s.now_ms, s.bar_close_ms) {
         // Hidden once the bar should have closed (e.g. market closed / stale).
         let remaining = close - now;
         if remaining > 0 && close - last.open_time_ms >= remaining {
             lines.push(format_countdown(remaining));
         }
     }
-    Some(price_axis_tag(s, y, lines, color))
+    let mut tag = price_axis_tag(s, y, lines, color);
+    tag.ticker = name;
+    Some(tag)
 }
 
 /// Draws crosshair lines; returns its price-axis tag and time-axis tag.
 fn crosshair(c: &mut dyn Canvas, s: &Scene<'_>, p: Pos2, slot: Option<i64>) -> (Tag, Option<Tag>) {
     let ppp = c.pixels_per_point();
-    let col = s.theme.crosshair;
+    let cv = &s.style.canvas;
+    let (col, width, kind) = (s.theme.crosshair, cv.crosshair_width, cv.crosshair_kind);
     // Snap the vertical line to the hovered bar's center.
     let x = crisp(slot.map_or(p.x, |i| s.vp.x_of(i as f32)), ppp);
     let y = crisp(p.y, ppp);
     c.set_clip(s.plot);
-    c.dashed_line(
+    stroke_kind(
+        c,
         pos2(x, s.plot.top()),
         pos2(x, s.plot.bottom()),
-        1.0,
+        width,
         col,
-        4.0,
-        4.0,
+        kind,
     );
-    c.dashed_line(
+    stroke_kind(
+        c,
         pos2(s.plot.left(), y),
         pos2(s.plot.right(), y),
-        1.0,
+        width,
         col,
-        4.0,
-        4.0,
+        kind,
     );
     c.set_clip(s.full);
 
@@ -611,12 +918,7 @@ fn crosshair(c: &mut dyn Canvas, s: &Scene<'_>, p: Pos2, slot: Option<i64>) -> (
 
     let slots = time_axis::SlotTimes::new(s.display.open_times(), s.bar_interval_ms);
     let time_tag = slot.and_then(|i| slots.time_at(i)).map(|t| {
-        let mut text = format_full_time(t, s.bar_interval_ms);
-        if !s.style.scales.day_of_week
-            && let Some((_, rest)) = text.split_once(' ')
-        {
-            text = rest.to_owned();
-        }
+        let text = format_full_time_with(t, s.bar_interval_ms, s.time_fmt);
         let size = c.text_size(&text, s.style.scales.text_size) + vec2(16.0, 8.0);
         let mut rect = Align2::CENTER_CENTER.anchor_size(pos2(x, s.time_axis.center().y), size);
         // Keep it inside the time axis.
@@ -627,6 +929,8 @@ fn crosshair(c: &mut dyn Canvas, s: &Scene<'_>, p: Pos2, slot: Option<i64>) -> (
             lines: vec![text],
             bg: s.theme.crosshair_label_bg,
             on_price_axis: false,
+            name: None,
+            ticker: false,
         }
     });
     (price_tag, time_tag)
@@ -634,6 +938,14 @@ fn crosshair(c: &mut dyn Canvas, s: &Scene<'_>, p: Pos2, slot: Option<i64>) -> (
 
 #[cfg(test)]
 static NO_DRAWINGS: crate::drawings::Drawings = crate::drawings::Drawings::empty();
+#[cfg(test)]
+pub(crate) static NO_LABELS: crate::view::SymbolLabels = crate::view::SymbolLabels {
+    ticker: String::new(),
+    interval: String::new(),
+    currency: String::new(),
+    description: String::new(),
+    ticker_interval: String::new(),
+};
 
 #[cfg(test)]
 mod tests {
@@ -728,6 +1040,9 @@ mod tests {
             display: series,
             projection_from: None,
             last_raw: series.last(),
+            raw: series,
+            labels: &NO_LABELS,
+            time_fmt: TimeFormat::default(),
             bars: &[],
             decimated: false,
             crosshair: None,
@@ -847,6 +1162,8 @@ mod tests {
             lines: vec![],
             bg: Color32::RED,
             on_price_axis: true,
+            name: None,
+            ticker: false,
         };
         let mut tags = vec![tag(105.0), tag(100.0), tag(492.0)];
         spread_tags(&mut tags, 0.0, 500.0);
@@ -998,5 +1315,252 @@ mod tests {
         let mut c = Recorder::default();
         draw_base(&mut c, &scene);
         assert!(!c.fills.iter().any(|f| f.1 == red));
+    }
+
+    #[test]
+    fn previous_close_high_low_and_average() {
+        const H: i64 = 3_600_000;
+        // 30 hourly bars from 00:00 day 0: the last is 05:00 on day 1, so the
+        // previous day closes with bar 23.
+        let times: Vec<i64> = (0..30).map(|i| i * H).collect();
+        let closes: Vec<f64> = (0..30).map(|i| i as f64).collect();
+        assert_eq!(prev_day_close(&times, &closes, H), Some(23.0));
+        assert_eq!(
+            prev_day_close(&times[..10], &closes[..10], H),
+            None,
+            "one day only"
+        );
+        assert_eq!(prev_day_close(&times, &closes, scale::DAY_MS), Some(28.0));
+        assert_eq!(prev_day_close(&[], &[], H), None);
+
+        let bar = |low: f64, high: f64| DrawBar {
+            x: 0.0,
+            open: low,
+            high,
+            low,
+            close: high,
+            prev_close: low,
+            value: high,
+            prev_value: low,
+            value_min: high,
+            value_max: high,
+            volume: 0.0,
+        };
+        assert_eq!(
+            visible_high_low(&[bar(5.0, 9.0), bar(f64::NAN, 1.0), bar(3.0, 7.0)]),
+            Some((3.0, 9.0))
+        );
+        assert_eq!(visible_high_low(&[]), None);
+        assert_eq!(average(&[1.0, 2.0, f64::NAN, 6.0]), Some(3.0));
+        assert_eq!(average(&[]), None);
+    }
+
+    fn day_series() -> CandleSeries {
+        // 5-minute bars across midnight: the previous day closes at 100.
+        let mut s = CandleSeries::new();
+        for i in 0..20 {
+            let close = if i < 10 { 100.0 } else { 101.0 };
+            s.upsert(Candle {
+                open_time_ms: scale::DAY_MS - 10 * 300_000 + i * 300_000,
+                open: 100.0,
+                high: 102.0,
+                low: 99.0,
+                close,
+                volume: 1.0,
+            });
+        }
+        s
+    }
+
+    #[test]
+    fn symbol_label_modes_and_marks() {
+        use crate::style::LabelMode;
+        let (s, theme) = (day_series(), Theme::dark());
+        let labels = crate::view::SymbolLabels {
+            ticker: "BTCUSDT".into(),
+            currency: "USDT".into(),
+            ..Default::default()
+        };
+        let base_texts = |style: &ChartStyle| {
+            let mut scene = scene_with(&s, &theme, style, None);
+            scene.labels = &labels;
+            let mut c = Recorder::default();
+            draw_base(&mut c, &scene);
+            c
+        };
+        let mut style = ChartStyle::default();
+        let c = base_texts(&style);
+        assert!(c.texts.iter().any(|t| t == "101.00"));
+        assert!(!c.texts.iter().any(|t| t == "BTCUSDT"));
+        assert!(
+            !c.texts.iter().any(|t| t == "USDT"),
+            "currency on hover only"
+        );
+
+        style.scales.symbol_label = LabelMode::NameValueLine;
+        style.scales.symbol_value_mode = LastValueMode::PriceAndPercent;
+        style.scales.currency_label = Visibility3::Always;
+        let c = base_texts(&style);
+        for want in ["BTCUSDT", "101.00", "+1.00%", "USDT"] {
+            assert!(c.texts.iter().any(|t| t == want), "{want}: {:?}", c.texts);
+        }
+
+        style.scales.symbol_label = LabelMode::Name;
+        let c = base_texts(&style);
+        assert!(c.texts.iter().any(|t| t == "BTCUSDT"));
+        assert!(!c.texts.iter().any(|t| t == "101.00"), "{:?}", c.texts);
+
+        // Price line: picked color and width.
+        style.scales.symbol_label = LabelMode::Line;
+        style.scales.price_line_width = 3.0;
+        let mut scene = scene_with(&s, &theme, &style, None);
+        scene.labels = &labels;
+        let y = crisp(scene.vp.y_of(101.0), 1.0);
+        let mut c = Recorder::default();
+        draw_base(&mut c, &scene);
+        assert!(c.dashes.contains(&(y, 3.0, 6.0)), "{:?}", c.dashes);
+
+        // Previous close, high / low labels and lines.
+        let mut style = ChartStyle::default();
+        style.scales.prev_close.label = true;
+        style.scales.prev_close.line = true;
+        style.scales.high_low.label = true;
+        let mut scene = scene_with(&s, &theme, &style, None);
+        let bars =
+            crate::bars::collect_bars(&s, 0..s.len(), &scene.vp, crate::style::PriceSource::Close);
+        scene.bars = &bars;
+        let y_prev = crisp(scene.vp.y_of(100.0), 1.0);
+        let mut c = Recorder::default();
+        draw_base(&mut c, &scene);
+        assert!(
+            c.texts.iter().any(|t| t == "100.00"),
+            "prev close {:?}",
+            c.texts
+        );
+        assert!(c.texts.iter().any(|t| t == "H 102.00"), "{:?}", c.texts);
+        assert!(c.texts.iter().any(|t| t == "L 99.00"), "{:?}", c.texts);
+        assert!(c.dashes.contains(&(y_prev, 4.0, 4.0)), "{:?}", c.dashes);
+    }
+
+    #[test]
+    fn indicator_name_modes() {
+        use crate::style::LabelMode;
+        let (s, theme) = (series(), Theme::dark());
+        let inds = [rsi(&s)];
+        let mut style = ChartStyle::default();
+        // RSI of flat closes is 100: widen the pane so the tag shows.
+        let tags = |style: &ChartStyle| {
+            let mut scene = rsi_scene(&s, &theme, style, &inds);
+            scene.panes[0].vp.price_max = 120.0;
+            let mut c = Recorder::default();
+            draw_base(&mut c, &scene);
+            c.texts
+        };
+        // "100.00" may also be a grid label: compare counts between modes.
+        let count = |t: &[String], w: &str| t.iter().filter(|x| *x == w).count();
+        let value = tags(&style);
+        assert!(count(&value, "RSI") == 0);
+        style.scales.indicators = LabelMode::Hidden;
+        let hidden = tags(&style);
+        assert!(count(&hidden, "RSI") == 0);
+        style.scales.indicators = LabelMode::NameValue;
+        let both = tags(&style);
+        assert_eq!(count(&both, "RSI"), 1, "{both:?}");
+        assert_eq!(count(&both, "100.00"), count(&value, "100.00"));
+        style.scales.indicators = LabelMode::Name;
+        let name = tags(&style);
+        assert_eq!(count(&name, "RSI"), 1);
+        assert_eq!(count(&name, "100.00"), count(&hidden, "100.00"));
+        assert!(count(&value, "100.00") >= 1);
+    }
+
+    #[test]
+    fn canvas_background_grid_and_crosshair_styles() {
+        let (s, theme) = (series(), Theme::dark());
+        let mut style = ChartStyle::default();
+        // Solid: one full fill in the background color.
+        let scene = scene_with(&s, &theme, &style, None);
+        let mut c = Recorder::default();
+        draw_base(&mut c, &scene);
+        assert_eq!(c.fills[0], (scene.full, theme.bg));
+
+        style.canvas.background_kind = BackgroundKind::Gradient;
+        style.canvas.background_bottom = Some(crate::Rgba::rgb(200, 0, 0));
+        let scene = scene_with(&s, &theme, &style, None);
+        let mut c = Recorder::default();
+        draw_base(&mut c, &scene);
+        let first = c.fills.first().unwrap();
+        let last_band = c.fills[63];
+        assert!(first.0.top() == 0.0 && first.1 != last_band.1);
+        assert!(last_band.1.r() > 150, "bottom is the picked color");
+
+        // Grid styles: dashed horizontal lines, solid vertical ones.
+        let mut style = ChartStyle::default();
+        style.canvas.grid_h_kind = LineKind::Dashed;
+        style.canvas.grid_v_kind = LineKind::Solid;
+        let scene = scene_with(&s, &theme, &style, None);
+        let mut c = Recorder::default();
+        draw_base(&mut c, &scene);
+        assert!(
+            c.dashes.iter().any(|d| d.1 == 4.0 && d.2 == 3.0),
+            "{:?}",
+            c.dashes
+        );
+        assert!(
+            !c.dashes.iter().any(|d| d.1 == 1.0 && d.2 == 3.0),
+            "no dotted grid"
+        );
+
+        // Crosshair: dotted, 2 wide.
+        style.canvas.crosshair_kind = LineKind::Dotted;
+        style.canvas.crosshair_width = 2.0;
+        let mut scene = scene_with(&s, &theme, &style, None);
+        scene.crosshair = Some(pos2(400.0, 250.0));
+        let mut c = Recorder::default();
+        draw_overlay(&mut c, &scene);
+        assert!(c.dashes.contains(&(250.5, 2.0, 4.0)), "{:?}", c.dashes);
+    }
+
+    #[test]
+    fn crosshair_time_tag_follows_formats() {
+        let (s, theme) = (series(), Theme::dark());
+        let mut style = ChartStyle::default();
+        style.scales.date_format = crate::style::DateFormat::Iso;
+        style.scales.hours_format = HoursFormat::H12;
+        style.scales.day_of_week = false;
+        let mut scene = scene_with(&s, &theme, &style, None);
+        scene.time_fmt = TimeFormat::from_style(&style.scales);
+        scene.crosshair = Some(pos2(scene.vp.x_of(2.0), 250.0));
+        let mut c = Recorder::default();
+        draw_overlay(&mut c, &scene);
+        assert!(
+            c.texts.iter().any(|t| t == "1970-01-01  12:10 AM"),
+            "{:?}",
+            c.texts
+        );
+    }
+
+    #[test]
+    fn watermark_lines() {
+        let (s, theme) = (series(), Theme::dark());
+        let labels = crate::view::SymbolLabels {
+            ticker_interval: "BTCUSDT, 1h".into(),
+            description: "BTC / USDT".into(),
+            ..Default::default()
+        };
+        let mut style = ChartStyle::default();
+        let draw_wm = |style: &ChartStyle| {
+            let mut scene = scene_with(&s, &theme, style, None);
+            scene.labels = &labels;
+            let mut c = Recorder::default();
+            draw_base(&mut c, &scene);
+            c.texts
+        };
+        assert!(!draw_wm(&style).iter().any(|t| t == "BTCUSDT, 1h"));
+        style.canvas.watermark.visible = true;
+        let t = draw_wm(&style);
+        assert!(t.iter().any(|t| t == "BTCUSDT, 1h") && t.iter().any(|t| t == "BTC / USDT"));
+        style.canvas.watermark.description = false;
+        assert!(!draw_wm(&style).iter().any(|t| t == "BTC / USDT"));
     }
 }
