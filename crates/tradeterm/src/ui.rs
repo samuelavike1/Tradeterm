@@ -93,22 +93,52 @@ pub fn logo_or_badge(
     }
 }
 
-/// Lucide icon for a chart type (toolbar button, menu rows).
-pub fn chart_type_icon(t: ChartType) -> lucide_icons::Icon {
-    use lucide_icons::Icon;
+/// A chart type's icon (our 1-stroke SVG set): toolbar button, quick
+/// buttons, menu rows.
+pub fn chart_type_icon(t: ChartType) -> tt_ui::Glyph {
+    use tt_ui::Glyph;
     match t {
-        ChartType::Bars => Icon::ChartNoAxesGantt,
-        ChartType::Candles | ChartType::HollowCandles | ChartType::HeikinAshi => {
-            Icon::ChartCandlestick
-        }
-        ChartType::VolumeCandles => Icon::ChartBarStacked,
-        ChartType::Line => Icon::ChartLine,
-        ChartType::LineWithMarkers => Icon::ChartScatter,
-        ChartType::StepLine => Icon::ChartNoAxesCombined,
-        ChartType::Area | ChartType::HlcArea | ChartType::Baseline => Icon::ChartArea,
-        ChartType::Columns => Icon::ChartColumn,
-        ChartType::HighLow => Icon::ChartColumnBig,
-        ChartType::Renko => Icon::Blocks,
-        ChartType::LineBreak => Icon::ChartColumnStacked,
+        ChartType::Bars => Glyph::CHART_BARS,
+        ChartType::Candles => Glyph::CHART_CANDLES,
+        ChartType::HollowCandles => Glyph::CHART_HOLLOW_CANDLES,
+        ChartType::VolumeCandles => Glyph::CHART_VOLUME_CANDLES,
+        ChartType::Line => Glyph::CHART_LINE,
+        ChartType::LineWithMarkers => Glyph::CHART_LINE_MARKERS,
+        ChartType::StepLine => Glyph::CHART_STEP_LINE,
+        ChartType::Area => Glyph::CHART_AREA,
+        ChartType::HlcArea => Glyph::CHART_HLC_AREA,
+        ChartType::Baseline => Glyph::CHART_BASELINE,
+        ChartType::Columns => Glyph::CHART_COLUMNS,
+        ChartType::HighLow => Glyph::CHART_HIGH_LOW,
+        ChartType::HeikinAshi => Glyph::CHART_HEIKIN_ASHI,
+        ChartType::Renko => Glyph::CHART_RENKO,
+        ChartType::LineBreak => Glyph::CHART_LINE_BREAK,
+    }
+}
+
+/// A drawing tool's icon: our SVG where we have one (the left toolbar's
+/// tools), else the tool's Lucide glyph.
+pub fn drawing_tool_icon(t: tt_chart::DrawingTool) -> tt_ui::Glyph {
+    use tt_chart::DrawingTool as D;
+    use tt_ui::Glyph;
+    match t {
+        D::TrendLine => Glyph::DRAW_TREND_LINE,
+        D::Ray => Glyph::DRAW_RAY,
+        D::InfoLine => Glyph::DRAW_INFO_LINE,
+        D::ExtendedLine => Glyph::DRAW_EXTENDED_LINE,
+        D::TrendAngle => Glyph::DRAW_TREND_ANGLE,
+        D::HorizontalLine => Glyph::DRAW_HORIZONTAL_LINE,
+        D::HorizontalRay => Glyph::DRAW_HORIZONTAL_RAY,
+        D::VerticalLine => Glyph::DRAW_VERTICAL_LINE,
+        D::CrossLine => Glyph::DRAW_CROSS_LINE,
+        D::ParallelChannel => Glyph::DRAW_PARALLEL_CHANNEL,
+        D::Arrow => Glyph::DRAW_ARROW,
+        D::FibRetracement => Glyph::DRAW_FIB_RETRACEMENT,
+        D::FibExtension => Glyph::DRAW_FIB_EXTENSION,
+        D::Rectangle => Glyph::DRAW_RECTANGLE,
+        D::PriceRange => Glyph::DRAW_PRICE_RANGE,
+        D::DateRange => Glyph::DRAW_DATE_RANGE,
+        D::DateAndPriceRange => Glyph::DRAW_DATE_PRICE_RANGE,
+        other => Glyph::from(other.icon()),
     }
 }

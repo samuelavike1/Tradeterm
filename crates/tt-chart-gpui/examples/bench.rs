@@ -150,7 +150,7 @@ fn main() {
     let secs = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(16);
     let no_indicators = args.iter().any(|a| a == "noind");
     gpui_kit::application()
-        .with_assets(gpui_kit::assets::Assets)
+        .with_assets(tt_ui::Assets)
         .run(move |cx| {
             gpui_kit::init(cx);
             tt_chart_gpui::init(cx);

@@ -12,6 +12,7 @@
 //! tool.
 
 use crate::app::{KEY_CONTEXT, TabChart, TradeTerm};
+use crate::ui::drawing_tool_icon;
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::{Placement, Selectable, WindowExt as _, v_flex};
 use gpui_kit::*;
@@ -302,7 +303,7 @@ impl TradeTerm {
             .border_r_1()
             .border_color(border)
             .child(
-                tool_button("dt-cursor", Glyph::CROSSHAIR, m.tool.is_none())
+                tool_button("dt-cursor", Glyph::DRAW_CURSOR, m.tool.is_none())
                     .tooltip("Cross")
                     .on_click(cx.listener(|this, _, _, cx| this.pick_tool(None, cx))),
             )
@@ -316,11 +317,12 @@ impl TradeTerm {
             let shown = m.shown_tool(g, &tools);
             let active = m.tool.is_some_and(|t| tools.contains(&t));
             let id = SharedString::from(format!("dt-group-{g:?}"));
-            let mut button = with_tool_tooltip(tool_button(id, shown.icon(), active), shown)
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    let pick = (this.draw.tool != Some(shown)).then_some(shown);
-                    this.pick_tool(pick, cx)
-                }));
+            let mut button =
+                with_tool_tooltip(tool_button(id, drawing_tool_icon(shown), active), shown)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        let pick = (this.draw.tool != Some(shown)).then_some(shown);
+                        this.pick_tool(pick, cx)
+                    }));
             if tools.len() > 1 {
                 let app = app.clone();
                 button = button.with_flyout(move |menu, window, cx| {
@@ -333,7 +335,7 @@ impl TradeTerm {
         bar.child(separator())
             .child(
                 // A click cycles off → weak → strong.
-                tool_button("dt-magnet", Glyph::MAGNET, m.magnet.is_on())
+                tool_button("dt-magnet", Glyph::DRAW_MAGNET, m.magnet.is_on())
                     .tooltip(match m.magnet {
                         tt_chart::MagnetMode::Off => {
                             "Magnet: snap to bar O / H / L / C (click: weak)"
@@ -348,7 +350,7 @@ impl TradeTerm {
                     })),
             )
             .child(
-                tool_button("dt-keep", Glyph::PENCIL_LINE, m.keep_drawing)
+                tool_button("dt-keep", Glyph::DRAW_KEEP_DRAWING, m.keep_drawing)
                     .tooltip("Keep drawing")
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.set_draw_mode(|m| m.keep_drawing = !m.keep_drawing, cx)
@@ -358,9 +360,9 @@ impl TradeTerm {
                 tool_button(
                     "dt-lock",
                     if m.locked {
-                        Glyph::LOCK
+                        Glyph::DRAW_LOCK
                     } else {
-                        Glyph::LOCK_OPEN
+                        Glyph::DRAW_UNLOCK
                     },
                     m.locked,
                 )
@@ -376,7 +378,11 @@ impl TradeTerm {
             .child(
                 tool_button(
                     "dt-hide",
-                    if m.hidden { Glyph::EYE_OFF } else { Glyph::EYE },
+                    if m.hidden {
+                        Glyph::DRAW_EYE_OFF
+                    } else {
+                        Glyph::DRAW_EYE
+                    },
                     m.hidden,
                 )
                 .tooltip(if m.hidden {
@@ -393,10 +399,11 @@ impl TradeTerm {
     }
 }
 
-/// A 36 px toolbar button (toggled = on), tooltip to the right (§2.7).
+/// A 34 px toolbar button with a 28 px icon (TradingView-measured;
+/// toggled = on), tooltip to the right (§2.7).
 fn tool_button(id: impl Into<ElementId>, glyph: impl Into<Glyph>, on: bool) -> IconButton {
     IconButton::new(id, glyph)
-        .size(ControlSize::Lg)
+        .size(ControlSize::Drawing)
         .toggled(on)
         .tooltip_placement(Placement::Right)
 }
@@ -414,8 +421,8 @@ fn separator() -> impl IntoElement {
     v_flex().w_full().child(Divider::horizontal().inset(S2))
 }
 
-/// A group's flyout: section header, then one row per tool (icon, label,
-/// shortcut, check on the active one).
+/// A group's flyout: section header, then one large row per tool (28 px
+/// icon, label, shortcut; the active one inverted, like TradingView).
 fn group_menu(
     menu: Menu,
     g: ToolGroup,
@@ -434,8 +441,8 @@ fn group_menu(
                 SharedString::from(format!("dt-item-{tool:?}")),
                 tool.label(),
             )
-            .icon(Glyph::from(tool.icon()))
-            .checked(current == Some(tool))
+            .icon(drawing_tool_icon(tool))
+            .current(current == Some(tool))
             .on_select(move |_, cx| {
                 app.update(cx, |a, cx| a.pick_tool(Some(tool), cx)).ok();
             });
@@ -451,6 +458,7 @@ fn group_menu(
         } else {
             MenuWidth::Md
         })
+        .large()
         .section(group_title(g))
         .rows(rows)
 }
@@ -473,7 +481,7 @@ fn set_open(st: &Entity<bool>, v: bool, cx: &mut App) {
 
 impl RenderOnce for RemoveAll {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let s = CONTROL_LG;
+        let s = CONTROL_DRAWING;
         let open_state = window.use_keyed_state("dt-remove-open", cx, |_, _| false);
         let nav = MenuNav::keyed("dt-remove-nav", window, cx);
         let focus = nav.read(cx).focus.clone();
@@ -524,7 +532,7 @@ impl RenderOnce for RemoveAll {
                 set_open(&toggle_st, !open, cx)
             })
             .child(
-                tool_button("dt-remove", Glyph::TRASH, false)
+                tool_button("dt-remove", Glyph::DRAW_TRASH, false)
                     .tooltip("Remove drawings")
                     .open(open),
             )

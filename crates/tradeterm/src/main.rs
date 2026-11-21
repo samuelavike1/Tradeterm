@@ -40,7 +40,7 @@ fn main() {
     let synthetic = synthetic_arg(std::env::args().skip(1));
 
     gpui_kit::application()
-        .with_assets(gpui_kit::assets::Assets)
+        .with_assets(tt_ui::Assets)
         .run(move |cx| {
             gpui_kit::init(cx);
             // Registers the Lucide icon font the chart canvas uses too
