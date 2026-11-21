@@ -49,7 +49,7 @@ hovering, not by clicking.)
 "adj" / session) are gone from today's bottom bar for this symbol; the
 scale modes live on the price axis (its context menu and the bottom-right
 corner). The settings gear at the right end of the time axis is drawn on
-the chart canvas, not part of this toolbar. We already have the price-axis
+the chart canvas, not part of this toolbar (ours draws one too). We have the price-axis
 scale buttons and the chart settings, so neither is added here.
 
 ### Go to dialog
@@ -69,8 +69,23 @@ scale buttons and the chart settings, so neither is added here.
 
 ## Ours
 
-![light](img/bottom-light.png)
-![dark](img/bottom-dark.png)
+Release build, `scripts/bottom/shot.ps1` (BTCUSDT from 1h; synthetic
+clicks on the real buttons):
+
+| | |
+|---|---|
+| 1D (→ 1m, last 24 h), light | ![](img/bottom-light.png) |
+| YTD (→ 1D, since 1 Jan), dark | ![](img/bottom-dark.png) |
+| 3M (→ 1h), light | ![](img/bottom-light-range-3M.png) |
+| All (→ 1M, all history), light | ![](img/bottom-light-range-All.png) |
+| After a drag: highlight gone, dark | ![](img/bottom-dark-panned.png) |
+| Go to tooltip, dark | ![](img/bottom-dark-goto-tooltip.png) |
+| Go to › Date, light / dark | ![](img/bottom-light-goto-date.png) ![](img/bottom-dark-goto-date.png) |
+| 2022-06-15 typed + Enter: centered, light | ![](img/bottom-light-goto-date-applied.png) |
+| Go to › Custom range, light / dark | ![](img/bottom-light-goto-custom-range.png) ![](img/bottom-dark-goto-custom-range.png) |
+
+Our chart already draws a settings gear at the right end of the time axis
+(as on TradingView), so nothing is added for it.
 
 `crates/tradeterm/src/status_bar.rs` (bar), `go_to.rs` (dialog),
 `crates/tt-chart/src/range.rs` (ranges, targets, math, parsing; unit

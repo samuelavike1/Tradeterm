@@ -14,10 +14,15 @@ param(
     [string]$Exe = 'F:\charting\target-bottom\release\tradeterm.exe',
     [int[]]$Ranges = @(),
     [int]$GoTo = 0,
-    [string[]]$Keep = @('1D', '1M', 'YTD', '5Y', 'All')
+    [string[]]$Keep = @('1D', '3M', 'YTD', 'All'),
+    [string]$GoToDate = '2022-06-15',
+    # The dialog's Custom range tab (client coordinates).
+    [int]$TabX = 652,
+    [int]$TabY = 172
 )
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
+Add-Type -AssemblyName System.Windows.Forms
 Add-Type @"
 using System;
 using System.Runtime.InteropServices;
@@ -126,6 +131,22 @@ try {
         Click $GoTo $bar
         Start-Sleep -Milliseconds 800
         Shot 'goto-date'
+        # Type a date (field focused), Enter: the chart centers it.
+        Fg; [System.Windows.Forms.SendKeys]::SendWait('^a'); Start-Sleep -Milliseconds 200
+        Fg; [System.Windows.Forms.SendKeys]::SendWait($GoToDate); Start-Sleep -Milliseconds 400
+        Shot 'goto-typed'
+        Fg; [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+        MoveTo 600 300
+        Start-Sleep -Seconds 4
+        Shot 'goto-date-applied'
+        # Custom range tab (defaults to the visible span).
+        Click $GoTo $bar
+        Start-Sleep -Milliseconds 800
+        Click $TabX $TabY
+        Start-Sleep -Milliseconds 600
+        Shot 'goto-custom-range'
+        Key 0x1B
+        Start-Sleep -Milliseconds 400
     }
 }
 finally {
