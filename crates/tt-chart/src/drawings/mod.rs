@@ -46,6 +46,7 @@ pub use model::{
 };
 pub use props::{Caps, Props, Stroke};
 pub(crate) use render::{axis_tags, draw_base, draw_overlay};
+pub use shapes::ResizeCursor;
 pub use templates::{DrawingTemplates, NamedTemplate, ToolTemplates};
 
 use crate::time_axis::SlotTimes;
@@ -682,6 +683,30 @@ impl Drawings {
         self.placing.is_some() || self.drag.is_some() || self.band.is_some()
     }
 
+    /// The resize pointer over (or while dragging) a rectangle's handle at
+    /// `p` (TradingView: diagonal at the corners, horizontal / vertical at
+    /// the edges); `None` elsewhere.
+    pub fn resize_cursor(&self, p: Pos2) -> Option<ResizeCursor> {
+        let (id, k) = match &self.drag {
+            Some(Drag {
+                id,
+                part: DrawingPart::Handle(k),
+                ..
+            }) => (*id, *k),
+            Some(_) => return None,
+            None if self.busy() => return None,
+            None => match self.hit(p)? {
+                (id, DrawingPart::Handle(k)) => (id, k),
+                _ => return None,
+            },
+        };
+        let d = self.items.iter().find(|d| d.id == id)?;
+        if d.tool != DrawingTool::Rectangle || d.locked || self.locked {
+            return None;
+        }
+        shapes::rect_cursor(self.screen_of(id)?, k)
+    }
+
     /// The pointer layer shows the drawing being placed.
     pub fn placing(&self) -> bool {
         self.placing.is_some()
@@ -891,14 +916,21 @@ impl Drawings {
                     return Repaint::None;
                 };
                 let s = screen.iter_mut().find(|(i, _)| *i == d.id);
-                let from = mods
-                    .shift
-                    .then(|| constraint(d.tool, k, d.points.len()))
-                    .flatten()
-                    .and_then(|(c, r)| {
+                let from = if !mods.shift {
+                    None
+                } else if d.tool == DrawingTool::Rectangle {
+                    // Corners stay square relative to the opposite corner;
+                    // edge handles move one side, unconstrained.
+                    s.as_ref().and_then(|(_, pts)| {
+                        let (a, pt) = shapes::opposite_corner(k, &d.points, pts)?;
+                        Some((constrain::Constraint::Square, a, pt))
+                    })
+                } else {
+                    constraint(d.tool, k, d.points.len()).and_then(|(c, r)| {
                         let pts = &s.as_ref()?.1;
                         Some((c, *d.points.get(r)?, *pts.get(r)?))
-                    });
+                    })
+                };
                 let a = match from {
                     Some((c, from, from_pt)) => m.constrained(c, from, from_pt, p),
                     None => m.snapped(p, magnet.with_ctrl(mods.ctrl), series),

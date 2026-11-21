@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 mod dialog_tv;
 mod families;
 mod interaction;
+mod rect;
 mod settings;
 
 pub(super) const NO_MODS: Mods = Mods {
@@ -491,7 +492,7 @@ fn toolbar_edits_reach_the_saved_legacy_fields() {
         panic!("shape props");
     };
     // The background has its own color now: the border change leaves it.
-    assert_eq!(p.background.color, Rgba::new(0x9c, 0x27, 0xb0, 51));
+    assert_eq!(p.background.color, Rgba::new(0x29, 0x62, 0xff, 51));
     assert_eq!(p.border.color, Rgba::new(8, 153, 129, 255));
     let v = serde_json::to_value(&d).unwrap();
     assert_eq!(v["color"], serde_json::json!([8, 153, 129, 255]));

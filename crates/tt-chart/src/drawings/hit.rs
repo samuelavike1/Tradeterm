@@ -4,7 +4,7 @@ use super::measure::measurer_rect;
 use super::props::Props;
 use super::{
     Anchor, Drawing, DrawingPart, DrawingTool, Drawings, HANDLE_RADIUS, HIT_DISTANCE, Mapper,
-    Placement, channel, fib, lines,
+    Placement, channel, fib, lines, shapes,
 };
 use emath::{Pos2, Rect};
 
@@ -42,9 +42,11 @@ impl Drawings {
 }
 
 /// Calls `f` with each handle of a drawing whose screen points are `pts`
-/// (handle `k` is `DrawingPart::Handle(k)`). Most tools have one handle per
-/// point; the parallel channel has six; freehand strokes have none.
-pub(super) fn for_each_handle(tool: DrawingTool, pts: &[Pos2], mut f: impl FnMut(Pos2)) {
+/// (handle `k` is `DrawingPart::Handle(k)`) and whether it is drawn as a
+/// square (TradingView: the rectangle's edge handles). Most tools have one
+/// handle per point; the parallel channel has six, the rectangle eight;
+/// freehand strokes have none.
+pub(super) fn for_each_handle(tool: DrawingTool, pts: &[Pos2], mut f: impl FnMut(Pos2, bool)) {
     if tool.placement() == Placement::Freehand {
         return;
     }
@@ -52,19 +54,25 @@ pub(super) fn for_each_handle(tool: DrawingTool, pts: &[Pos2], mut f: impl FnMut
         && let Some(g) = channel::Geo::of(pts)
     {
         for h in g.handles() {
-            f(h);
+            f(h, false);
+        }
+        return;
+    }
+    if tool == DrawingTool::Rectangle && pts.len() >= 2 {
+        for (k, h) in shapes::rect_handles(pts).into_iter().enumerate() {
+            f(h, k >= 4);
         }
         return;
     }
     for q in pts {
-        f(*q);
+        f(*q, false);
     }
 }
 
 /// The handle within `r` of `p`, if any.
-fn handle_at(tool: DrawingTool, pts: &[Pos2], p: Pos2, r: f32) -> Option<usize> {
+pub(super) fn handle_at(tool: DrawingTool, pts: &[Pos2], p: Pos2, r: f32) -> Option<usize> {
     let (mut k, mut found) = (0, None);
-    for_each_handle(tool, pts, |q| {
+    for_each_handle(tool, pts, |q, _| {
         if found.is_none() && q.distance(p) <= r {
             found = Some(k);
         }
@@ -77,6 +85,8 @@ fn handle_at(tool: DrawingTool, pts: &[Pos2], p: Pos2, r: f32) -> Option<usize> 
 pub(super) fn drag_handle(d: &mut Drawing, k: usize, a: Anchor, m: &Mapper<'_>) {
     if d.tool == DrawingTool::ParallelChannel {
         channel::drag_handle(d, k, a, m);
+    } else if d.tool == DrawingTool::Rectangle {
+        shapes::drag_rect_handle(&mut d.points, k, a);
     } else if let Some(pt) = d.points.get_mut(k) {
         *pt = a;
     }
