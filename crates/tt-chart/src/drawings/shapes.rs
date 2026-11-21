@@ -137,7 +137,13 @@ pub(super) fn rect_cursor(pts: &[Pos2], k: usize) -> Option<ResizeCursor> {
 
 /// The rectangle: background (`ShapeProps::background`), border, optional
 /// middle line, extended left / right to the pane's edges.
-pub(super) fn rectangle(c: &mut dyn Canvas, d: &Drawing, pts: &[Pos2], pane: Rect) {
+pub(super) fn rectangle(
+    c: &mut dyn Canvas,
+    d: &Drawing,
+    pts: &[Pos2],
+    pane: Rect,
+    theme: &tt_theme::Theme,
+) {
     let fallback;
     let sp = match &d.props {
         Props::Shape(p) => p,
@@ -197,12 +203,19 @@ pub(super) fn rectangle(c: &mut dyn Canvas, d: &Drawing, pts: &[Pos2], pane: Rec
     }
     if let Some((pos, align, _)) = text {
         let ts = &sp.text_style;
+        // TradingView's default text is white, unreadable on the light
+        // theme: there the default follows the theme's text color.
+        let color = if !theme.dark && ts.color == super::Rgba::new(255, 255, 255, 255) {
+            theme.text
+        } else {
+            ts.color.to_color32()
+        };
         c.text_rich(
             pos,
             align,
             &d.text,
             ts.size as f32,
-            ts.color.to_color32(),
+            color,
             TextOpts {
                 bold: ts.bold,
                 italic: ts.italic,

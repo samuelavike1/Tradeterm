@@ -196,7 +196,7 @@ fn draw_one(c: &mut dyn Canvas, s: &Scene<'_>, d: &Drawing, pts: &[Pos2]) {
         TrendLine | Ray | ExtendedLine | InfoLine | TrendAngle | Arrow | HorizontalLine
         | HorizontalRay | VerticalLine | CrossLine => lines::draw(c, s, d, pts),
         ParallelChannel if pts.len() >= 3 => channel::draw(c, s, d, pts),
-        Rectangle if pts.len() >= 2 => shapes::rectangle(c, d, pts, s.vp_rect()),
+        Rectangle if pts.len() >= 2 => shapes::rectangle(c, d, pts, s.vp_rect(), s.theme),
         FibRetracement if pts.len() >= 2 => fib::draw(c, s, d, pts),
         FibExtension if pts.len() >= 3 => fib::draw(c, s, d, pts),
         PriceRange | DateRange | DateAndPriceRange if pts.len() >= 2 => measure::draw(c, s, d, pts),
