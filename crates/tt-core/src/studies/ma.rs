@@ -5,6 +5,11 @@
 //! correct values (recursive averages read `out[from - 1]`). Indices before
 //! the first full window are NaN. None of them allocates per bar; only
 //! [`hma`] allocates one scratch buffer per call, sized to the bars it needs.
+//!
+//! The windowed averages keep running sums. Recomputing a tail with a fresh
+//! sum would round differently from the full pass, so the `*_from` variants
+//! take the [`MaState`] before `from` and return the one before the last bar:
+//! a study checkpoints it and a live tick resumes bit-identically, O(1).
 
 use serde::{Deserialize, Serialize};
 
@@ -119,6 +124,18 @@ impl Default for Smoothing {
     }
 }
 
+/// Running state of a windowed moving average between two bars (SMA: the
+/// window sum; WMA: weighted and plain sums; VWMA: Σx·vol and Σvol), as
+/// returned by the `*_from` helpers. EMA and RMA keep theirs in the previous
+/// output and need none. [`MaState::default`] starts afresh.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct MaState {
+    a: f64,
+    b: f64,
+    /// The sums cover a full window (false: re-sum at the next bar).
+    have: bool,
+}
+
 /// Any [`MaType`] over `x`. `vol` is the bar volume (used by VWMA only).
 pub fn ma(
     kind: MaType,
@@ -129,50 +146,97 @@ pub fn ma(
     from: usize,
     n: usize,
 ) {
+    ma_from(kind, x, vol, len, out, from, n, MaState::default());
+}
+
+/// [`ma`] resumed from `st`, the state before bar `from` (a checkpoint
+/// returned by an earlier call, or the default to start afresh). Returns the
+/// state before bar `n - 1`, to resume a later update of the last bar
+/// bit-identically to a full pass.
+#[allow(clippy::too_many_arguments)]
+pub fn ma_from(
+    kind: MaType,
+    x: impl Fn(usize) -> f64,
+    vol: &[f64],
+    len: usize,
+    out: &mut [f64],
+    from: usize,
+    n: usize,
+    st: MaState,
+) -> MaState {
     match kind {
-        MaType::Sma => sma(x, len, out, from, n),
-        MaType::Ema => ema(x, len, out, from, n),
-        MaType::Smma => rma(x, len, out, from, n),
-        MaType::Wma => wma(x, len, out, from, n),
-        MaType::Vwma => vwma(x, |i| vol[i], len, out, from, n),
+        MaType::Sma => sma_from(x, len, out, from, n, st),
+        MaType::Ema => {
+            ema(x, len, out, from, n);
+            MaState::default()
+        }
+        MaType::Smma => {
+            rma(x, len, out, from, n);
+            MaState::default()
+        }
+        MaType::Wma => wma_from(x, len, out, from, n, st),
+        MaType::Vwma => vwma_from(x, |i| vol[i], len, out, from, n, st),
     }
 }
 
 /// Simple moving average (NaN inputs make the window NaN).
 pub fn sma(x: impl Fn(usize) -> f64, len: usize, out: &mut [f64], from: usize, n: usize) {
+    sma_from(x, len, out, from, n, MaState::default());
+}
+
+/// [`sma`] resumed from `st`; see [`ma_from`].
+pub fn sma_from(
+    x: impl Fn(usize) -> f64,
+    len: usize,
+    out: &mut [f64],
+    from: usize,
+    n: usize,
+    mut st: MaState,
+) -> MaState {
     let len = len.max(1);
-    let mut sum: f64 = 0.0;
-    let mut have = false;
+    let mut ck = st;
     for i in from..n {
+        if i + 1 == n {
+            ck = st;
+        }
         if i + 1 < len {
             out[i] = f64::NAN;
             continue;
         }
         // A NaN in the window (e.g. another study's warm-up) would poison a
         // running sum forever, so sum the window afresh until it is clean.
-        if !have || !sum.is_finite() {
-            sum = (i + 1 - len..=i).map(&x).sum();
-            have = true;
+        if !st.have || !st.a.is_finite() {
+            st.a = (i + 1 - len..=i).map(&x).sum();
+            st.have = true;
         } else {
-            sum += x(i) - x(i - len);
+            st.a += x(i) - x(i - len);
         }
-        out[i] = sum / len as f64;
+        out[i] = st.a / len as f64;
+    }
+    ck
+}
+
+/// One EMA step at bar `i` (`prev` is the value at `i - 1`): NaN before the
+/// first window, then the SMA seed, then the recursion. [`ema`] per bar.
+#[inline]
+pub fn ema_next(x: impl Fn(usize) -> f64, len: usize, i: usize, prev: f64) -> f64 {
+    let len = len.max(1);
+    if i + 1 < len {
+        f64::NAN
+    } else if i + 1 == len {
+        (0..len).map(&x).sum::<f64>() / len as f64
+    } else {
+        let alpha = 2.0 / (len as f64 + 1.0);
+        alpha * x(i) + (1.0 - alpha) * prev
     }
 }
 
 /// Exponential moving average seeded with the SMA of the first `len` values
 /// (Pine `ta.ema`).
 pub fn ema(x: impl Fn(usize) -> f64, len: usize, out: &mut [f64], from: usize, n: usize) {
-    let len = len.max(1);
-    let alpha = 2.0 / (len as f64 + 1.0);
     for i in from..n {
-        out[i] = if i + 1 < len {
-            f64::NAN
-        } else if i + 1 == len {
-            (0..len).map(&x).sum::<f64>() / len as f64
-        } else {
-            alpha * x(i) + (1.0 - alpha) * out[i - 1]
-        };
+        let prev = if i > 0 { out[i - 1] } else { f64::NAN };
+        out[i] = ema_next(&x, len, i, prev);
     }
 }
 
@@ -209,45 +273,62 @@ pub fn rma(x: impl Fn(usize) -> f64, len: usize, out: &mut [f64], from: usize, n
 /// Linearly weighted moving average (Pine `ta.wma`): the newest value has
 /// weight `len`, the oldest weight 1. O(1) per bar.
 pub fn wma(x: impl Fn(usize) -> f64, len: usize, out: &mut [f64], from: usize, n: usize) {
-    wma_each(x, len, from, n, |i, v| out[i] = v);
+    wma_from(x, len, out, from, n, MaState::default());
 }
 
-/// [`wma`] that hands each `(bar, value)` to `emit` (lets [`hma`] write into
-/// a buffer that does not start at bar 0).
+/// [`wma`] resumed from `st`; see [`ma_from`].
+pub fn wma_from(
+    x: impl Fn(usize) -> f64,
+    len: usize,
+    out: &mut [f64],
+    from: usize,
+    n: usize,
+    st: MaState,
+) -> MaState {
+    wma_each(x, len, from, n, st, |i, v| out[i] = v)
+}
+
+/// [`wma`] resumed from `st` that hands each `(bar, value)` to `emit` (lets
+/// [`hma`] write into a buffer that does not start at bar 0). Returns the
+/// state before bar `n - 1`, as [`ma_from`].
 fn wma_each(
     x: impl Fn(usize) -> f64,
     len: usize,
     from: usize,
     n: usize,
+    mut st: MaState,
     mut emit: impl FnMut(usize, f64),
-) {
+) -> MaState {
     let len = len.max(1);
     let denom = (len * (len + 1) / 2) as f64;
-    // num = Σ weight·x over the window, sum = Σ x over the window.
-    let (mut num, mut sum) = (0.0_f64, 0.0_f64);
-    let mut have = false;
+    let mut ck = st;
+    // a = Σ weight·x over the window, b = Σ x over the window.
     for i in from..n {
+        if i + 1 == n {
+            ck = st;
+        }
         if i + 1 < len {
             emit(i, f64::NAN);
             continue;
         }
-        if !have || !num.is_finite() || !sum.is_finite() {
-            (num, sum) = (0.0, 0.0);
+        if !st.have || !st.a.is_finite() || !st.b.is_finite() {
+            (st.a, st.b) = (0.0, 0.0);
             for (w, j) in (i + 1 - len..=i).enumerate() {
                 let v = x(j);
-                num += (w + 1) as f64 * v;
-                sum += v;
+                st.a += (w + 1) as f64 * v;
+                st.b += v;
             }
-            have = true;
+            st.have = true;
         } else {
             // Every old weight drops by one (the oldest to zero), the new
             // value enters with weight `len`.
             let xi = x(i);
-            num += len as f64 * xi - sum;
-            sum += xi - x(i - len);
+            st.a += len as f64 * xi - st.b;
+            st.b += xi - x(i - len);
         }
-        emit(i, num / denom);
+        emit(i, st.a / denom);
     }
+    ck
 }
 
 /// Volume-weighted moving average (Pine `ta.vwma`):
@@ -260,29 +341,46 @@ pub fn vwma(
     from: usize,
     n: usize,
 ) {
+    vwma_from(x, vol, len, out, from, n, MaState::default());
+}
+
+/// [`vwma`] resumed from `st`; see [`ma_from`].
+pub fn vwma_from(
+    x: impl Fn(usize) -> f64,
+    vol: impl Fn(usize) -> f64,
+    len: usize,
+    out: &mut [f64],
+    from: usize,
+    n: usize,
+    mut st: MaState,
+) -> MaState {
     let len = len.max(1);
-    let (mut sxv, mut sv) = (0.0_f64, 0.0_f64);
-    let mut have = false;
+    let mut ck = st;
+    // a = Σ x·vol, b = Σ vol over the window.
     for i in from..n {
+        if i + 1 == n {
+            ck = st;
+        }
         if i + 1 < len {
             out[i] = f64::NAN;
             continue;
         }
-        if !have || !sxv.is_finite() || !sv.is_finite() {
-            (sxv, sv) = (0.0, 0.0);
+        if !st.have || !st.a.is_finite() || !st.b.is_finite() {
+            (st.a, st.b) = (0.0, 0.0);
             for j in i + 1 - len..=i {
                 let v = vol(j);
-                sxv += x(j) * v;
-                sv += v;
+                st.a += x(j) * v;
+                st.b += v;
             }
-            have = true;
+            st.have = true;
         } else {
             let (vi, vo) = (vol(i), vol(i - len));
-            sxv += x(i) * vi - x(i - len) * vo;
-            sv += vi - vo;
+            st.a += x(i) * vi - x(i - len) * vo;
+            st.b += vi - vo;
         }
-        out[i] = if sv != 0.0 { sxv / sv } else { f64::NAN };
+        out[i] = if st.b != 0.0 { st.a / st.b } else { f64::NAN };
     }
+    ck
 }
 
 /// Hull moving average (Pine `ta.hma`):
@@ -297,9 +395,20 @@ pub fn hma(x: impl Fn(usize) -> f64, len: usize, out: &mut [f64], from: usize, n
     // The outer WMA at `from` reads the inner series back to `from - sq + 1`.
     let start = (from + 1).saturating_sub(sq);
     let mut diff = vec![f64::NAN; n - start];
-    wma_each(&x, half, start, n, |i, v| diff[i - start] = 2.0 * v);
-    wma_each(&x, len, start, n, |i, v| diff[i - start] -= v);
-    wma_each(|i| diff[i - start], sq, from, n, |i, v| out[i] = v);
+    wma_each(&x, half, start, n, MaState::default(), |i, v| {
+        diff[i - start] = 2.0 * v
+    });
+    wma_each(&x, len, start, n, MaState::default(), |i, v| {
+        diff[i - start] -= v
+    });
+    wma_each(
+        |i| diff[i - start],
+        sq,
+        from,
+        n,
+        MaState::default(),
+        |i, v| out[i] = v,
+    );
 }
 
 #[cfg(test)]
@@ -433,6 +542,54 @@ mod tests {
             tail[n - 5..].fill(0.0);
             hma(|i| x[i], len, &mut tail, n - 5, n);
             assert_series(&tail, &full);
+        }
+    }
+
+    /// Every MaType (so every smoothing type) over a live feed: the input
+    /// starts with a NaN warm-up (another study's output), the last value is
+    /// rewritten repeatedly and values are appended; resuming from the
+    /// checkpoint is bit-identical to a full pass.
+    #[test]
+    fn checkpointed_ticks_are_bit_identical() {
+        let same = |a: f64, b: f64| a.to_bits() == b.to_bits() || (a.is_nan() && b.is_nan());
+        for kind in MaType::ALL {
+            for len in [1, 2, 3, 9, 20] {
+                let mut s = 0x2545_f491_4f6c_dd1d_u64 ^ (len as u64) << 7 ^ kind as u64;
+                let mut rnd = move || {
+                    s ^= s << 13;
+                    s ^= s >> 7;
+                    s ^= s << 17;
+                    (s >> 11) as f64 / (1u64 << 53) as f64
+                };
+                let mut x: Vec<f64> = vec![NAN; 4];
+                let mut v: Vec<f64> = vec![1.0; 4];
+                let mut out = Vec::new();
+                let mut ck = MaState::default();
+                for step in 0..300 {
+                    let len_before = x.len();
+                    if step % 4 == 0 || x.len() < 6 {
+                        x.push(100.0 + rnd() * 10.0);
+                        v.push(if rnd() < 0.2 { 0.0 } else { rnd() * 50.0 });
+                    } else {
+                        *x.last_mut().unwrap() = 100.0 + rnd() * 10.0;
+                        *v.last_mut().unwrap() += rnd();
+                    }
+                    let n = x.len();
+                    out.resize(n, NAN);
+                    let from = if step == 0 { 0 } else { len_before - 1 };
+                    ck = ma_from(kind, |i| x[i], &v, len, &mut out, from, n, ck);
+                    let mut full = vec![NAN; n];
+                    ma(kind, |i| x[i], &v, len, &mut full, 0, n);
+                    for i in 0..n {
+                        assert!(
+                            same(out[i], full[i]),
+                            "{kind:?} len {len} step {step} bar {i}: {} vs {}",
+                            out[i],
+                            full[i]
+                        );
+                    }
+                }
+            }
         }
     }
 

@@ -38,7 +38,7 @@ so alpha = 10 %.
 | Catalog | `crates/tt-core/src/studies.rs:87-112` | 10 kinds: Volume, SMA, EMA, BB, VWAP, RSI, MACD, Stochastic, ATR, OBV. |
 | Inputs | `studies.rs:175-216` | Typed enum `Study` (serde `tag = "type"`). |
 | Defaults | `studies.rs:130-169` | Matches TradingView for the inputs that exist (SMA/EMA 9, BB 20/2, RSI 14, MACD 12/26/9, Stoch 14/1/3, ATR 14, Vol MA 20). |
-| Compute | `studies.rs:319-487` | Incremental from `from`. RSI, MACD and Stoch do a full pass (`recompute_fully`, `:490-495`). EMA is SMA-seeded, as in Pine `ta.ema`. RSI and ATR use Wilder RMA. BB uses population stdev (matches `ta.stdev`). |
+| Compute | `studies.rs:319-487` | Incremental from `from`: hidden recursive state (RSI's RMAs, MACD's EMAs, running window sums, VWAP session sums) is checkpointed before the last bar in a `StudyState` (`studies/state.rs`), so every live tick is O(1)/O(window) and bit-identical to a full pass. EMA is SMA-seeded, as in Pine `ta.ema`. RSI and ATR use Wilder RMA. BB uses population stdev (matches `ta.stdev`). |
 | Placement | `studies.rs:66-73, 236-244` | Fixed per kind: Overlay / VolumeOverlay / Pane. |
 | Plot kinds | `studies.rs:77-83` | `Line`, `Histogram` (MACD sign colors), `VolumeColumns`. |
 | Guide levels | `studies.rs:296-302` | Hard-coded: RSI 30/50/70, Stoch 20/50/80, fixed 0..100 bounds. |
@@ -856,7 +856,10 @@ Notes for coordinators:
   renderers). Land I-1 first. I-6, I-7 and I-10 then touch disjoint functions.
 - Update `README.md` (Indicators section) and remove BACKLOG.md:29-30 when I-6 and I-7 land.
 - Every slice keeps the performance rule: style edits never invalidate `Indicator` caches, and
-  new indicators must pass the incremental-tail-equals-full test.
+  new indicators must pass the incremental-tail-equals-full test (bit-identical, random live
+  feeds). A study whose recursion is not visible in its outputs checkpoints that state through
+  `StudyState::resume`/`save` (use the `ma::*_from` helpers for windowed MAs); none may fall back
+  to a full pass on a tick.
 
 ## Sources
 
