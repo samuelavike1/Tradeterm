@@ -452,6 +452,7 @@ fn every_line_fib_and_range_tool_renders() {
         bar_close_ms: None,
         title: "",
         drawings: &ds,
+        tz: crate::TzOffsets::utc_static(),
     };
     let mut c = Recorder::default();
     draw_base(&mut c, &scene);

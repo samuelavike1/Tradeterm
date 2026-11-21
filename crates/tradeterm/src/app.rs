@@ -896,7 +896,7 @@ impl Render for TradeTerm {
                             .children(self.perf_overlay(cx)),
                     ),
             )
-            .child(self.status_bar(cx))
+            .child(self.status_bar(window, cx))
     }
 }
 

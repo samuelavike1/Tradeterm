@@ -92,6 +92,9 @@ pub struct ChartTab {
     /// `chart.style` is this tab's own style; false = it follows the user
     /// default (`Shared::chart_style`), see [`TabSettings::style`].
     pub own_style: bool,
+    /// Zone setting and exchange zone the chart's offset table was built
+    /// for (see [`Self::sync_time_zone`]).
+    tz_key: Option<(tt_chart::style::TimeZoneSetting, Option<String>)>,
     /// What `series` currently holds (live data), for the cache.
     loaded: Option<(Symbol, Timeframe)>,
     cache: Vec<CachedSeries>,
@@ -129,6 +132,7 @@ impl ChartTab {
             backfill: Backfill::default(),
             chart,
             own_style: s.style.is_some(),
+            tz_key: None,
             loaded: None,
             cache: Vec::new(),
             restarted_at: Instant::now(),
@@ -144,6 +148,22 @@ impl ChartTab {
     pub fn set_style(&mut self, own: Option<tt_chart::ChartStyle>, default: &tt_chart::ChartStyle) {
         self.own_style = own.is_some();
         self.chart.style = own.unwrap_or_else(|| default.clone());
+    }
+
+    /// Rebuilds the chart's time zone table when the style's zone or the
+    /// exchange zone changed. Cheap when nothing changed (call per frame).
+    pub fn sync_time_zone(&mut self) {
+        let setting = &self.chart.style.symbol.data.time_zone;
+        let exchange = self.symbol_info.as_ref().map(|i| i.timezone.as_str());
+        if let Some((s, e)) = &self.tz_key
+            && s == setting
+            && e.as_deref() == exchange
+        {
+            return;
+        }
+        let tz = crate::tz::offsets_for(setting, exchange);
+        self.tz_key = Some((setting.clone(), exchange.map(str::to_owned)));
+        self.chart.set_time_zone(tz);
     }
 
     /// Key of this tab's drawings in the store.

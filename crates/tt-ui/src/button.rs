@@ -436,6 +436,8 @@ pub struct ToolbarButton {
     disabled: bool,
     tooltip: Option<TooltipSpec>,
     menu: Option<MenuBuilder>,
+    /// Popover anchor of the menu (TopLeft = below, left-aligned).
+    menu_anchor: Anchor,
     on_click: Option<ClickHandler>,
 }
 
@@ -454,6 +456,7 @@ impl ToolbarButton {
             disabled: false,
             tooltip: None,
             menu: None,
+            menu_anchor: Anchor::TopLeft,
             on_click: None,
         }
     }
@@ -536,6 +539,13 @@ impl ToolbarButton {
     /// menu is rebuilt on every render while open.
     pub fn menu(mut self, build: impl Fn(Menu, &mut Window, &mut App) -> Menu + 'static) -> Self {
         self.menu = Some(Rc::new(build));
+        self
+    }
+
+    /// Where the menu opens: e.g. `Anchor::BottomRight` opens it above the
+    /// button, right-aligned (status bar).
+    pub fn menu_anchor(mut self, a: Anchor) -> Self {
+        self.menu_anchor = a;
         self
     }
 
@@ -643,7 +653,7 @@ impl RenderOnce for ToolbarButton {
         let nav = MenuNav::keyed(child_id(&id, "menu-nav"), window, cx);
         let focus = nav.read(cx).focus.clone();
         Popover::new(child_id(&id, "menu-pop"))
-            .anchor(Anchor::TopLeft)
+            .anchor(self.menu_anchor)
             .offset(px(S1))
             .appearance(false)
             .track_focus(&focus)

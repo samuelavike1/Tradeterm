@@ -204,6 +204,8 @@ pub struct ChartView {
     lod_kind: Option<ChartType>,
     /// Requested zoom (number of bars to fit), applied on the next frame.
     pending_zoom: Option<usize>,
+    /// Time zone of the labels (built by the app, see [`Self::set_time_zone`]).
+    tz: crate::TzOffsets,
 }
 
 impl Default for ChartView {
@@ -239,7 +241,18 @@ impl ChartView {
             lod: Lod::new(),
             lod_kind: None,
             pending_zoom: None,
+            tz: crate::TzOffsets::utc(),
         }
+    }
+
+    /// Time zone of the time labels (axis, crosshair, drawings' dates).
+    /// Bars keep their exchange alignment; only labels move.
+    pub fn set_time_zone(&mut self, tz: crate::TzOffsets) {
+        self.tz = tz;
+    }
+
+    pub fn time_zone(&self) -> &crate::TzOffsets {
+        &self.tz
     }
 
     /// Statistics from the most recent [`Self::show`] call.
@@ -702,6 +715,7 @@ impl ChartView {
                 bar_close_ms: data.bar_close_ms,
                 title: data.title,
                 drawings: &self.drawings,
+                tz: &self.tz,
             };
             f(&scene)
         });

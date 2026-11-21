@@ -8,6 +8,7 @@
 //! never collide.
 
 use crate::scale::{DateTime, HOUR_MS, MINUTE_MS};
+use crate::tz::TzOffsets;
 use std::ops::Range;
 
 /// Significance of a time boundary; higher wins when labels compete.
@@ -90,6 +91,9 @@ pub fn tick_label(ms: i64, weight: TickWeight) -> String {
 pub struct SlotTimes<'a> {
     times: &'a [i64],
     interval_ms: i64,
+    /// Zone of the labels (`None` = UTC). Slots stay in UTC; only the
+    /// calendar boundaries and labels use local time.
+    tz: Option<&'a TzOffsets>,
 }
 
 impl<'a> SlotTimes<'a> {
@@ -97,7 +101,20 @@ impl<'a> SlotTimes<'a> {
         Self {
             times,
             interval_ms: interval_ms.max(1),
+            tz: None,
         }
+    }
+
+    /// Labels and calendar boundaries in `tz` instead of UTC.
+    pub fn with_tz(mut self, tz: &'a TzOffsets) -> Self {
+        self.tz = Some(tz);
+        self
+    }
+
+    /// Wall-clock time of slot `i` in the label zone.
+    pub fn local_at(&self, i: i64) -> Option<i64> {
+        let t = self.time_at(i)?;
+        Some(self.tz.map_or(t, |tz| tz.local_ms(t)))
     }
 
     /// Open time of slot `i` (may be negative or past the last bar).
@@ -176,7 +193,7 @@ pub fn time_ticks(
     let mut i = first;
     while i < visible.end {
         if i >= visible.start
-            && let (Some(prev), Some(t)) = (slots.time_at(i - stride), slots.time_at(i))
+            && let (Some(prev), Some(t)) = (slots.local_at(i - stride), slots.local_at(i))
             && let Some(w) = boundary_weight(prev, t)
         {
             // With stride > 1 the boundary lies somewhere in (i - stride, i];
@@ -186,7 +203,7 @@ pub fn time_ticks(
             while hi - lo > 1 {
                 let mid = lo + (hi - lo) / 2;
                 let reached = slots
-                    .time_at(mid)
+                    .local_at(mid)
                     .and_then(|tm| boundary_weight(prev, tm))
                     .is_some_and(|wm| wm >= w);
                 if reached {
@@ -232,7 +249,7 @@ pub fn time_ticks(
     let mut spans: Vec<(f32, f32)> = Vec::new();
     for (weight, i) in cands {
         let x = x_of(i);
-        let label = tick_label(slots.time_at(i).expect("candidates have times"), weight);
+        let label = tick_label(slots.local_at(i).expect("candidates have times"), weight);
         let half = label_width(&label) / 2.0 + min_gap / 2.0;
         let (l, r) = (x - half, x + half);
         if l < x_range.0 || r > x_range.1 {
@@ -260,12 +277,96 @@ pub fn time_ticks(
     placed
 }
 
+/// Slots in `visible` that start a new day in the label zone (session
+/// breaks). Same sampling as [`time_ticks`]: every `stride`-th slot, then
+/// bisected to the exact first slot of the day.
+pub fn day_boundaries(slots: &SlotTimes<'_>, visible: Range<i64>, stride: usize) -> Vec<i64> {
+    let stride = stride.max(1) as i64;
+    let day = |a: i64, b: i64| boundary_weight(a, b).is_some_and(|w| w >= TickWeight::Day);
+    let mut out = Vec::new();
+    let mut i = visible.start.div_euclid(stride) * stride;
+    // One sample past the end: a boundary just inside the end lies before it.
+    while i < visible.end + stride {
+        if let (Some(prev), Some(t)) = (slots.local_at(i - stride), slots.local_at(i))
+            && day(prev, t)
+        {
+            let (mut lo, mut hi) = (i - stride, i);
+            while hi - lo > 1 {
+                let mid = lo + (hi - lo) / 2;
+                if slots.local_at(mid).is_some_and(|tm| day(prev, tm)) {
+                    hi = mid;
+                } else {
+                    lo = mid;
+                }
+            }
+            if visible.contains(&hi) {
+                out.push(hi);
+            }
+        }
+        i += stride;
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::scale::DAY_MS;
 
     const NOV20: i64 = 1_795_132_800_000; // 2026-11-20 00:00 UTC
+
+    #[test]
+    fn day_ticks_fall_on_local_midnight() {
+        // 1h bars over two days; in UTC+2 the day starts at 22:00 UTC.
+        let times: Vec<i64> = (0..48).map(|k| NOV20 + k * HOUR_MS).collect();
+        let tz = TzOffsets::fixed(2 * HOUR_MS as i32);
+        let slots = SlotTimes::new(&times, HOUR_MS).with_tz(&tz);
+        let ticks = time_ticks(
+            &slots,
+            1..48,
+            (0.0, 48.0 * 100.0),
+            1,
+            10.0,
+            |i| i as f32 * 100.0,
+            |s| s.len() as f32 * 7.0,
+        );
+        let days: Vec<(i64, &str)> = ticks
+            .iter()
+            .filter(|t| t.weight >= TickWeight::Day)
+            .map(|t| (t.index, t.label.as_str()))
+            .collect();
+        assert_eq!(days, [(22, "21"), (46, "22")], "{ticks:?}");
+        // Hour labels are local: slot 1 (01:00 UTC) reads 03:00.
+        assert!(
+            ticks.iter().any(|t| t.index == 1 && t.label == "03:00"),
+            "{ticks:?}"
+        );
+        assert_eq!(day_boundaries(&slots, 1..48, 1), [22, 46]);
+        assert_eq!(day_boundaries(&slots, 1..48, 5), [22, 46]);
+        // UTC: midnight is slot 24.
+        let utc = SlotTimes::new(&times, HOUR_MS);
+        assert_eq!(day_boundaries(&utc, 1..48, 4), [24]);
+    }
+
+    #[test]
+    fn half_hour_zones_label_whole_local_hours() {
+        // 30m bars in UTC+5:30 (Kolkata): local hours land on :30 UTC slots.
+        let times: Vec<i64> = (0..20).map(|k| NOV20 + k * 30 * MINUTE_MS).collect();
+        let tz = TzOffsets::fixed(330 * MINUTE_MS as i32);
+        let slots = SlotTimes::new(&times, 30 * MINUTE_MS).with_tz(&tz);
+        let ticks = time_ticks(
+            &slots,
+            1..20,
+            (0.0, 2000.0),
+            1,
+            10.0,
+            |i| i as f32 * 100.0,
+            |s| s.len() as f32 * 7.0,
+        );
+        let t = ticks.iter().find(|t| t.index == 1).expect("tick at 06:00");
+        assert_eq!(t.label, "06:00");
+        assert_eq!(t.weight, TickWeight::Hour6);
+    }
 
     #[test]
     fn weights() {

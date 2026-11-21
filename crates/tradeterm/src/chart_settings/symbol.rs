@@ -6,22 +6,6 @@ use tt_chart::style::{
     BoxMethod, BrickColors, BrickSource, Precision, PriceSource, TimeZoneSetting, resolve,
 };
 
-/// Time zones offered until the full list lands with the time-zone slice.
-const ZONES: [(&str, &str); 12] = [
-    ("America/New_York", "(UTC-5) New York"),
-    ("America/Chicago", "(UTC-6) Chicago"),
-    ("America/Los_Angeles", "(UTC-8) Los Angeles"),
-    ("Europe/London", "(UTC) London"),
-    ("Europe/Berlin", "(UTC+1) Berlin"),
-    ("Europe/Moscow", "(UTC+3) Moscow"),
-    ("Asia/Dubai", "(UTC+4) Dubai"),
-    ("Asia/Kolkata", "(UTC+5:30) Kolkata"),
-    ("Asia/Singapore", "(UTC+8) Singapore"),
-    ("Asia/Hong_Kong", "(UTC+8) Hong Kong"),
-    ("Asia/Tokyo", "(UTC+9) Tokyo"),
-    ("Australia/Sydney", "(UTC+10) Sydney"),
-];
-
 fn palette0(_: &ChartStyle, t: &Theme) -> Color32 {
     t.series_palette[0]
 }
@@ -791,16 +775,9 @@ impl ChartSettingsPanel {
             cx,
         );
         rows.push(Self::row("Precision").control(sel).into_any_element());
-        let mut zones: Vec<(TimeZoneSetting, String)> = vec![
-            (TimeZoneSetting::Exchange, "Exchange (UTC)".into()),
-            (TimeZoneSetting::Utc, "UTC".into()),
-            (TimeZoneSetting::Local, "Local (OS)".into()),
-        ];
-        zones.extend(
-            ZONES
-                .iter()
-                .map(|(id, label)| (TimeZoneSetting::Iana((*id).into()), (*label).into())),
-        );
+        // Exchange, UTC, Local and TradingView's zones, with current offsets.
+        // (Binance is the only venue: its exchange zone is UTC.)
+        let mut zones = tt_session::tz::choices(Some("UTC"), crate::source::now_ms());
         if let TimeZoneSetting::Iana(z) = &d.time_zone
             && !zones.iter().any(|(v, _)| v == &d.time_zone)
         {

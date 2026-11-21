@@ -26,6 +26,7 @@ pub mod render;
 pub mod scale;
 pub mod style;
 pub mod time_axis;
+pub mod tz;
 mod view;
 pub mod viewport;
 
@@ -39,6 +40,7 @@ pub use indicator_style::IndicatorStyle;
 pub use indicators::Indicator;
 pub use kind::{ChartType, ScaleMode};
 pub use style::{ChartStyle, ColorSlot, Rgba, ScaleButtons};
+pub use tz::TzOffsets;
 pub use view::{
     BACKFILL_MARGIN_BARS, ChartData, ChartHit, ChartLayout, ChartStats, ChartView, RenderInput,
     RenderOutput, WHEEL_ZOOM_PER_POINT,

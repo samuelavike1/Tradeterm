@@ -143,7 +143,7 @@ fn time_tag(c: &mut dyn Canvas, s: &Scene<'_>, x: f32, time_ms: i64, bg: Color32
         return;
     }
     let mut b = Buf::new();
-    let _ = write_full_time(&mut b, time_ms, s.bar_interval_ms);
+    let _ = write_full_time(&mut b, s.tz.local_ms(time_ms), s.bar_interval_ms);
     let size = s.style.scales.text_size;
     let sz = c.text_size(b.as_str(), size) + vec2(16.0, 8.0);
     let mut r = Align2::CENTER_CENTER.anchor_size(pos2(x, s.time_axis.center().y), sz);

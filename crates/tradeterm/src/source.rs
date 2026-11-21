@@ -33,6 +33,7 @@ pub fn now_ms() -> i64 {
 impl ChartSource for TabSource {
     fn parts(&mut self) -> (&mut ChartView, ChartData<'_>) {
         let tab = &mut self.tab;
+        tab.sync_time_zone();
         let live = tab.synthetic.is_none();
         let bar_close_ms = tab
             .series

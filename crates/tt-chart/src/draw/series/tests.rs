@@ -158,6 +158,7 @@ fn draw(
         bar_close_ms: None,
         title: "",
         drawings: &drawings,
+        tz: crate::TzOffsets::utc_static(),
     };
     let mut c = Rec::default();
     super::series(&mut c, &s);
