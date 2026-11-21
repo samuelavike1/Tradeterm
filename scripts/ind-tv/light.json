@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "theme_mode": "Light",
+  "tabs": [{
+    "symbol": "BTCUSDT",
+    "indicators": [
+      {"study": {"type": "Volume", "ma_length": 20, "color_by_prev_close": false, "show_ma": false}, "visible": true},
+      {"study": {"type": "Ema", "length": 9, "source": "Close"}, "visible": true},
+      {"study": {"type": "BollingerBands", "length": 20, "mult": 2.0, "source": "Close"}, "visible": true},
+      {"study": {"type": "Rsi", "length": 14, "source": "Close"}, "visible": true},
+      {"study": {"type": "Macd", "fast": 12, "slow": 26, "signal": 9, "source": "Close"}, "visible": true}
+    ]
+  }],
+  "active_tab": 0
+}

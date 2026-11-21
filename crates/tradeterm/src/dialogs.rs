@@ -42,12 +42,13 @@ impl TradeTerm {
         let favorites = self.favorite_indicators.clone();
         let panel = cx.new(|cx| IndicatorsPanel::new(app, favorites, window, cx));
         let focus = panel.clone();
-        // Picker dialog: no footer, Enter adds (§3.6).
-        let opts = tt_ui::DialogOpts::new(
-            "Indicators, metrics, and strategies",
-            crate::indicators::SIZE,
-        )
-        .on_open(move |window, cx| IndicatorsPanel::focus_input(&focus, window, cx));
+        // Picker dialog: no footer, Enter adds (§3.6); TradingView's
+        // measured header and size.
+        let opts =
+            tt_ui::DialogOpts::new("Indicators, metrics, and strategies", tt_ui::DialogSize::Lg)
+                .comfortable()
+                .width(crate::indicators::W_PICKER)
+                .on_open(move |window, cx| IndicatorsPanel::focus_input(&focus, window, cx));
         tt_ui::open_dialog(window, cx, opts, panel);
     }
 
@@ -80,7 +81,9 @@ impl TradeTerm {
         let title = panel.read(cx).title();
         let menu_panel = panel.downgrade();
         let ok_panel = panel.downgrade();
+        let width = panel.read(cx).width.clone();
         let footer = tt_ui::DialogFooter::new()
+            .comfortable()
             .template(
                 tt_ui::TemplateMenu::build(move |menu, _, cx| {
                     IndicatorSettingsPanel::defaults_menu(&menu_panel, menu, cx)
@@ -93,7 +96,12 @@ impl TradeTerm {
                 ok_panel.update(cx, |p, cx| p.commit(cx)).ok();
                 true
             });
-        let opts = tt_ui::DialogOpts::new(title, crate::indicator_settings::SIZE).footer(footer);
+        // TradingView's indicator dialog: draggable header, no rename, the
+        // width follows the tab.
+        let opts = tt_ui::DialogOpts::new(title, crate::indicator_settings::SIZE)
+            .comfortable()
+            .live_width(width)
+            .footer(footer);
         tt_ui::open_dialog(window, cx, opts, panel);
     }
 

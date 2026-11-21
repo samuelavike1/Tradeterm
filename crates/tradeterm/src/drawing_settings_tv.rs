@@ -29,8 +29,6 @@ use tt_ui::prelude::*;
 use tt_ui::tokens::*;
 use tt_ui::{CheckSelect, LineEndSelect, TextStyleBar};
 
-/// Visibility rows' label column (TradingView: label + 20).
-const W_VIS_LABEL: f32 = 96.0;
 /// Level coefficient inputs.
 const W_COEFF: f32 = 72.0;
 /// The font size select next to a label color.
@@ -610,11 +608,10 @@ impl DrawingSettingsPanel {
         let check =
             |id: &'static str, label: &'static str, on: bool, f: fn(&mut Visibility, bool)| {
                 let t = this.clone();
-                FormRow::check(id, label, on, move |on, _, cx| {
+                crate::visibility_tv::check_row(id, label, on, move |on, _, cx| {
                     t.update(cx, |p, cx| p.edit(cx, move |d| f(&mut d.visibility, on)))
                         .ok();
                 })
-                .comfortable()
             };
         let mut body = v_flex().child(check(
             "tv-vis-ticks",
@@ -624,47 +621,38 @@ impl DrawingSettingsPanel {
         ));
         for u in Visibility::UNITS {
             let span = d.visibility.span(u);
-            let t = this.clone();
-            let mut row = FormRow::check(
-                SharedString::from(format!("tv-vis-{}", form::unit_label(u))),
-                form::unit_label(u),
+            let (Some(lo), Some(hi)) = (
+                self.input(&NumberTarget::VisMin(u)),
+                self.input(&NumberTarget::VisMax(u)),
+            ) else {
+                continue;
+            };
+            let (t, t2) = (this.clone(), this.clone());
+            body = body.child(crate::visibility_tv::unit_row(
+                "tv",
+                u,
                 span.on,
+                &lo,
+                &hi,
+                (1.0, Visibility::row_max(u) as f32),
+                (span.min as f32, span.max as f32),
                 move |on, _, cx| {
                     t.update(cx, |p, cx| {
                         p.edit(cx, move |d| d.visibility.span_mut(u).on = on)
                     })
                     .ok();
                 },
-            )
-            .comfortable()
-            .label_width(W_VIS_LABEL);
-            if let (Some(lo), Some(hi)) = (
-                self.input(&NumberTarget::VisMin(u)),
-                self.input(&NumberTarget::VisMax(u)),
-            ) {
-                let t = this.clone();
-                row = row.control(
-                    RangeField::new(
-                        SharedString::from(format!("tv-vis-range-{}", form::unit_label(u))),
-                        &lo,
-                        &hi,
-                        (1.0, Visibility::row_max(u) as f32),
-                        (span.min as f32, span.max as f32),
-                    )
-                    .on_change(move |a, b, _, cx| {
-                        let (a, b) = (a.round() as u16, b.round() as u16);
-                        t.update(cx, |p, cx| {
-                            p.edit(cx, move |d| {
-                                let s = d.visibility.span_mut(u);
-                                s.min = a.min(b).max(1);
-                                s.max = b.max(a);
-                            })
+                move |a, b, _, cx| {
+                    t2.update(cx, |p, cx| {
+                        p.edit(cx, move |d| {
+                            let s = d.visibility.span_mut(u);
+                            s.min = a.max(1);
+                            s.max = b;
                         })
-                        .ok();
-                    }),
-                );
-            }
-            body = body.child(row);
+                    })
+                    .ok();
+                },
+            ));
         }
         body.child(check(
             "tv-vis-ranges",

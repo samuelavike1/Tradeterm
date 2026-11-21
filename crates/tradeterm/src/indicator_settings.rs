@@ -1,58 +1,69 @@
-//! One indicator's settings (TradingView's indicator settings dialog),
-//! generated from the study metadata ([`tt_core::StudyMeta`]) and the
-//! per-plot style ([`IndicatorStyle`]):
+//! One indicator's settings: TradingView's indicator settings dialog
+//! (docs/specs/indicators-tv-ref.md), on the comfortable density of
+//! ui-guidelines §2.10, generated from the study metadata
+//! ([`tt_core::StudyMeta`]) and the per-plot style ([`IndicatorStyle`]):
 //!
-//! - **Inputs**: every `InputDef` in order, in groups with inline rows,
-//!   tooltips and `enabled_if`; then "Inputs in status line".
-//! - **Style**: per plot visibility, color(s) with opacity, width and line
-//!   style, plot type and price line; per level visibility, color, width,
-//!   style and value; per fill visibility and color(s); precision, labels on
-//!   price scale, values in status line.
-//! - **Visibility**: per interval unit a checkbox and a from–to range.
+//! - **Inputs**: every `InputDef` in order: groups as uppercase captions,
+//!   labels on the left, controls (34 px, 100 wide) in a right-hand
+//!   column, an ⓘ after inputs with a tooltip, inline runs on one row,
+//!   `enabled_if` dimming. A Bool input titled like a plot ("Volume MA") is
+//!   that plot's checkbox on the Style tab instead.
+//! - **Style**: per plot `[x] title [color + line] [plot type ▾]` (the plot
+//!   type menu carries "Price line"); multi-color plots get a checkbox row
+//!   and one indented row per color; levels `[x] title [line] [value]`;
+//!   fills `[x] title [swatch]`; then OUTPUT VALUES (Precision, Labels on
+//!   price scale, Values in status line) and INPUT VALUES (Inputs in
+//!   status line).
+//! - **Visibility**: Ticks, per unit `[x] [from] slider [to]`, Ranges (the
+//!   drawing dialogs' rows, [`crate::visibility_tv`]).
 //!
 //! Every change applies live. Cancel (×, Esc, clicking outside) restores the
 //! indicator exactly as it was; Ok keeps it. The footer's "Defaults ▾" menu
 //! resets to factory settings, saves / applies / removes the user default of
 //! the kind (new instances start from it) and manages named presets.
 //!
-//! Widget states (number fields, color pickers, sliders) are created once
-//! per dialog; after a bulk change (reset, default, preset) [`Self::sync`]
-//! writes every one of them from the indicator again, so no control can
-//! show a stale value.
+//! Number fields are the only widget states (created once per dialog); after
+//! a bulk change (reset, default, preset) [`Self::sync`] writes every one of
+//! them from the indicator again. Colors, lines and sliders are stateless
+//! kit controls drawn from the indicator each frame.
 
 use crate::app::{TabChart, TradeTerm};
-use gpui_kit::component::button::Button;
-use gpui_kit::component::checkbox::Checkbox;
-use gpui_kit::component::color_picker::{ColorPickerEvent, ColorPickerState};
+use crate::visibility_tv::{self, W_VIS_DIALOG};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::popover::Popover;
-use gpui_kit::component::slider::{Slider, SliderEvent, SliderState, SliderValue};
-use gpui_kit::component::{Sizable as _, Size, WindowExt as _, h_flex, v_flex};
+use gpui_kit::component::{WindowExt as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use lucide_icons::Icon as Lucide;
+use std::cell::Cell;
 use std::rc::Rc;
-use tt_chart::indicator_style::{IntervalVisibility, MAX_PRECISION, MAX_WIDTH};
+use tt_chart::indicator_style::{IntervalVisibility, MAX_PRECISION};
 use tt_chart::{Indicator, IndicatorStyle, Rgba};
 use tt_core::{
-    InputDef, InputKind, InputValue, LineStyle, PlotKind, PlotType, Source, Study, StudyKind,
-    TimeUnit, Timeframe,
+    InputDef, InputKind, InputValue, LineStyle, PlotDef, PlotKind, PlotType, Source, Study,
+    StudyKind, StudyMeta, TimeUnit, Timeframe,
 };
 use tt_session::settings::{IndicatorPreset, NamedPreset};
 use tt_theme::Theme;
 use tt_ui::prelude::*;
 use tt_ui::tokens::*;
-use tt_ui::{DialogOpts, Menu, MenuNav, MenuWidth, open_dialog};
+use tt_ui::{DialogOpts, Menu};
 
-/// The settings dialog's size (§3.6: three tabs → Sm with top tabs).
+/// The legacy size, for the small "Save preset" dialog.
 pub const SIZE: DialogSize = DialogSize::Sm;
 
-/// From / to fields of a visibility range (a 3-digit count and stepper).
-const W_RANGE_FIELD: f32 = W_FIELD_NUMBER * 0.75;
-/// Width / style field of a line (sample + caret).
-const W_LINE_FIELD: f32 = CONTROL_LG + CONTROL_SM;
-/// Plot type select.
-const W_TYPE_FIELD: f32 = W_FIELD_NUMBER;
+/// Multi-color plots: one row per color (TradingView: 42 tall).
+const H_COLOR_ROW: f32 = 42.0;
+/// Lone checkbox rows (TradingView: 34 tall).
+const H_CHECK_ROW: f32 = C_CONTROL;
+/// Space under a multi-color plot's rows.
+const GAP_GROUP: f32 = 8.0;
+/// Section captions ("OUTPUT VALUES"): 16 above, 32 tall.
+const H_CAPTION: f32 = 32.0;
+const PAD_CAPTION: f32 = 16.0;
+/// Indented labels line up with checkbox labels.
+const INDENT: f32 = C_CHECKBOX + C_GAP;
+/// The ⓘ after an input with a tooltip (gap + icon).
+const W_INFO: f32 = C_GAP + ICON_MD;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SettingsTab {
@@ -80,7 +91,7 @@ enum NumberSlot {
     VisTo(TimeUnit),
 }
 
-/// What a color picker edits.
+/// What a color control edits.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum ColorSlot {
     Input(&'static str),
@@ -157,6 +168,27 @@ pub fn reset_to(ind: &mut Indicator, preset: &IndicatorPreset) {
     ind.visible = true;
 }
 
+/// The Bool input that switches plot `plot` on and off (TradingView shows
+/// it as the plot's checkbox on the Style tab, e.g. Volume's "Volume MA").
+pub fn plot_toggle(meta: &StudyMeta, plot: &PlotDef) -> Option<&'static InputDef> {
+    meta.inputs
+        .iter()
+        .find(|d| matches!(d.kind, InputKind::Bool) && d.title == plot.title)
+}
+
+/// A source as TradingView's dialog spells it ("Close", "HL2").
+pub fn source_label(s: Source) -> String {
+    let l = s.label();
+    if l.chars().any(|c| c.is_ascii_digit()) {
+        l.to_ascii_uppercase()
+    } else {
+        let mut c = l.chars();
+        c.next()
+            .map(|f| f.to_ascii_uppercase().to_string() + c.as_str())
+            .unwrap_or_default()
+    }
+}
+
 /// "14", "2.5" (no trailing zeros).
 fn trim_number(v: f64) -> String {
     if v.fract() == 0.0 {
@@ -197,7 +229,7 @@ fn vis_range(v: &IntervalVisibility, u: TimeUnit) -> (u16, u16) {
     v.get(u).unwrap_or(IntervalVisibility::full_range(u))
 }
 
-/// Color a picker shows for `ind`. Volume columns that were never colored
+/// Color a control shows for `ind`. Volume columns that were never colored
 /// follow the theme's volume colors, so the swatch shows those.
 fn slot_color(ind: &Indicator, slot: ColorSlot, theme: &Theme) -> Rgba {
     let meta = ind.study.meta();
@@ -245,76 +277,138 @@ fn hsla_of(c: Rgba) -> Hsla {
     tt_ui::hsla(c.to_color32())
 }
 
-/// Every number and color slot of a study kind (in a fixed order).
-fn slots(study: &Study) -> (Vec<NumberSlot>, Vec<ColorSlot>) {
+fn dash(s: LineStyle) -> LineDash {
+    match s {
+        LineStyle::Solid => LineDash::Solid,
+        LineStyle::Dashed => LineDash::Dashed,
+        LineStyle::Dotted => LineDash::Dotted,
+    }
+}
+
+fn line_style(d: LineDash) -> LineStyle {
+    match d {
+        LineDash::Solid => LineStyle::Solid,
+        LineDash::Dashed => LineStyle::Dashed,
+        LineDash::Dotted => LineStyle::Dotted,
+    }
+}
+
+/// Every number slot of a study kind (in a fixed order).
+fn number_slots(study: &Study) -> Vec<NumberSlot> {
     let meta = study.meta();
     let mut numbers = Vec::new();
-    let mut colors = Vec::new();
     for d in meta.inputs {
-        match d.kind {
-            InputKind::Int { .. } | InputKind::Float { .. } => {
-                numbers.push(NumberSlot::Input(d.id))
-            }
-            InputKind::Color => colors.push(ColorSlot::Input(d.id)),
-            _ => {}
-        }
-    }
-    for d in meta.plots {
-        for i in 0..d.palette.len().max(1) {
-            colors.push(ColorSlot::Plot(d.id, i));
+        if let InputKind::Int { .. } | InputKind::Float { .. } = d.kind {
+            numbers.push(NumberSlot::Input(d.id))
         }
     }
     for d in meta.hlines {
         numbers.push(NumberSlot::HLine(d.id));
-        colors.push(ColorSlot::HLine(d.id));
-    }
-    for d in meta.fills {
-        colors.push(ColorSlot::Fill(d.id, false));
-        if d.color2.is_some() {
-            colors.push(ColorSlot::Fill(d.id, true));
-        }
     }
     for u in IntervalVisibility::UNITS {
         numbers.push(NumberSlot::VisFrom(u));
         numbers.push(NumberSlot::VisTo(u));
     }
-    (numbers, colors)
+    numbers
 }
 
-fn unit_title(u: TimeUnit) -> &'static str {
-    match u {
-        TimeUnit::Second => "Seconds",
-        TimeUnit::Minute => "Minutes",
-        TimeUnit::Hour => "Hours",
-        TimeUnit::Day => "Days",
-        TimeUnit::Week => "Weeks",
-        TimeUnit::Month => "Months",
-    }
-}
-
-/// Plot types in TradingView's order and wording.
-const PLOT_TYPES: [(PlotType, &str); 11] = [
-    (PlotType::Line, "Line"),
-    (PlotType::LineBr, "Line with breaks"),
-    (PlotType::Step, "Step line"),
-    (PlotType::StepBr, "Step line with breaks"),
-    (PlotType::StepDiamond, "Step line with diamonds"),
-    (PlotType::Histogram, "Histogram"),
-    (PlotType::Cross, "Cross"),
-    (PlotType::Area, "Area"),
-    (PlotType::AreaBr, "Area with breaks"),
-    (PlotType::Columns, "Columns"),
-    (PlotType::Circles, "Circles"),
-];
-
-const LINE_STYLES: [(LineStyle, &str); 3] = [
-    (LineStyle::Solid, "Solid"),
-    (LineStyle::Dashed, "Dashed"),
-    (LineStyle::Dotted, "Dotted"),
+/// Plot types in TradingView's order and wording, with their menu icons.
+const PLOT_TYPES: [(PlotType, &str, Lucide); 11] = [
+    (PlotType::Line, "Line", Lucide::Spline),
+    (PlotType::LineBr, "Line with breaks", Lucide::SplinePointer),
+    (PlotType::Step, "Step line", Lucide::ChartNoAxesGantt),
+    (
+        PlotType::StepBr,
+        "Step line with breaks",
+        Lucide::ChartGantt,
+    ),
+    (
+        PlotType::StepDiamond,
+        "Step line with diamonds",
+        Lucide::Diamond,
+    ),
+    (PlotType::Histogram, "Histogram", Lucide::ChartNoAxesColumn),
+    (PlotType::Cross, "Cross", Lucide::Plus),
+    (PlotType::Area, "Area", Lucide::ChartArea),
+    (PlotType::AreaBr, "Area with breaks", Lucide::AreaChart),
+    (PlotType::Columns, "Columns", Lucide::ChartColumn),
+    (PlotType::Circles, "Circles", Lucide::CircleDot),
 ];
 
 fn eid(prefix: &str, id: &str) -> ElementId {
     ElementId::Name(SharedString::from(format!("{prefix}-{id}")))
+}
+
+/// Width of `s` in the dialog's 14 px text.
+fn text_w(window: &Window, s: &str) -> f32 {
+    if s.is_empty() {
+        return 0.0;
+    }
+    let run = window.text_style().to_run(s.len());
+    let line = window.text_system().shape_line(
+        SharedString::from(s.to_owned()),
+        px(TEXT_BODY),
+        &[run],
+        None,
+    );
+    f32::from(line.width).ceil()
+}
+
+/// `el` greyed out and inert when `enabled` is false (`enabled_if`, an
+/// unchecked plot's controls).
+fn dim(el: impl IntoElement, enabled: bool) -> AnyElement {
+    if enabled {
+        return el.into_any_element();
+    }
+    div()
+        .relative()
+        .opacity(0.45)
+        .child(el)
+        .child(div().absolute().inset_0().occlude())
+        .into_any_element()
+}
+
+/// A row: `h` tall, label cell `lw` wide (`None`: grows), then controls.
+fn row(h: f32, lw: Option<f32>, label: impl IntoElement, controls: AnyElement) -> Div {
+    let cell = div().flex_none().whitespace_nowrap().child(label);
+    h_flex()
+        .h(px(h))
+        .flex_none()
+        .items_center()
+        .child(match lw {
+            Some(w) => cell.w(px(w)),
+            None => cell.flex_1().min_w_0(),
+        })
+        .child(controls)
+}
+
+/// "OUTPUT VALUES": 11 px uppercase muted caption.
+fn caption(title: &str, first: bool, cx: &App) -> AnyElement {
+    div()
+        .flex_none()
+        .when(!first, |d| d.pt(px(PAD_CAPTION)))
+        .child(
+            div()
+                .h(px(H_CAPTION))
+                .flex()
+                .items_center()
+                .text_size(px(TEXT_CAPTION))
+                .text_color(tt_ui::hsla(cx.ui().text_muted))
+                .child(title.to_uppercase()),
+        )
+        .into_any_element()
+}
+
+fn set_color(ind: &mut Indicator, slot: ColorSlot, c: Rgba) {
+    match slot {
+        ColorSlot::Input(id) => {
+            ind.study.set(id, InputValue::Color(c.to_core()));
+        }
+        ColorSlot::Plot(id, i) => ind.style.set_plot_color(id, i, c),
+        ColorSlot::HLine(id) => ind.style.hline_mut(id).color = Some(c),
+        ColorSlot::Fill(id, false) => ind.style.fill_mut(id).color = Some(c),
+        ColorSlot::Fill(id, true) => ind.style.fill_mut(id).color2 = Some(c),
+    }
 }
 
 // ---- the panel ----------------------------------------------------------------
@@ -327,8 +421,8 @@ pub struct IndicatorSettingsPanel {
     original: Original,
     tab: SettingsTab,
     numbers: Vec<(NumberSlot, Entity<InputState>)>,
-    colors: Vec<(ColorSlot, Entity<ColorPickerState>)>,
-    sliders: Vec<(TimeUnit, Entity<SliderState>)>,
+    /// The dialog's width, set per tab (TradingView's grows on Visibility).
+    pub width: Rc<Cell<f32>>,
     committed: bool,
     _subs: Vec<Subscription>,
 }
@@ -353,33 +447,11 @@ impl IndicatorSettingsPanel {
             .iter()
             .find(|i| i.id == id)?
             .clone();
-        let theme = cx.ui().clone();
-        let (number_slots, color_slots) = slots(&ind.study);
         let mut subs = Vec::new();
         let mut numbers = Vec::new();
-        for slot in number_slots {
-            let (min, max, step) = match slot {
-                NumberSlot::Input(id) => match ind.study.meta().input(id).map(|d| d.kind) {
-                    Some(InputKind::Int { min, max, step }) => {
-                        (min as f64, max as f64, step.max(1) as f64)
-                    }
-                    Some(InputKind::Float { min, max, step }) => (min, max, step),
-                    _ => (f64::MIN, f64::MAX, 1.0),
-                },
-                NumberSlot::HLine(_) => (-1e12, 1e12, 1.0),
-                NumberSlot::VisFrom(u) | NumberSlot::VisTo(u) => {
-                    let (lo, hi) = IntervalVisibility::full_range(u);
-                    (lo as f64, hi as f64, 1.0)
-                }
-            };
+        for slot in number_slots(&ind.study) {
             let text = slot_text(&ind, slot);
-            let input = cx.new(|cx| {
-                InputState::new(window, cx)
-                    .step(step)
-                    .min(min)
-                    .max(max)
-                    .default_value(text)
-            });
+            let input = cx.new(|cx| InputState::new(window, cx).default_value(text));
             subs.push(cx.subscribe_in(
                 &input,
                 window,
@@ -391,41 +463,6 @@ impl IndicatorSettingsPanel {
                 },
             ));
             numbers.push((slot, input));
-        }
-        let mut colors = Vec::new();
-        for slot in color_slots {
-            let c = hsla_of(slot_color(&ind, slot, &theme));
-            let picker = cx.new(|cx| ColorPickerState::new(window, cx).default_value(c));
-            subs.push(
-                cx.subscribe(&picker, move |this, _, ev: &ColorPickerEvent, cx| {
-                    if let ColorPickerEvent::Change(Some(c)) = ev {
-                        let c = rgba_of(*c);
-                        this.edit(cx, |ind| set_color(ind, slot, c));
-                    }
-                }),
-            );
-            colors.push((slot, picker));
-        }
-        let mut sliders = Vec::new();
-        for u in IntervalVisibility::UNITS {
-            let (lo, hi) = IntervalVisibility::full_range(u);
-            let (a, b) = vis_range(&ind.style.visibility, u);
-            let slider = cx.new(|_| {
-                SliderState::new()
-                    .min(lo as f32)
-                    .max(hi as f32)
-                    .step(1.0)
-                    .default_value(SliderValue::Range(a as f32, b as f32))
-            });
-            subs.push(
-                cx.subscribe_in(&slider, window, move |this, _, ev: &SliderEvent, w, cx| {
-                    let (SliderEvent::Change(v) | SliderEvent::Release(v)) = ev;
-                    if let SliderValue::Range(a, b) = *v {
-                        this.slider_changed(u, a.round() as u16, b.round() as u16, w, cx);
-                    }
-                }),
-            );
-            sliders.push((u, slider));
         }
         // The dialog dropped this panel: closing any way but Ok (×, Esc,
         // Cancel, clicking outside) restores the indicator.
@@ -442,31 +479,16 @@ impl IndicatorSettingsPanel {
             original: Original::of(&ind),
             tab: SettingsTab::Inputs,
             numbers,
-            colors,
-            sliders,
+            width: Rc::new(Cell::new(C_W_DIALOG)),
             committed: false,
             _subs: subs,
         })
     }
 
-    /// The dialog title: the study's full name.
+    /// The dialog title: the study's short name, as TradingView ("RSI",
+    /// "BB", "Vol").
     pub fn title(&self) -> String {
-        self.kind.meta().name.to_owned()
-    }
-
-    /// The indicator as it is now (`None` once removed).
-    fn current(&self, cx: &App) -> Option<(Study, bool, IndicatorStyle)> {
-        self.chart
-            .read(cx)
-            .state
-            .read(cx)
-            .source
-            .tab
-            .chart
-            .indicators
-            .iter()
-            .find(|i| i.id == self.id)
-            .map(|i| (i.study.clone(), i.visible, i.style.clone()))
+        self.kind.meta().short.to_owned()
     }
 
     /// Runs `f` on the indicator (if it still exists).
@@ -515,38 +537,19 @@ impl IndicatorSettingsPanel {
         });
     }
 
-    /// Writes every widget state from the indicator (after a bulk change).
+    /// Writes every number field from the indicator (after a bulk change).
     /// `set_value` emits no change events, so nothing is applied back.
     fn sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let theme = cx.ui().clone();
-        let Some((texts, colors, ranges)) = self.with_indicator(cx, |ind| {
-            (
-                self.numbers
-                    .iter()
-                    .map(|(s, _)| slot_text(ind, *s))
-                    .collect::<Vec<_>>(),
-                self.colors
-                    .iter()
-                    .map(|(s, _)| hsla_of(slot_color(ind, *s, &theme)))
-                    .collect::<Vec<_>>(),
-                self.sliders
-                    .iter()
-                    .map(|(u, _)| vis_range(&ind.style.visibility, *u))
-                    .collect::<Vec<_>>(),
-            )
+        let Some(texts) = self.with_indicator(cx, |ind| {
+            self.numbers
+                .iter()
+                .map(|(s, _)| slot_text(ind, *s))
+                .collect::<Vec<_>>()
         }) else {
             return;
         };
         for ((_, input), text) in self.numbers.iter().zip(texts) {
             input.update(cx, |s, cx| s.set_value(text, window, cx));
-        }
-        for ((_, picker), c) in self.colors.iter().zip(colors) {
-            picker.update(cx, |s, cx| s.set_value(c, window, cx));
-        }
-        for ((_, slider), (a, b)) in self.sliders.iter().zip(ranges) {
-            slider.update(cx, |s, cx| {
-                s.set_value(SliderValue::Range(a as f32, b as f32), window, cx)
-            });
         }
         cx.notify();
     }
@@ -617,7 +620,7 @@ impl IndicatorSettingsPanel {
         &mut self,
         slot: NumberSlot,
         text: &str,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         match slot {
@@ -639,7 +642,10 @@ impl IndicatorSettingsPanel {
                     return;
                 };
                 // An unchecked unit keeps its fields editable for later.
-                let Some((a, b)) = cur else { return };
+                let Some((a, b)) = cur else {
+                    cx.notify();
+                    return;
+                };
                 let (lo, hi) = IntervalVisibility::full_range(u);
                 let v = v.clamp(lo, hi);
                 let (a, b) = if matches!(slot, NumberSlot::VisFrom(_)) {
@@ -648,38 +654,6 @@ impl IndicatorSettingsPanel {
                     (a.min(v), v)
                 };
                 self.edit(cx, |ind| ind.style.visibility.set(u, Some((a, b))));
-                if let Some((_, s)) = self.sliders.iter().find(|(x, _)| *x == u) {
-                    s.update(cx, |s, cx| {
-                        s.set_value(SliderValue::Range(a as f32, b as f32), window, cx)
-                    });
-                }
-            }
-        }
-    }
-
-    fn slider_changed(
-        &mut self,
-        u: TimeUnit,
-        a: u16,
-        b: u16,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let on = self
-            .with_indicator(cx, |i| i.style.visibility.get(u).is_some())
-            .unwrap_or(false);
-        if !on {
-            return;
-        }
-        self.edit(cx, |ind| ind.style.visibility.set(u, Some((a, b))));
-        for (slot, input) in &self.numbers {
-            let text = match *slot {
-                NumberSlot::VisFrom(x) if x == u => a.to_string(),
-                NumberSlot::VisTo(x) if x == u => b.to_string(),
-                _ => continue,
-            };
-            if input.read(cx).value().as_ref() != text {
-                input.update(cx, |s, cx| s.set_value(text, window, cx));
             }
         }
     }
@@ -694,10 +668,11 @@ impl IndicatorSettingsPanel {
                 .and_then(|(_, i)| i.read(cx).value().trim().parse::<u16>().ok())
         };
         let (lo, hi) = IntervalVisibility::full_range(u);
-        (
-            read(NumberSlot::VisFrom(u)).unwrap_or(lo),
-            read(NumberSlot::VisTo(u)).unwrap_or(hi),
-        )
+        let (a, b) = (
+            read(NumberSlot::VisFrom(u)).unwrap_or(lo).clamp(lo, hi),
+            read(NumberSlot::VisTo(u)).unwrap_or(hi).clamp(lo, hi),
+        );
+        (a.min(b), a.max(b))
     }
 
     fn number(&self, slot: NumberSlot) -> Option<&Entity<InputState>> {
@@ -707,11 +682,8 @@ impl IndicatorSettingsPanel {
             .map(|(_, e)| e)
     }
 
-    fn color(&self, slot: ColorSlot) -> Option<&Entity<ColorPickerState>> {
-        self.colors.iter().find(|(s, _)| *s == slot).map(|(_, e)| e)
-    }
-
-    /// The "Defaults ▾" menu, rebuilt each time it opens.
+    /// The "Defaults ▾" menu, rebuilt each time it opens (TradingView's
+    /// "Reset settings" and "Save as default" first).
     pub fn defaults_menu(this: &WeakEntity<Self>, menu: Menu, cx: &mut App) -> Menu {
         let Some(panel) = this.upgrade() else {
             return menu;
@@ -743,21 +715,21 @@ impl IndicatorSettingsPanel {
                     .on_select(on(Self::reset_factory)),
             )
             .row(
-                MenuRow::new("ind-apply-default", "Apply default")
-                    .disabled(!has_default)
-                    .description("Your saved default for this indicator")
-                    .on_select(on(Self::apply_default)),
-            )
-            .row(
                 MenuRow::new("ind-save-default", "Save as default")
                     .description("New indicators of this kind start with these settings")
                     .on_select(on(Self::save_default)),
             );
         if has_default {
-            menu = menu.row(
-                MenuRow::new("ind-remove-default", "Remove saved default")
-                    .on_select(on(|p, _, cx| p.remove_default(cx))),
-            );
+            menu = menu
+                .row(
+                    MenuRow::new("ind-apply-default", "Apply default")
+                        .description("Your saved default for this indicator")
+                        .on_select(on(Self::apply_default)),
+                )
+                .row(
+                    MenuRow::new("ind-remove-default", "Remove saved default")
+                        .on_select(on(|p, _, cx| p.remove_default(cx))),
+                );
         }
         menu = menu.separator().row(
             MenuRow::new("ind-save-preset", "Save preset as…")
@@ -824,12 +796,12 @@ impl IndicatorSettingsPanel {
                 let handle = focus.read(cx).input.read(cx).focus_handle(cx);
                 handle.focus(window, cx);
             });
-        open_dialog(window, cx, opts, panel);
+        tt_ui::open_dialog(window, cx, opts, panel);
     }
 
     // ---- rendering ------------------------------------------------------------
 
-    /// `FormRow` callback that edits the indicator.
+    /// A callback that edits the indicator.
     fn setter<V: 'static>(
         &self,
         cx: &Context<Self>,
@@ -841,393 +813,586 @@ impl IndicatorSettingsPanel {
         }
     }
 
+    /// A color swatch editing `slot`.
+    fn swatch(&self, slot: ColorSlot, now: Rgba, cx: &Context<Self>) -> ColorSwatchButton {
+        let set = self.setter(cx, move |ind, c: Hsla| set_color(ind, slot, rgba_of(c)));
+        ColorSwatchButton::new(
+            ElementId::Name(SharedString::from(format!("swatch-{slot:?}"))),
+            hsla_of(now),
+        )
+        .on_change(set)
+    }
+
+    /// One input's control and its width.
     fn input_control(
         &self,
         def: &'static InputDef,
         study: &Study,
         cx: &Context<Self>,
-    ) -> AnyElement {
+    ) -> (AnyElement, f32) {
         let id = def.id;
         match (def.kind, study.get(id)) {
             (InputKind::Int { .. } | InputKind::Float { .. }, _) => {
                 match self.number(NumberSlot::Input(id)) {
-                    Some(s) => NumberField::new(s).into_any_element(),
-                    None => div().into_any_element(),
+                    Some(s) => (tt_ui::Field::new(s).into_any_element(), C_W_FIELD),
+                    None => (div().into_any_element(), 0.0),
                 }
             }
-            (InputKind::Bool, Some(InputValue::Bool(b))) => {
-                let f = self.setter(cx, move |ind, v: bool| {
-                    ind.study.set(id, InputValue::Bool(v));
-                });
-                Checkbox::new(eid("in", id))
-                    .label(def.title)
-                    .checked(b)
-                    .on_click(move |v, w, cx| f(*v, w, cx))
-                    .into_any_element()
-            }
-            (InputKind::Choice(opts), Some(InputValue::Choice(cur))) => Select::new(
-                eid("in", id),
-                opts.iter().enumerate().map(|(i, l)| (i as u16, *l)),
-                cur,
-            )
-            .on_change(self.setter(cx, move |ind, v: u16| {
-                ind.study.set(id, InputValue::Choice(v));
-            }))
-            .into_any_element(),
-            (InputKind::Source, Some(InputValue::Source(cur))) => Select::new(
-                eid("in", id),
-                Source::ALL.iter().map(|s| (*s, s.label())),
-                cur,
-            )
-            .on_change(self.setter(cx, move |ind, v: Source| {
-                ind.study.set(id, InputValue::Source(v));
-            }))
-            .into_any_element(),
+            (InputKind::Bool, Some(InputValue::Bool(b))) => (
+                CheckBox::new(eid("in", id), "", b)
+                    .on_change(self.setter(cx, move |ind, v: bool| {
+                        ind.study.set(id, InputValue::Bool(v));
+                    }))
+                    .into_any_element(),
+                C_CHECKBOX,
+            ),
+            (InputKind::Choice(opts), Some(InputValue::Choice(cur))) => (
+                Select::new(
+                    eid("in", id),
+                    opts.iter().enumerate().map(|(i, l)| (i as u16, *l)),
+                    cur,
+                )
+                .comfortable()
+                .width(C_W_FIELD)
+                .on_change(self.setter(cx, move |ind, v: u16| {
+                    ind.study.set(id, InputValue::Choice(v));
+                }))
+                .into_any_element(),
+                C_W_FIELD,
+            ),
+            (InputKind::Source, Some(InputValue::Source(cur))) => (
+                Select::new(
+                    eid("in", id),
+                    Source::ALL.iter().map(|s| (*s, source_label(*s))),
+                    cur,
+                )
+                .comfortable()
+                .width(C_W_FIELD)
+                .on_change(self.setter(cx, move |ind, v: Source| {
+                    ind.study.set(id, InputValue::Source(v));
+                }))
+                .into_any_element(),
+                C_W_FIELD,
+            ),
             (InputKind::Timeframe, Some(InputValue::Timeframe(cur))) => {
                 let options = std::iter::once((None, "Chart".to_owned()))
                     .chain(Timeframe::ALL.iter().map(|t| (Some(*t), t.label())));
-                Select::new(eid("in", id), options, cur)
-                    .on_change(self.setter(cx, move |ind, v: Option<Timeframe>| {
-                        ind.study.set(id, InputValue::Timeframe(v));
-                    }))
-                    .into_any_element()
+                (
+                    Select::new(eid("in", id), options, cur)
+                        .comfortable()
+                        .width(C_W_FIELD)
+                        .on_change(self.setter(cx, move |ind, v: Option<Timeframe>| {
+                            ind.study.set(id, InputValue::Timeframe(v));
+                        }))
+                        .into_any_element(),
+                    C_W_FIELD,
+                )
             }
-            (InputKind::Color, _) => match self.color(ColorSlot::Input(id)) {
-                Some(s) => ColorField::new(s).into_any_element(),
-                None => div().into_any_element(),
-            },
-            _ => div().into_any_element(),
+            (InputKind::Color, _) => {
+                let theme = cx.ui().clone();
+                let now = self
+                    .with_indicator(cx, |i| slot_color(i, ColorSlot::Input(id), &theme))
+                    .unwrap_or(Rgba::new(0, 0, 0, 255));
+                (
+                    self.swatch(ColorSlot::Input(id), now, cx)
+                        .into_any_element(),
+                    C_CONTROL,
+                )
+            }
+            _ => (div().into_any_element(), 0.0),
         }
     }
 
-    /// One row of inputs: a single input, or an inline run sharing a row
-    /// (the first one's label or checkbox leads).
-    fn input_row(&self, run: &[InputDef], study: &Study, cx: &Context<Self>) -> AnyElement {
+    /// The Inputs tab and the dialog width it needs: labels on the left,
+    /// controls in one right-hand column (TradingView's table), an ⓘ slot
+    /// after them when any input has a tooltip.
+    fn inputs_tab(&self, study: &Study, window: &Window, cx: &Context<Self>) -> (AnyElement, f32) {
         let meta = study.meta();
-        let first = meta.input(run[0].id).expect("from the metadata");
-        let enabled = first.enabled_if.is_none_or(|f| f(study));
-        let id = first.id;
-        let mut row = match (first.kind, study.get(id)) {
-            (InputKind::Bool, Some(InputValue::Bool(b))) => FormRow::check(
-                eid("in", id),
-                first.title,
-                b,
-                self.setter(cx, move |ind, v: bool| {
-                    ind.study.set(id, InputValue::Bool(v));
-                }),
-            ),
-            _ => FormRow::new(first.title).control(self.input_control(first, study, cx)),
-        }
-        .label_width(SIZE.label_width());
-        for d in &run[1..] {
-            if let Some(def) = meta.input(d.id) {
-                row = row.control(self.input_control(def, study, cx));
-            }
-        }
-        if let Some(t) = first.tooltip {
-            let muted = tt_ui::hsla(cx.ui().text_muted);
-            row = row.control(
-                div()
-                    .id(eid("in-tip", id))
-                    .child(glyph(Glyph::Lucide(Lucide::Info), ICON_XS).color(muted))
-                    .tooltip(tip(t, None)),
-            );
-        }
-        dim(row, enabled)
-    }
-
-    fn inputs_tab(
-        &self,
-        study: &Study,
-        style: &IndicatorStyle,
-        cx: &Context<Self>,
-    ) -> Vec<AnyElement> {
-        let meta = study.meta();
-        let mut out = Vec::new();
-        let mut group = None;
+        let shown: Vec<&'static InputDef> = meta
+            .inputs
+            .iter()
+            .filter(|d| {
+                !meta
+                    .plots
+                    .iter()
+                    .any(|p| plot_toggle(meta, p).is_some_and(|t| t.id == d.id))
+            })
+            .collect();
+        let any_tip = shown.iter().any(|d| d.tooltip.is_some());
+        let check_w = C_CHECKBOX + C_GAP;
+        let mut lines: Vec<InputLine> = Vec::new();
+        let (mut label_w, mut col): (f32, f32) = (0.0, 0.0);
         let mut i = 0;
-        while i < meta.inputs.len() {
-            let def = &meta.inputs[i];
-            if def.group != group {
-                group = def.group;
-                if let Some(g) = group {
-                    out.push(SectionHeader::new(g).into_any_element());
-                }
-            }
+        while i < shown.len() {
             let mut j = i + 1;
-            if let Some(k) = def.inline {
-                while j < meta.inputs.len()
-                    && meta.inputs[j].inline == Some(k)
-                    && meta.inputs[j].group == def.group
+            if let Some(k) = shown[i].inline {
+                while j < shown.len()
+                    && shown[j].inline == Some(k)
+                    && shown[j].group == shown[i].group
                 {
                     j += 1;
                 }
             }
-            out.push(self.input_row(&meta.inputs[i..j], study, cx));
+            let run = &shown[i..j];
             i = j;
+            let first = run[0];
+            let id = first.id;
+            let enabled = first.enabled_if.is_none_or(|f| f(study));
+            let tip = run.iter().find_map(|d| d.tooltip.map(|t| (d.id, t)));
+            // A leading Bool is the row's checkbox + label.
+            let (label, rest): (AnyElement, &[&'static InputDef]) =
+                match (first.kind, study.get(id)) {
+                    (InputKind::Bool, Some(InputValue::Bool(b))) => {
+                        label_w = label_w.max(text_w(window, first.title) + check_w);
+                        (
+                            CheckBox::new(eid("in", id), first.title, b)
+                                .on_change(self.setter(cx, move |ind, v: bool| {
+                                    ind.study.set(id, InputValue::Bool(v));
+                                }))
+                                .into_any_element(),
+                            &run[1..],
+                        )
+                    }
+                    _ => {
+                        label_w = label_w.max(text_w(window, first.title));
+                        (first.title.into_any_element(), run)
+                    }
+                };
+            let controls = (!rest.is_empty()).then(|| {
+                let mut w = 0.0;
+                let els: Vec<AnyElement> = rest
+                    .iter()
+                    .enumerate()
+                    .map(|(k, d)| {
+                        let (c, cw) = self.input_control(d, study, cx);
+                        w += cw + if k > 0 { C_GAP } else { 0.0 };
+                        c
+                    })
+                    .collect();
+                col = col.max(w);
+                els
+            });
+            lines.push(InputLine {
+                group: first.group,
+                enabled,
+                controls,
+                label,
+                tip,
+            });
         }
-        if !meta.inputs.is_empty() {
-            out.push(Divider::horizontal().into_any_element());
+        let col = col.max(C_W_FIELD);
+        let info_w = if any_tip { W_INFO } else { 0.0 };
+        let mut body = v_flex();
+        let mut group = None;
+        let mut first = true;
+        for l in lines {
+            if l.group != group {
+                group = l.group;
+                if let Some(g) = group {
+                    body = body.child(caption(g, first, cx));
+                }
+            }
+            first = false;
+            let r = match l.controls {
+                None => h_flex()
+                    .h(px(H_CHECK_ROW))
+                    .flex_none()
+                    .items_center()
+                    .child(l.label)
+                    .when_some(l.tip, |d, (id, t)| d.child(self.info(id, t, cx))),
+                Some(els) => row(
+                    C_ROW,
+                    None,
+                    l.label,
+                    h_flex()
+                        .flex_none()
+                        .items_center()
+                        .child(
+                            h_flex()
+                                .flex_none()
+                                .w(px(col))
+                                .gap(px(C_GAP))
+                                .items_center()
+                                .children(els),
+                        )
+                        .child(
+                            div()
+                                .flex_none()
+                                .w(px(info_w))
+                                .when_some(l.tip, |d, (id, t)| d.child(self.info(id, t, cx))),
+                        )
+                        .into_any_element(),
+                ),
+            };
+            body = body.child(dim(r, l.enabled));
         }
-        out.push(
-            FormRow::check(
-                "inputs-in-status-line",
-                "Inputs in status line",
-                style.inputs_in_status_line,
-                self.setter(cx, |ind, v| ind.style.inputs_in_status_line = v),
-            )
-            .label_width(SIZE.label_width() * 2.0)
-            .into_any_element(),
-        );
-        out
+        if first {
+            body = body.child(
+                div()
+                    .h(px(H_CHECK_ROW))
+                    .flex()
+                    .items_center()
+                    .text_color(tt_ui::hsla(cx.ui().text_muted))
+                    .child("No inputs"),
+            );
+        }
+        let width = (2.0 * C_PAD_X + label_w + C_LABEL_GAP + col + info_w)
+            .max(C_W_DIALOG)
+            .ceil();
+        (body.into_any_element(), width)
     }
 
-    fn swatch(&self, slot: ColorSlot, name: Option<&'static str>) -> AnyElement {
-        let Some(s) = self.color(slot) else {
-            return div().into_any_element();
-        };
-        let key = format!("{slot:?}");
+    /// The ⓘ after an input with a tooltip.
+    fn info(&self, id: &'static str, t: &'static str, cx: &Context<Self>) -> AnyElement {
+        let muted = tt_ui::hsla(cx.ui().text_muted);
         div()
-            .id(ElementId::Name(SharedString::from(format!("swatch-{key}"))))
+            .id(eid("in-tip", id))
             .flex_none()
-            .child(ColorField::new(s))
-            .when_some(name, |d, n| d.tooltip(tip(n, None)))
+            .pl(px(C_GAP))
+            .child(glyph(Glyph::Lucide(Lucide::Info), ICON_MD).color(muted))
+            .tooltip(tip(t, None))
             .into_any_element()
     }
 
-    fn style_tab(
+    /// One plot's color + line control editing palette entry `i` (and the
+    /// plot's width and style).
+    fn plot_line(
         &self,
-        study: &Study,
-        style: &IndicatorStyle,
+        def: &'static PlotDef,
+        i: usize,
+        ind: &Indicator,
+        theme: &Theme,
         cx: &Context<Self>,
-    ) -> Vec<AnyElement> {
+    ) -> LinePicker {
+        let p = ind.style.plot(def);
+        let id = def.id;
+        let set = self.setter(cx, move |ind, lv: LineValue| {
+            ind.style.set_plot_color(id, i, rgba_of(lv.color));
+            let s = ind.style.plot_mut(id);
+            s.width = Some(lv.width);
+            s.line_style = Some(line_style(lv.dash));
+        });
+        LinePicker::new(
+            eid(&format!("plot-line-{i}"), id),
+            LineValue {
+                color: hsla_of(slot_color(ind, ColorSlot::Plot(id, i), theme)),
+                width: p.width,
+                dash: dash(p.line_style),
+            },
+        )
+        .on_change(set)
+    }
+
+    /// The plot type select with "Price line" on top of its menu.
+    fn plot_type(&self, def: &'static PlotDef, ind: &Indicator, cx: &Context<Self>) -> IconSelect {
+        let p = ind.style.plot(def);
+        let id = def.id;
+        let now = PLOT_TYPES
+            .iter()
+            .position(|(t, _, _)| *t == p.plot_type)
+            .unwrap_or(0);
+        IconSelect::new(
+            eid("plot-type", id),
+            PLOT_TYPES.iter().map(|(_, l, g)| (Glyph::Lucide(*g), *l)),
+            now,
+        )
+        .switch(
+            "Price line",
+            p.price_line,
+            self.setter(cx, move |ind, v| {
+                ind.style.plot_mut(id).price_line = Some(v)
+            }),
+        )
+        .on_change(self.setter(cx, move |ind, i: usize| {
+            ind.style.plot_mut(id).plot_type = Some(PLOT_TYPES[i.min(PLOT_TYPES.len() - 1)].0)
+        }))
+    }
+
+    /// The Style tab and the dialog width it needs.
+    fn style_tab(&self, ind: &Indicator, window: &Window, cx: &Context<Self>) -> (AnyElement, f32) {
+        let study = &ind.study;
+        let style = &ind.style;
         let meta = study.meta();
-        let lw = SIZE.label_width();
-        let mut out = Vec::new();
+        let theme = cx.ui().clone();
+        let check_w = C_CHECKBOX + C_GAP;
+        // One label column for the tab (TradingView's table).
+        let mut lw = text_w(window, "Precision");
+        let mut ctl: f32 = C_W_FIELD;
+        for d in meta.plots {
+            lw = lw.max(text_w(window, d.title) + check_w);
+            for (name, _) in d.palette.iter().filter(|_| d.palette.len() > 1) {
+                lw = lw.max(text_w(window, name) + INDENT);
+            }
+            ctl = ctl.max(tt_ui::picker::W_LINE_PICKER + C_GAP + C_CONTROL);
+        }
+        for d in meta.hlines {
+            lw = lw.max(text_w(window, d.title) + check_w);
+            ctl = ctl.max(tt_ui::picker::W_LINE_PICKER + C_GAP + C_W_FIELD);
+        }
+        for d in meta.fills {
+            lw = lw.max(text_w(window, d.title) + check_w);
+        }
+        let lw = lw + C_LABEL_GAP;
+        let mut out: Vec<AnyElement> = Vec::new();
         for def in meta.plots {
             let p = style.plot(def);
             let id = def.id;
-            let enabled = def.enabled_if.is_none_or(|f| f(study));
+            let toggle = plot_toggle(meta, def);
+            let on = p.visible
+                && toggle.is_none_or(|t| matches!(study.get(t.id), Some(InputValue::Bool(true))));
+            let toggle_id = toggle.map(|t| t.id);
+            let check = CheckBox::new(eid("plot-vis", id), def.title, on).on_change(self.setter(
+                cx,
+                move |ind, v: bool| {
+                    if let Some(t) = toggle_id {
+                        ind.study.set(t, InputValue::Bool(v));
+                    }
+                    ind.style.plot_mut(id).visible = Some(v);
+                },
+            ));
+            let enabled = toggle.is_some() || def.enabled_if.is_none_or(|f| f(study));
             let n = def.palette.len().max(1);
-            let swatches = h_flex().flex_none().gap(px(S1)).children((0..n).map(|i| {
-                self.swatch(
-                    ColorSlot::Plot(id, i),
-                    def.palette.get(i).map(|(name, _)| *name),
-                )
-            }));
-            let mut row = FormRow::check(
-                eid("plot-vis", id),
-                def.title,
-                p.visible,
-                self.setter(cx, move |ind, v| ind.style.plot_mut(id).visible = Some(v)),
-            )
-            .label_width(lw);
-            let wide = n > 2;
-            let mut swatches = Some(swatches);
-            if !wide && let Some(s) = swatches.take() {
-                row = row.control(s);
-            }
-            row = row
-                .control(LineField::new(
-                    eid("plot-line", id),
-                    p.width,
-                    p.line_style,
-                    self.setter(cx, move |ind, w| ind.style.plot_mut(id).width = Some(w)),
-                    self.setter(cx, move |ind, s| {
-                        ind.style.plot_mut(id).line_style = Some(s)
-                    }),
-                ))
-                .control(
-                    Select::new(eid("plot-type", id), PLOT_TYPES, p.plot_type)
-                        .width(W_TYPE_FIELD)
-                        .on_change(
-                            self.setter(cx, move |ind, t| {
-                                ind.style.plot_mut(id).plot_type = Some(t)
-                            }),
-                        ),
-                );
-            let mut rows = vec![row.into_any_element()];
-            if let Some(s) = swatches {
-                // MACD's four histogram colors get their own row.
-                rows.push(
-                    FormRow::new("Colors")
-                        .indent()
-                        .label_width(lw)
-                        .control(s)
+            if n > 1 {
+                // A checkbox row, then one indented row per color; the
+                // first carries the plot type.
+                let mut rows = vec![
+                    h_flex()
+                        .h(px(H_CHECK_ROW))
+                        .items_center()
+                        .child(check)
                         .into_any_element(),
-                );
+                ];
+                // TradingView lists Volume's "Growing" before "Falling".
+                let order: Vec<usize> = if def.kind == PlotKind::VolumeColumns {
+                    (0..n).rev().collect()
+                } else {
+                    (0..n).collect()
+                };
+                for (k, &i) in order.iter().enumerate() {
+                    let name = def.palette.get(i).map_or("Color", |(n, _)| *n);
+                    let mut c = h_flex()
+                        .gap(px(C_GAP))
+                        .items_center()
+                        .child(self.plot_line(def, i, ind, &theme, cx));
+                    if k == 0 {
+                        c = c.child(self.plot_type(def, ind, cx));
+                    }
+                    rows.push(
+                        row(
+                            H_COLOR_ROW,
+                            Some(lw),
+                            div().pl(px(INDENT)).child(name),
+                            dim(c, on),
+                        )
+                        .into_any_element(),
+                    );
+                }
+                rows.push(div().h(px(GAP_GROUP)).into_any_element());
+                out.push(dim(v_flex().children(rows), enabled));
+            } else {
+                let c = h_flex()
+                    .gap(px(C_GAP))
+                    .items_center()
+                    .child(self.plot_line(def, 0, ind, &theme, cx))
+                    .child(self.plot_type(def, ind, cx));
+                out.push(dim(row(C_ROW, Some(lw), check, dim(c, on)), enabled));
             }
-            rows.push(
-                FormRow::check(
-                    eid("plot-price-line", id),
-                    "Price line",
-                    p.price_line,
-                    self.setter(cx, move |ind, v| {
-                        ind.style.plot_mut(id).price_line = Some(v)
-                    }),
-                )
-                .indent()
-                .label_width(lw)
-                .into_any_element(),
-            );
-            out.push(dim(v_flex().children(rows), enabled));
-        }
-        if !meta.hlines.is_empty() {
-            out.push(SectionHeader::new("Levels").into_any_element());
         }
         for def in meta.hlines {
             let h = style.hline(def);
             let id = def.id;
-            let mut row = FormRow::check(
-                eid("hline-vis", id),
-                def.title,
-                h.visible,
+            let check = CheckBox::new(eid("hline-vis", id), def.title, h.visible).on_change(
                 self.setter(cx, move |ind, v| ind.style.hline_mut(id).visible = Some(v)),
-            )
-            .label_width(lw)
-            .control(self.swatch(ColorSlot::HLine(id), None))
-            .control(LineField::new(
-                eid("hline-line", id),
-                h.width,
-                h.style,
-                self.setter(cx, move |ind, w| ind.style.hline_mut(id).width = Some(w)),
-                self.setter(cx, move |ind, s| ind.style.hline_mut(id).style = Some(s)),
-            ));
+            );
+            let set = self.setter(cx, move |ind, lv: LineValue| {
+                set_color(ind, ColorSlot::HLine(id), rgba_of(lv.color));
+                let s = ind.style.hline_mut(id);
+                s.width = Some(lv.width);
+                s.style = Some(line_style(lv.dash));
+            });
+            let mut c = h_flex().gap(px(C_GAP)).items_center().child(
+                LinePicker::new(
+                    eid("hline-line", id),
+                    LineValue {
+                        color: hsla_of(h.color),
+                        width: h.width,
+                        dash: dash(h.style),
+                    },
+                )
+                .on_change(set),
+            );
             if let Some(s) = self.number(NumberSlot::HLine(id)) {
-                row = row.control(NumberField::new(s).width(W_TYPE_FIELD));
+                c = c.child(tt_ui::Field::new(s));
             }
-            out.push(row.into_any_element());
-        }
-        if !meta.fills.is_empty() {
-            out.push(SectionHeader::new("Fills").into_any_element());
+            out.push(row(C_ROW, Some(lw), check, dim(c, h.visible)).into_any_element());
         }
         for def in meta.fills {
             let f = style.fill(def);
             let id = def.id;
-            let mut row = FormRow::check(
-                eid("fill-vis", id),
-                def.title,
-                f.visible,
-                self.setter(cx, move |ind, v| ind.style.fill_mut(id).visible = Some(v)),
-            )
-            .label_width(lw)
-            .control(self.swatch(ColorSlot::Fill(id, false), None));
+            let check = CheckBox::new(eid("fill-vis", id), def.title, f.visible)
+                .on_change(self.setter(cx, move |ind, v| ind.style.fill_mut(id).visible = Some(v)));
+            let mut c = h_flex().gap(px(C_GAP)).items_center().child(self.swatch(
+                ColorSlot::Fill(id, false),
+                f.color,
+                cx,
+            ));
             if def.color2.is_some() {
-                row = row.control(self.swatch(ColorSlot::Fill(id, true), None));
+                c = c.child(self.swatch(
+                    ColorSlot::Fill(id, true),
+                    f.color2.unwrap_or(f.color),
+                    cx,
+                ));
             }
-            out.push(row.into_any_element());
+            out.push(row(C_ROW, Some(lw), check, dim(c, f.visible)).into_any_element());
         }
-        out.push(Divider::horizontal().into_any_element());
+        out.push(caption("Output values", out.is_empty(), cx));
         let precisions = std::iter::once((None, "Default".to_owned()))
             .chain((0..=MAX_PRECISION).map(|p| (Some(p), p.to_string())));
         out.push(
-            FormRow::new("Precision")
-                .label_width(lw)
-                .control(
-                    Select::new("precision", precisions, style.precision())
-                        .on_change(self.setter(cx, |ind, p| ind.style.precision = p)),
-                )
-                .into_any_element(),
-        );
-        out.push(
-            FormRow::check(
-                "labels-on-price-scale",
-                "Labels on price scale",
-                style.labels_on_price_scale,
-                self.setter(cx, |ind, v| ind.style.labels_on_price_scale = v),
+            row(
+                C_ROW,
+                Some(lw),
+                "Precision",
+                Select::new("precision", precisions, style.precision())
+                    .comfortable()
+                    .width(C_W_FIELD)
+                    .on_change(self.setter(cx, |ind, p| ind.style.precision = p))
+                    .into_any_element(),
             )
-            .label_width(lw * 2.0)
             .into_any_element(),
         );
-        out.push(
-            FormRow::check(
-                "values-in-status-line",
-                "Values in status line",
-                style.values_in_status_line,
-                self.setter(cx, |ind, v| ind.style.values_in_status_line = v),
-            )
-            .label_width(lw * 2.0)
-            .into_any_element(),
-        );
-        out
+        let check_row =
+            |id: &'static str, label: &'static str, on: bool, f: fn(&mut IndicatorStyle, bool)| {
+                h_flex()
+                    .h(px(H_CHECK_ROW))
+                    .flex_none()
+                    .items_center()
+                    .child(
+                        CheckBox::new(id, label, on)
+                            .on_change(self.setter(cx, move |ind, v| f(&mut ind.style, v))),
+                    )
+                    .into_any_element()
+            };
+        out.push(check_row(
+            "labels-on-price-scale",
+            "Labels on price scale",
+            style.labels_on_price_scale,
+            |s, v| s.labels_on_price_scale = v,
+        ));
+        out.push(check_row(
+            "values-in-status-line",
+            "Values in status line",
+            style.values_in_status_line,
+            |s, v| s.values_in_status_line = v,
+        ));
+        out.push(caption("Input values", false, cx));
+        out.push(check_row(
+            "inputs-in-status-line",
+            "Inputs in status line",
+            style.inputs_in_status_line,
+            |s, v| s.inputs_in_status_line = v,
+        ));
+        let width = (2.0 * C_PAD_X + lw + ctl).max(C_W_DIALOG).ceil();
+        (v_flex().children(out).into_any_element(), width)
     }
 
-    fn visibility_tab(&self, style: &IndicatorStyle, cx: &Context<Self>) -> Vec<AnyElement> {
+    /// Ticks, Seconds … Months with range sliders, Ranges.
+    fn visibility_tab(&self, style: &IndicatorStyle, cx: &Context<Self>) -> AnyElement {
         let this = cx.entity().downgrade();
-        IntervalVisibility::UNITS
-            .iter()
-            .map(|&u| {
-                let on = style.visibility.get(u).is_some();
-                let this = this.clone();
-                let mut row = FormRow::check(
-                    eid("vis", unit_title(u)),
-                    unit_title(u),
-                    on,
-                    move |v, _, cx| {
-                        this.update(cx, |p, cx| {
-                            let r = p.vis_fields(u, cx);
-                            p.edit(cx, |ind| ind.style.visibility.set(u, v.then_some(r)));
-                        })
-                        .ok();
-                    },
-                )
-                .label_width(SIZE.label_width() * 0.55);
-                let field = |slot| {
-                    self.number(slot)
-                        .map(|s| NumberField::new(s).width(W_RANGE_FIELD))
-                };
-                if let Some(f) = field(NumberSlot::VisFrom(u)) {
-                    row = row.control(f);
-                }
-                if let Some((_, s)) = self.sliders.iter().find(|(x, _)| *x == u) {
-                    row = row.control(div().flex_1().min_w_0().child(Slider::new(s).disabled(!on)));
-                }
-                if let Some(f) = field(NumberSlot::VisTo(u)) {
-                    row = row.control(f);
-                }
-                row.into_any_element()
+        let v = style.visibility;
+        let flag = |id: &'static str,
+                    label: &'static str,
+                    on: bool,
+                    f: fn(&mut IntervalVisibility, bool)| {
+            let t = this.clone();
+            visibility_tv::check_row(id, label, on, move |on, _, cx| {
+                t.update(cx, |p, cx| {
+                    p.edit(cx, move |ind| f(&mut ind.style.visibility, on))
+                })
+                .ok();
             })
-            .collect()
-    }
-}
-
-/// `el` greyed out and inert when `enabled` is false (`enabled_if`).
-fn dim(el: impl IntoElement, enabled: bool) -> AnyElement {
-    if enabled {
-        return el.into_any_element();
-    }
-    div()
-        .relative()
-        .opacity(0.45)
-        .child(el)
-        .child(div().absolute().inset_0().occlude())
-        .into_any_element()
-}
-
-fn set_color(ind: &mut Indicator, slot: ColorSlot, c: Rgba) {
-    match slot {
-        ColorSlot::Input(id) => {
-            ind.study.set(id, InputValue::Color(c.to_core()));
+        };
+        let mut body = v_flex().child(flag("ind-vis-ticks", "Ticks", v.ticks, |v, on| {
+            v.ticks = on
+        }));
+        for u in IntervalVisibility::UNITS {
+            let (Some(lo), Some(hi)) = (
+                self.number(NumberSlot::VisFrom(u)),
+                self.number(NumberSlot::VisTo(u)),
+            ) else {
+                continue;
+            };
+            let on = v.get(u).is_some();
+            let (a, b) = match v.get(u) {
+                Some(r) => r,
+                None => self.vis_fields(u, cx),
+            };
+            let (min, max) = IntervalVisibility::full_range(u);
+            let (t, t2) = (this.clone(), this.clone());
+            body = body.child(visibility_tv::unit_row(
+                "ind",
+                u,
+                on,
+                lo,
+                hi,
+                (min as f32, max as f32),
+                (a as f32, b as f32),
+                move |on, _, cx| {
+                    t.update(cx, |p, cx| {
+                        let r = p.vis_fields(u, cx);
+                        p.edit(cx, |ind| ind.style.visibility.set(u, on.then_some(r)));
+                    })
+                    .ok();
+                },
+                move |a, b, _, cx| {
+                    t2.update(cx, |p, cx| {
+                        let on = p
+                            .with_indicator(cx, |i| i.style.visibility.get(u).is_some())
+                            .unwrap_or(false);
+                        if on {
+                            p.edit(cx, |ind| ind.style.visibility.set(u, Some((a, b))));
+                        } else {
+                            cx.notify();
+                        }
+                    })
+                    .ok();
+                },
+            ));
         }
-        ColorSlot::Plot(id, i) => ind.style.set_plot_color(id, i, c),
-        ColorSlot::HLine(id) => ind.style.hline_mut(id).color = Some(c),
-        ColorSlot::Fill(id, false) => ind.style.fill_mut(id).color = Some(c),
-        ColorSlot::Fill(id, true) => ind.style.fill_mut(id).color2 = Some(c),
+        body.child(flag("ind-vis-ranges", "Ranges", v.ranges, |v, on| {
+            v.ranges = on
+        }))
+        .into_any_element()
     }
+}
+
+/// One row of the Inputs tab before layout.
+struct InputLine {
+    group: Option<&'static str>,
+    enabled: bool,
+    /// `None`: a lone checkbox row.
+    controls: Option<Vec<AnyElement>>,
+    label: AnyElement,
+    tip: Option<(&'static str, &'static str)>,
 }
 
 impl Render for IndicatorSettingsPanel {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let Some((study, _, style)) = self.current(cx) else {
-            return DialogFrame::new(SIZE)
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let Some(ind) = self.with_indicator(cx, |i| i.clone()) else {
+            return DialogFrame::new(DialogSize::Sm)
                 .id("indicator-settings")
+                .comfortable()
                 .body(EmptyState::new("This indicator was removed."));
         };
-        let body = match self.tab {
-            SettingsTab::Inputs => self.inputs_tab(&study, &style, cx),
-            SettingsTab::Style => self.style_tab(&study, &style, cx),
-            SettingsTab::Visibility => self.visibility_tab(&style, cx),
+        let (body, width) = match self.tab {
+            SettingsTab::Inputs => self.inputs_tab(&ind.study, window, cx),
+            SettingsTab::Style => self.style_tab(&ind, window, cx),
+            SettingsTab::Visibility => (self.visibility_tab(&ind.style, cx), W_VIS_DIALOG),
         };
+        if (self.width.get() - width).abs() > 0.5 {
+            self.width.set(width);
+            window.refresh();
+        }
         let this = cx.entity().downgrade();
         let nav = NavTabs::horizontal()
             .item(SettingsTab::Inputs.id(), "Inputs", None)
@@ -1246,10 +1411,17 @@ impl Render for IndicatorSettingsPanel {
                 })
                 .ok();
             });
-        DialogFrame::new(SIZE)
+        DialogFrame::new(DialogSize::Sm)
             .id("indicator-settings")
+            .comfortable()
+            .min_body(2.0 * C_ROW)
             .nav(nav)
-            .body(v_flex().pr(px(S2)).children(body))
+            .body(
+                v_flex()
+                    .text_size(px(TEXT_BODY))
+                    .text_color(tt_ui::hsla(cx.ui().text))
+                    .child(body),
+            )
     }
 }
 
@@ -1339,129 +1511,45 @@ impl Render for SavePresetPanel {
     }
 }
 
-// ---- line width / style field ---------------------------------------------------
-
-type Pick<T> = Rc<dyn Fn(T, &mut Window, &mut App)>;
-
-/// A line's width (1–4 px) and style (solid / dashed / dotted) in one field:
-/// an outline trigger with a sample of the line, and a menu with both lists.
-#[derive(IntoElement)]
-struct LineField {
-    id: ElementId,
-    width: u8,
-    style: LineStyle,
-    on_width: Pick<u8>,
-    on_style: Pick<LineStyle>,
-}
-
-impl LineField {
-    fn new(
-        id: ElementId,
-        width: u8,
-        style: LineStyle,
-        on_width: impl Fn(u8, &mut Window, &mut App) + 'static,
-        on_style: impl Fn(LineStyle, &mut Window, &mut App) + 'static,
-    ) -> Self {
-        Self {
-            id,
-            width,
-            style,
-            on_width: Rc::new(on_width),
-            on_style: Rc::new(on_style),
-        }
-    }
-}
-
-/// A short horizontal sample of a line.
-fn line_sample(width: u8, style: LineStyle, color: Hsla) -> Div {
-    let h = px(width.max(1) as f32);
-    let seg = |w: f32| div().flex_none().w(px(w)).h(h).bg(color);
-    let sample = h_flex().w(px(CONTROL_SM)).items_center();
-    match style {
-        LineStyle::Solid => sample.child(seg(CONTROL_SM)),
-        LineStyle::Dashed => sample.gap(px(S0_5)).children((0..3).map(|_| seg(S1_5))),
-        LineStyle::Dotted => sample
-            .gap(px(S0_5))
-            .children((0..6).map(|_| seg(width.max(1) as f32))),
-    }
-}
-
-impl RenderOnce for LineField {
-    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let t = cx.ui().clone();
-        let key = self.id.to_string();
-        let nav = MenuNav::keyed(
-            ElementId::Name(SharedString::from(format!("{key}-nav"))),
-            window,
-            cx,
-        );
-        let focus = nav.read(cx).focus.clone();
-        let trigger = Button::new(ElementId::Name(SharedString::from(format!(
-            "{key}-trigger"
-        ))))
-        .outline()
-        .with_size(Size::Size(px(H_FIELD)))
-        .h(px(H_FIELD))
-        .w(px(W_LINE_FIELD))
-        .px(px(S2))
-        .py_0()
-        .tooltip(format!(
-            "{} px, {}",
-            self.width,
-            match self.style {
-                LineStyle::Solid => "solid",
-                LineStyle::Dashed => "dashed",
-                LineStyle::Dotted => "dotted",
-            }
-        ))
-        .child(
-            h_flex()
-                .w_full()
-                .items_center()
-                .justify_between()
-                .gap(px(S1))
-                .child(line_sample(self.width, self.style, tt_ui::hsla(t.text)))
-                .child(glyph(Glyph::CHEVRON_DOWN, ICON_XS).color(tt_ui::hsla(t.text_muted))),
-        );
-        let (width, style) = (self.width, self.style);
-        let (on_width, on_style) = (self.on_width, self.on_style);
-        Popover::new(ElementId::Name(SharedString::from(format!("{key}-pop"))))
-            .anchor(Anchor::TopLeft)
-            .offset(px(S1))
-            .appearance(false)
-            .track_focus(&focus)
-            .trigger(trigger)
-            .content(move |_, _, cx| {
-                let pop = cx.entity();
-                let mut menu = Menu::new()
-                    .width(MenuWidth::Sm)
-                    .nav(nav.clone())
-                    .on_dismiss(move |w, cx| pop.update(cx, |p, cx| p.dismiss(w, cx)));
-                for w in 1..=MAX_WIDTH {
-                    let f = on_width.clone();
-                    menu = menu.row(
-                        MenuRow::new(("line-width", w as usize), format!("{w} px"))
-                            .checked(w == width)
-                            .on_select(move |win, cx| f(w, win, cx)),
-                    );
-                }
-                menu = menu.separator();
-                for (i, (s, label)) in LINE_STYLES.iter().enumerate() {
-                    let (s, f) = (*s, on_style.clone());
-                    menu = menu.row(
-                        MenuRow::new(("line-style", i), *label)
-                            .checked(s == style)
-                            .on_select(move |win, cx| f(s, win, cx)),
-                    );
-                }
-                menu
-            })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every color a dialog shows for a study kind.
+    fn color_slots(study: &Study) -> Vec<ColorSlot> {
+        let meta = study.meta();
+        let mut colors = Vec::new();
+        for d in meta.inputs {
+            if let InputKind::Color = d.kind {
+                colors.push(ColorSlot::Input(d.id));
+            }
+        }
+        for d in meta.plots {
+            for i in 0..d.palette.len().max(1) {
+                colors.push(ColorSlot::Plot(d.id, i));
+            }
+        }
+        for d in meta.hlines {
+            colors.push(ColorSlot::HLine(d.id));
+        }
+        for d in meta.fills {
+            colors.push(ColorSlot::Fill(d.id, false));
+            if d.color2.is_some() {
+                colors.push(ColorSlot::Fill(d.id, true));
+            }
+        }
+        colors
+    }
+
+    #[::core::prelude::v1::test]
+    fn toggle_inputs_and_source_labels() {
+        let vol = StudyKind::Volume.meta();
+        let ma = vol.plots.iter().find(|p| p.id == "vol_ma").unwrap();
+        assert_eq!(plot_toggle(vol, ma).map(|d| d.id), Some("show_ma"));
+        assert!(plot_toggle(vol, &vol.plots[0]).is_none());
+        assert_eq!(source_label(Source::Close), "Close");
+        assert_eq!(source_label(Source::Hlc3), "HLC3");
+    }
     use tt_chart::indicator_style::IntervalVisibility;
 
     #[::core::prelude::v1::test]
@@ -1553,7 +1641,7 @@ mod tests {
             ind.style.visibility.set(TimeUnit::Day, Some((2, 3)));
             ind.visible = false;
 
-            let (numbers, colors) = slots(&ind.study);
+            let (numbers, colors) = (number_slots(&ind.study), color_slots(&ind.study));
             let texts =
                 |i: &Indicator| numbers.iter().map(|s| slot_text(i, *s)).collect::<Vec<_>>();
             let swatches = |i: &Indicator| {

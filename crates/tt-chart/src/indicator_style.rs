@@ -145,24 +145,32 @@ impl Default for IndicatorStyle {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct IntervalVisibility {
+    /// Tick charts (TradingView's first row; tradeterm has no tick charts
+    /// yet, so this only persists). Missing in older files: on.
+    pub ticks: bool,
     pub seconds: Option<(u16, u16)>,
     pub minutes: Option<(u16, u16)>,
     pub hours: Option<(u16, u16)>,
     pub days: Option<(u16, u16)>,
     pub weeks: Option<(u16, u16)>,
     pub months: Option<(u16, u16)>,
+    /// Range-based intervals (TradingView's last row; persists only, like
+    /// `ticks`).
+    pub ranges: bool,
 }
 
 impl Default for IntervalVisibility {
     fn default() -> Self {
         let f = |u| Some(Self::full_range(u));
         Self {
+            ticks: true,
             seconds: f(TimeUnit::Second),
             minutes: f(TimeUnit::Minute),
             hours: f(TimeUnit::Hour),
             days: f(TimeUnit::Day),
             weeks: f(TimeUnit::Week),
             months: f(TimeUnit::Month),
+            ranges: true,
         }
     }
 }

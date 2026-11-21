@@ -125,6 +125,7 @@ pub struct DialogOpts {
     on_open: Option<OnceHandler>,
     comfortable: bool,
     width: Option<f32>,
+    live_width: Option<Rc<std::cell::Cell<f32>>>,
     rename: Option<(SharedString, RenameHandler)>,
 }
 
@@ -137,6 +138,7 @@ impl DialogOpts {
             on_open: None,
             comfortable: false,
             width: None,
+            live_width: None,
             rename: None,
         }
     }
@@ -154,6 +156,13 @@ impl DialogOpts {
     /// Fixed width (overrides the size's).
     pub fn width(mut self, w: f32) -> Self {
         self.width = Some(w);
+        self
+    }
+
+    /// A width the panel changes while the dialog is open (TradingView's
+    /// indicator dialog grows on its Visibility tab): read on every frame.
+    pub fn live_width(mut self, w: Rc<std::cell::Cell<f32>>) -> Self {
+        self.live_width = Some(w);
         self
     }
 
@@ -197,6 +206,7 @@ pub fn open_dialog<P: Render>(
         on_open,
         comfortable,
         width,
+        live_width,
         rename,
     } = opts;
     let on_open = RefCell::new(on_open);
@@ -227,6 +237,7 @@ pub fn open_dialog<P: Render>(
                 .rounded(px(C_R_DIALOG)),
             None => dialog.title(drag.handle(div().w_full().child(title.clone()))),
         };
+        let width = live_width.as_ref().map_or(width, |w| w.get());
         // Dragged by its header: shift the (centered) surface.
         let o = drag.offset_in(window.viewport_size(), px(width));
         let dialog = dialog
