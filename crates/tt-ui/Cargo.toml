@@ -1,0 +1,12 @@
+[package]
+name = "tt-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "tradeterm's UI kit on gpui-component: tokens, theme sync, Lucide glyphs, buttons, menus, dialogs, forms (docs/specs/ui-guidelines.md §3)."
+
+[dependencies]
+ecolor = "0.37.0"
+gpui-kit = "=0.10.0"
+lucide-icons = "1.77.0"
+tt-theme = { path = "../tt-theme" }
