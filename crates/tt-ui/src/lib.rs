@@ -15,6 +15,7 @@ pub mod dialog;
 pub mod divider;
 pub mod form;
 pub mod glyph;
+pub mod icon_select;
 pub mod list;
 pub mod menu;
 pub mod motion;
@@ -34,6 +35,7 @@ pub use dialog::{
 pub use divider::Divider;
 pub use form::{CheckBox, CheckSelect, ColorField, Field, FormRow, NumberField, PALETTE, Select};
 pub use glyph::{Glyph, GlyphEl, ICON_FONT, glyph, register_icon_font};
+pub use icon_select::IconSelect;
 pub use list::{EmptyState, ListKey, ListNav, ListRow, Tag};
 pub use menu::{Menu, MenuNav, MenuRow, MenuWidth, SectionHeader};
 pub use overlay::{Overlay, PaneControls};
@@ -60,6 +62,7 @@ pub mod prelude {
     pub use crate::divider::Divider;
     pub use crate::form::{CheckBox, CheckSelect, ColorField, Field, FormRow, NumberField, Select};
     pub use crate::glyph::{Glyph, glyph};
+    pub use crate::icon_select::IconSelect;
     pub use crate::list::{EmptyState, ListKey, ListNav, ListRow, Tag};
     pub use crate::menu::{Menu, MenuRow, MenuWidth, SectionHeader};
     pub use crate::overlay::{Overlay, PaneControls};

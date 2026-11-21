@@ -16,8 +16,24 @@ use tt_ui::hsla;
 use tt_ui::prelude::*;
 use tt_ui::tokens::*;
 
-/// The picker's size (§3.6: a list with a left nav).
-pub const SIZE: DialogSize = DialogSize::Lg;
+/// TradingView's picker (measured, docs/specs/indicators-tv-ref.md): 840
+/// × 638 with the 68 px header.
+pub const W_PICKER: f32 = 840.0;
+/// The body under the header: search 40 + lists 530.
+const H_PICKER_BODY: f32 = 570.0;
+const H_PICKER_SEARCH: f32 = 40.0;
+/// The left nav column (items 200 wide after the 20 px inset).
+const W_PICKER_NAV: f32 = 230.0;
+const H_PICKER_NAV: f32 = 40.0;
+const H_PICKER_CAPTION: f32 = 30.0;
+/// The list's "SCRIPT NAME" row.
+const H_PICKER_HEADER: f32 = 40.0;
+const H_PICKER_ROW: f32 = 32.0;
+/// Star box of a row, icon box of a nav item.
+const W_STAR: f32 = 22.0;
+const W_NAV_ICON: f32 = 28.0;
+/// The list's side inset (rows start 10 px into it).
+const LIST_INSET: f32 = 10.0;
 
 /// Rows a PageUp / PageDown moves (about one screen of 36 px rows).
 const PAGE: usize = 10;
@@ -171,12 +187,13 @@ impl IndicatorsPanel {
         cx.notify();
     }
 
-    fn row(&self, i: usize, kind: StudyKind, cx: &Context<Self>) -> ListRow {
+    /// One result: `[☆] Name` (TradingView: 32 tall, radius 8, the star in
+    /// a 22 px box, the match in the active color).
+    fn row(&self, i: usize, kind: StudyKind, cx: &Context<Self>) -> Stateful<Div> {
         let t = cx.ui();
         let fav = self.favorites.contains(&kind);
-        let id = ElementId::from(("indicator", i));
-        // ListRow's hover group (shows the star of unstarred rows).
-        let group = SharedString::from(format!("list-row-{id}"));
+        let selected = self.selected == Some(i);
+        let group = SharedString::from(format!("indicator-row-{i}"));
         let name = StyledText::new(kind.name()).with_highlights(
             match_ranges(kind.name(), self.query.trim())
                 .into_iter()
@@ -190,27 +207,30 @@ impl IndicatorsPanel {
                     )
                 }),
         );
-        let short = kind.meta().short;
         let this = cx.entity().downgrade();
         let star = div()
             .id(("star", i))
             .flex_none()
-            .size(px(CONTROL_XS))
+            .size(px(W_STAR))
             .flex()
             .items_center()
             .justify_center()
             .rounded(px(R_SM))
             .cursor_pointer()
             .when(fav, |d| d.text_color(hsla(t.favorite)))
-            .when(!fav, |d| {
+            .when(!fav && !selected, |d| {
                 d.invisible()
-                    .group_hover(group, |s| s.visible())
+                    .group_hover(group.clone(), |s| s.visible())
                     .text_color(hsla(t.text_muted))
+                    .hover(|s| s.text_color(hsla(t.text)))
+            })
+            .when(!fav && selected, |d| {
+                d.text_color(hsla(t.text_muted))
                     .hover(|s| s.text_color(hsla(t.text)))
             })
             .child(glyph(
                 if fav { Glyph::StarFilled } else { Glyph::STAR },
-                ICON_SM,
+                ICON_MD,
             ))
             .tooltip(tip(
                 if fav {
@@ -227,32 +247,104 @@ impl IndicatorsPanel {
                     this.update(cx, |p, cx| p.toggle_favorite(kind, cx)).ok();
                 }
             });
-        let leading = h_flex()
-            .flex_1()
-            .min_w_0()
-            .gap(px(S2))
-            .map(|mut d| {
-                // Take the row's width from its (empty) text column.
-                d.style().flex_grow = Some(1000.);
-                d
-            })
-            .child(div().whitespace_nowrap().text_ellipsis().child(name))
-            .child(Tag::new(short));
-        ListRow::new(id)
-            .selected(self.selected == Some(i))
-            .leading(leading)
-            .trailing(star)
+        let (hover, active_bg) = (hsla(t.hover), hsla(t.active_bg));
+        div()
+            .id(("indicator", i))
+            .group(group)
+            .flex_none()
+            .h(px(H_PICKER_ROW))
+            .pl(px(S1))
+            .pr(px(S4))
+            .flex()
+            .items_center()
+            .gap(px(S1))
+            .rounded(px(C_R_CONTROL))
+            .cursor_pointer()
+            .text_size(px(TEXT_BODY))
+            .text_color(hsla(t.text))
+            .when(selected, |d| d.bg(active_bg))
+            .when(!selected, |d| d.hover(move |s| s.bg(hover)))
+            .child(star)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
+                    .child(name),
+            )
             .on_click(move |_, _, cx| {
                 this.update(cx, |p, cx| p.add(kind, cx)).ok();
             })
     }
+
+    /// A left-nav item: 40 tall, radius 8, icon in a 28 px box; the current
+    /// one filled and semibold.
+    fn nav_item(
+        &self,
+        section: Section,
+        label: &'static str,
+        icon: Glyph,
+        cx: &Context<Self>,
+    ) -> Stateful<Div> {
+        let t = cx.ui();
+        let on = self.section == section;
+        let (hover, sel) = (hsla(t.hover), hsla(t.selection));
+        let this = cx.entity().downgrade();
+        div()
+            .id(section.id())
+            .flex_none()
+            .h(px(H_PICKER_NAV))
+            .px(px(S2))
+            .flex()
+            .items_center()
+            .gap(px(S2))
+            .rounded(px(C_R_CONTROL))
+            .cursor_pointer()
+            .text_size(px(TEXT_BODY))
+            .text_color(hsla(t.text))
+            .when(on, |d| d.bg(sel).font_weight(FontWeight::SEMIBOLD))
+            .when(!on, |d| d.hover(move |s| s.bg(hover)))
+            .child(
+                div()
+                    .flex_none()
+                    .size(px(W_NAV_ICON))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(glyph(icon, ICON_LG)),
+            )
+            .child(label)
+            .on_click(move |_, _, cx| {
+                this.update(cx, |p, cx| {
+                    p.section = section;
+                    p.selected = None;
+                    cx.notify();
+                })
+                .ok();
+            })
+    }
+}
+
+/// An 11 px muted caption ("PERSONAL", "SCRIPT NAME").
+fn caption(text: &str, h: f32, muted: Hsla) -> Div {
+    div()
+        .flex_none()
+        .h(px(h))
+        .flex()
+        .items_center()
+        .text_size(px(TEXT_CAPTION))
+        .text_color(muted)
+        .child(text.to_uppercase())
 }
 
 impl Render for IndicatorsPanel {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let muted = hsla(cx.ui().text_muted);
+        let t = cx.ui().clone();
+        let muted = hsla(t.text_muted);
         let rows = self.rows();
-        let body = if rows.is_empty() {
+        let list: AnyElement = if rows.is_empty() {
             let msg = if self.section == Section::Favorites && self.query.is_empty() {
                 "Star indicators to add them to your favorites"
             } else {
@@ -260,7 +352,7 @@ impl Render for IndicatorsPanel {
             };
             EmptyState::new(msg).into_any_element()
         } else {
-            let list: Vec<ListRow> = rows
+            let items: Vec<Stateful<Div>> = rows
                 .iter()
                 .enumerate()
                 .map(|(i, k)| self.row(i, *k, cx))
@@ -271,60 +363,89 @@ impl Render for IndicatorsPanel {
                 .id("indicator-list")
                 .flex_1()
                 .min_h_0()
+                .px(px(LIST_INSET))
                 .overflow_y_scroll()
                 .track_scroll(&self.scroll)
-                .children(list)
+                .children(items)
                 .into_any_element()
         };
-        let this = cx.entity().downgrade();
-        let nav = NavTabs::vertical()
-            .item(Section::Favorites.id(), "Favorites", Some(Glyph::STAR))
-            .item(
-                Section::Technicals.id(),
+        // Searching groups results under "Technicals", like TradingView.
+        let header = if self.query.trim().is_empty() {
+            "Script name"
+        } else {
+            "Technicals"
+        };
+        let sidebar = v_flex()
+            .flex_none()
+            .w(px(W_PICKER_NAV))
+            .pl(px(C_PAD_X))
+            .pr(px(LIST_INSET))
+            .pt(px(S2))
+            .child(caption("Personal", H_PICKER_CAPTION, muted))
+            .child(self.nav_item(Section::Favorites, "Favorites", Glyph::STAR, cx))
+            .child(div().h(px(S2)))
+            .child(caption("Built-in", H_PICKER_CAPTION, muted))
+            .child(self.nav_item(
+                Section::Technicals,
                 "Technicals",
-                Some(Glyph::Lucide(Lucide::ChartLine)),
-            )
-            .selected(self.section.id())
-            .on_change(move |id, _, cx| {
-                let section = if id == "favorites" {
-                    Section::Favorites
-                } else {
-                    Section::Technicals
-                };
-                this.update(cx, |p, cx| {
-                    p.section = section;
-                    p.selected = None;
+                Glyph::Lucide(Lucide::ChartLine),
+                cx,
+            ));
+        v_flex()
+            .id("indicators")
+            .w_full()
+            .h(px(H_PICKER_BODY))
+            .capture_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
+                let k = &e.keystroke;
+                if k.modifiers.control || k.modifiers.alt || k.modifiers.shift {
+                    return;
+                }
+                let n = this.rows().len();
+                if let Some(next) = nav_key(this.selected, k.key.as_str(), n) {
+                    this.selected = next;
+                    if let Some(i) = next {
+                        this.scroll.scroll_to_item(i);
+                    }
+                    cx.stop_propagation();
                     cx.notify();
-                })
-                .ok();
-            });
-        DialogFrame::new(SIZE).id("indicators").nav(nav).body(
-            v_flex()
-                .size_full()
-                .gap(px(S2))
-                .capture_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
-                    let k = &e.keystroke;
-                    if k.modifiers.control || k.modifiers.alt || k.modifiers.shift {
-                        return;
-                    }
-                    let n = this.rows().len();
-                    if let Some(next) = nav_key(this.selected, k.key.as_str(), n) {
-                        this.selected = next;
-                        if let Some(i) = next {
-                            this.scroll.scroll_to_item(i);
-                        }
-                        cx.stop_propagation();
-                        cx.notify();
-                    }
-                }))
-                .child(
+                }
+            }))
+            .child(
+                div().flex_none().px(px(C_PAD_X)).child(
                     Input::new(&self.input)
-                        .prefix(glyph(Glyph::SEARCH, ICON_SM).color(muted))
-                        .cleanable(true),
-                )
-                .child(SectionHeader::new("Script name"))
-                .child(body),
-        )
+                        .prefix(
+                            div()
+                                .size(px(W_NAV_ICON))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(glyph(Glyph::SEARCH, ICON_LG).color(muted)),
+                        )
+                        .cleanable(true)
+                        .map(|i| Styled::h(i, px(H_PICKER_SEARCH)))
+                        .rounded(px(C_R_CONTROL)),
+                ),
+            )
+            .child(
+                h_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .items_start()
+                    .child(sidebar)
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .pb(px(S2))
+                            .child(div().pl(px(LIST_INSET + S1 + W_STAR + S1)).child(caption(
+                                header,
+                                H_PICKER_HEADER,
+                                muted,
+                            )))
+                            .child(list),
+                    ),
+            )
     }
 }
 
