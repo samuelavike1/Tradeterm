@@ -33,8 +33,8 @@ Add to this list whenever something is skipped; remove an entry when it lands.
 - Remember a maximized pane across restarts.
 
 ## Drawing tools
-- Remaining tools: info line, trend angle; channels (parallel, regression, flat
-  top/bottom, disjoint); pitchforks; Fib extension / channel / time zone / fans /
+- Remaining tools: channels (regression, flat top/bottom, disjoint); pitchforks;
+  Fib channel / time zone / fans /
   circles / spiral / arcs / wedge, pitchfan; Gann box / square / fan; chart patterns
   (XABCD, Cypher, head and shoulders, ABCD, triangle, three drives); Elliott waves;
   cycles (cyclic lines, time cycles, sine line); long / short position, position
