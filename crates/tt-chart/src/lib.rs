@@ -35,7 +35,7 @@ pub use drawings::{
     DrawingTool, Drawings, LineStyle, MagnetMode, Mods, Placement, Props, Repaint, ToolGroup,
     Visibility, VisualOrder,
 };
-pub use indicator_style::IndicatorStyle;
+pub use indicator_style::{IndicatorStyle, IntervalVisibility};
 pub use indicators::Indicator;
 pub use kind::{ChartType, ScaleMode};
 pub use style::{ChartStyle, ColorSlot, Rgba, ScaleButtons};

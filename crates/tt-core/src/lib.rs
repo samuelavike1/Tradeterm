@@ -26,7 +26,7 @@ pub use studies::meta::{
     FillDef, FillEdge, HLineDef, InputDef, InputKind, InputValue, LineStyle, PlotDef, PlotDefault,
     PlotKind, PlotType, Rgba, StudyMeta, ValueFormat,
 };
-pub use studies::{Placement, Plot, Source, Study, StudyKind, ma, meta};
+pub use studies::{Placement, Plot, Source, Study, StudyKind, StudyState, ma, meta};
 pub use symbol_info::{SymbolInfo, precision_from_tick_size};
 pub use timeframe::{TimeUnit, Timeframe, civil_from_days, days_from_civil};
 pub use types::{Candle, PriceTicks, Symbol};

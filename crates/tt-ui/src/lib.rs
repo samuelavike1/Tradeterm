@@ -30,7 +30,7 @@ pub use dialog::{
 pub use divider::Divider;
 pub use form::{ColorField, FormRow, NumberField, PALETTE, Select};
 pub use glyph::{Glyph, GlyphEl, ICON_FONT, glyph, register_icon_font};
-pub use list::{EmptyState, ListRow, Tag};
+pub use list::{EmptyState, ListKey, ListNav, ListRow, Tag};
 pub use menu::{Menu, MenuNav, MenuRow, MenuWidth, SectionHeader};
 pub use overlay::{Overlay, PaneControls};
 pub use theme::{ActiveUiTheme, UiTheme, hsla};
@@ -49,7 +49,7 @@ pub mod prelude {
     pub use crate::divider::Divider;
     pub use crate::form::{ColorField, FormRow, NumberField, Select};
     pub use crate::glyph::{Glyph, glyph};
-    pub use crate::list::{EmptyState, ListRow, Tag};
+    pub use crate::list::{EmptyState, ListKey, ListNav, ListRow, Tag};
     pub use crate::menu::{Menu, MenuRow, MenuWidth, SectionHeader};
     pub use crate::overlay::{Overlay, PaneControls};
     pub use crate::theme::{ActiveUiTheme, hsla};

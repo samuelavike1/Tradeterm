@@ -1,7 +1,7 @@
 //! Relative Strength Index (Wilder).
 
 use super::meta::*;
-use super::{Placement, Source, Study, StudyKind, as_u32};
+use super::{Placement, Source, Study, StudyKind, StudyState, as_u32};
 use crate::CandleSeries;
 
 const PURPLE: u32 = 0x7e57c2;
@@ -32,17 +32,45 @@ pub(super) static META: StudyMeta = StudyMeta {
     bounds: Some((0.0, 100.0)),
 };
 
-pub(super) fn compute(src: &CandleSeries, out: &mut [Vec<f64>], length: u32, source: Source) {
-    let n = src.len();
-    let len = length.max(1) as usize;
-    // Wilder's RSI: its state lives in the RMAs, so always run from the
-    // start (cheap: one pass).
-    rsi(|i| source.value(src, i), len, &mut out[0], n);
+/// Wilder's RSI keeps its state in two RMAs (average gain and loss) that the
+/// output does not reveal: they are the checkpoint.
+#[derive(Debug, Clone, Copy, Default)]
+pub(super) struct State {
+    /// Sums of gains/losses during the seed window, then their RMAs.
+    up: f64,
+    down: f64,
 }
 
-fn rsi(x: impl Fn(usize) -> f64, len: usize, out: &mut [f64], n: usize) {
-    let (mut up, mut down) = (0.0, 0.0);
-    for i in 0..n {
+pub(super) fn compute(
+    src: &CandleSeries,
+    out: &mut [Vec<f64>],
+    from: usize,
+    length: u32,
+    source: Source,
+    st: &mut StudyState,
+) {
+    let n = src.len();
+    let len = length.max(1) as usize;
+    let (from, s) = st.resume(from);
+    let ck = rsi(|i| source.value(src, i), len, &mut out[0], from, n, s);
+    st.save(n - 1, ck);
+}
+
+/// RSI from bar `from` with `s` the state before it; returns the state
+/// before bar `n - 1`.
+fn rsi(
+    x: impl Fn(usize) -> f64,
+    len: usize,
+    out: &mut [f64],
+    from: usize,
+    n: usize,
+    mut s: State,
+) -> State {
+    let mut ck = s;
+    for i in from..n {
+        if i + 1 == n {
+            ck = s;
+        }
         if i == 0 {
             out[0] = f64::NAN;
             continue;
@@ -50,24 +78,25 @@ fn rsi(x: impl Fn(usize) -> f64, len: usize, out: &mut [f64], n: usize) {
         let ch = x(i) - x(i - 1);
         let (g, l) = (ch.max(0.0), (-ch).max(0.0));
         if i <= len {
-            up += g;
-            down += l;
+            s.up += g;
+            s.down += l;
             if i < len {
                 out[i] = f64::NAN;
                 continue;
             }
-            up /= len as f64;
-            down /= len as f64;
+            s.up /= len as f64;
+            s.down /= len as f64;
         } else {
-            up = (up * (len as f64 - 1.0) + g) / len as f64;
-            down = (down * (len as f64 - 1.0) + l) / len as f64;
+            s.up = (s.up * (len as f64 - 1.0) + g) / len as f64;
+            s.down = (s.down * (len as f64 - 1.0) + l) / len as f64;
         }
-        out[i] = if down == 0.0 {
+        out[i] = if s.down == 0.0 {
             100.0
         } else {
-            100.0 - 100.0 / (1.0 + up / down)
+            100.0 - 100.0 / (1.0 + s.up / s.down)
         };
     }
+    ck
 }
 
 pub(super) fn get(s: &Study, id: &str) -> Option<InputValue> {

@@ -109,6 +109,8 @@ pub struct RenderInput {
     pub crosshair: Option<emath::Pos2>,
     /// Legend row under the pointer (indicator id; 0 = collapse button).
     pub legend_hover: Option<u64>,
+    /// Legend button under the pointer (drawn with the `hover` fill).
+    pub legend_hover_button: Option<(u64, LegendButton)>,
 }
 
 /// What [`ChartView::render`] reports to the caller.
@@ -214,6 +216,9 @@ pub struct ChartView {
     /// Pane filling the chart, the others collapsed (0 = price pane,
     /// otherwise an indicator id). Not saved.
     pub maximized: Option<u64>,
+    /// The chart's interval, for the indicators' Visibility tab (`None`:
+    /// unknown, every indicator is shown). Not saved.
+    pub timeframe: Option<tt_core::Timeframe>,
     /// Relative height of the price pane vs. indicator panes.
     main_weight: f32,
     /// Legend buttons laid out last frame.
@@ -265,6 +270,7 @@ impl ChartView {
             drawings: Drawings::default(),
             main_collapsed: false,
             maximized: None,
+            timeframe: None,
             main_weight: MAIN_PANE_WEIGHT,
             legend_hits: Vec::new(),
             last_layout: ChartLayout::default(),
@@ -398,6 +404,17 @@ impl ChartView {
         &self.last_layout
     }
 
+    /// Where the last frame drew legend button `button` of row `id` (for
+    /// the chart view's tooltip on canvas hit areas).
+    pub fn legend_button_rect(&self, id: u64, button: LegendButton) -> Option<Rect> {
+        self.legend_hits
+            .iter()
+            .filter(|h| h.id == id)
+            .flat_map(|h| h.buttons.iter())
+            .find(|(b, _)| *b == button)
+            .map(|(_, r)| *r)
+    }
+
     /// What is at `p` (screen point) in the last frame's layout.
     pub fn hit_test(&self, p: Pos2) -> ChartHit {
         for hit in &self.legend_hits {
@@ -443,12 +460,7 @@ impl ChartView {
     /// indicator ids of the indicator panes.
     pub fn pane_ids(&self) -> Vec<u64> {
         std::iter::once(0)
-            .chain(
-                self.indicators
-                    .iter()
-                    .filter(|i| i.placement() == Placement::Pane)
-                    .map(|i| i.id),
-            )
+            .chain(self.indicators.iter().filter(|i| i.in_pane()).map(|i| i.id))
             .collect()
     }
 
@@ -509,7 +521,7 @@ impl ChartView {
             .indicators
             .iter()
             .enumerate()
-            .filter(|(_, i)| i.placement() == Placement::Pane)
+            .filter(|(_, i)| i.in_pane())
             .map(|(k, _)| k)
             .collect();
         let Some(j) = slots.iter().position(|&k| self.indicators[k].id == id) else {
@@ -793,6 +805,7 @@ impl ChartView {
                 legend_collapsed: self.legend_collapsed,
                 main_collapsed: fr.main_collapsed,
                 legend_hover: input.legend_hover,
+                legend_hover_button: input.legend_hover_button,
                 price_axis: fr.price_axis,
                 time_axis: fr.time_axis,
                 display,
@@ -832,6 +845,11 @@ impl ChartView {
     ) -> RenderOutput {
         let started = Instant::now();
         let series = data.series;
+        // Visibility tab: indicators outside their interval ranges are not
+        // computed, drawn or given a pane.
+        for ind in &mut self.indicators {
+            ind.set_interval(self.timeframe);
+        }
         // Some chart types display a derived series (Heikin Ashi, Renko, Line
         // break) whose bar count can differ from the raw one.
         let mut derived = std::mem::take(&mut self.derived);
@@ -881,7 +899,7 @@ impl ChartView {
             }
             _ => None,
         };
-        for ind in &mut self.indicators {
+        for ind in self.indicators.iter_mut().filter(|i| !i.interval_hidden()) {
             ind.sync(display);
         }
         // Volume overlays share the bottom of the price pane.
@@ -889,7 +907,7 @@ impl ChartView {
         let volume_rect = self
             .indicators
             .iter()
-            .any(|i| i.visible && i.placement() == Placement::VolumeOverlay)
+            .any(|i| i.shown() && i.placement() == Placement::VolumeOverlay)
             .then(|| {
                 Rect::from_min_max(
                     pos2(
@@ -945,7 +963,7 @@ impl ChartView {
         let source_only = self.chart_type.uses_source_only();
         // Price-pane overlays (moving averages, bands…) take part in auto-fit.
         let mut extent = price_extent(&bars, source_only);
-        for ind in self.indicators.iter().filter(|i| i.visible) {
+        for ind in self.indicators.iter().filter(|i| i.shown()) {
             if ind.placement() == Placement::Overlay
                 && let Some((lo, hi)) = ind.extent_sampled(range.clone(), stride)
             {
@@ -976,7 +994,7 @@ impl ChartView {
             .indicators
             .iter()
             .enumerate()
-            .filter(|(_, i)| i.placement() == Placement::Pane)
+            .filter(|(_, i)| i.in_pane())
             .zip(pane_rects.iter().skip(1))
             .map(|((index, ind), rect)| {
                 let (min, max) = pane_range(ind, range.clone(), stride);
@@ -1081,7 +1099,7 @@ impl ChartView {
             .chain(
                 self.indicators
                     .iter()
-                    .filter(|i| i.placement() == Placement::Pane)
+                    .filter(|i| i.in_pane())
                     .map(|i| i.pane_weight),
             )
             .collect();
@@ -1121,7 +1139,7 @@ impl ChartView {
             .chain(
                 self.indicators
                     .iter_mut()
-                    .filter(|i| i.placement() == Placement::Pane)
+                    .filter(|i| i.in_pane())
                     .map(|i| &mut i.pane_weight),
             )
             .collect();
@@ -1358,6 +1376,7 @@ mod tests {
                 RenderInput {
                     crosshair: Some(pos2(x, 200.0)),
                     legend_hover: None,
+                    ..Default::default()
                 },
             );
             assert!(over.0.iter().any(|t| t == "T") && over.0.iter().any(|t| t == "O"));
@@ -1436,6 +1455,7 @@ mod tests {
             RenderInput {
                 crosshair: Some(row),
                 legend_hover: Some(rsi),
+                ..Default::default()
             },
         );
         let buttons: Vec<_> = v
@@ -1581,5 +1601,63 @@ mod tests {
         v.zoom_at(2.0, 500.0, 500.0);
         assert_eq!(v.right_offset, before);
         assert_eq!(v.bar_spacing, DEFAULT_SPACING * 2.0);
+    }
+
+    #[test]
+    fn indicators_outside_their_intervals_are_not_computed_drawn_or_given_a_pane() {
+        use tt_core::{StudyKind, TimeUnit, Timeframe};
+        let mut series = CandleSeries::new();
+        for i in 0..100 {
+            let c = 100.0 + (i as f64 * 0.3).sin();
+            series.upsert(tt_core::Candle {
+                open_time_ms: i * 60_000,
+                open: c,
+                high: c + 1.0,
+                low: c - 1.0,
+                close: c,
+                volume: 1.0,
+            });
+        }
+        let data = ChartData {
+            series: &series,
+            title: "T",
+            tick_size: Some(0.01),
+            now_ms: None,
+            bar_interval_ms: Some(60_000),
+            bar_close_ms: None,
+        };
+        let theme = Theme::dark();
+        let full = Rect::from_min_size(pos2(0.0, 0.0), emath::vec2(900.0, 600.0));
+        let mut v = ChartView::default();
+        let mut rsi = Indicator::new(StudyKind::Rsi.default_study());
+        rsi.style.visibility.set(TimeUnit::Minute, Some((5, 59)));
+        let mut sma = Indicator::new(StudyKind::Sma.default_study());
+        sma.style.visibility.set(TimeUnit::Minute, None);
+        v.indicators = vec![sma, rsi];
+
+        // 1 minute: both are outside their ranges.
+        v.timeframe = Some(Timeframe::M1);
+        v.render_base(&mut Texts::default(), full, 1.0, data, &theme);
+        assert_eq!(v.last_layout().panes.len(), 1, "the RSI pane is gone");
+        assert!(v.indicators.iter().all(|i| !i.shown() && i.visible));
+        assert!(
+            v.indicators.iter().all(|i| i.outputs().is_empty()),
+            "not computed"
+        );
+        let mut over = Texts::default();
+        v.render_overlay(&mut over, data, &theme, RenderInput::default());
+        assert!(!over.0.iter().any(|t| t.starts_with("RSI")), "{:?}", over.0);
+
+        // 5 minutes: RSI is back with its pane; the SMA stays hidden.
+        v.timeframe = Some(Timeframe::M5);
+        v.render_base(&mut Texts::default(), full, 1.0, data, &theme);
+        assert_eq!(v.last_layout().panes.len(), 2);
+        assert!(v.indicators[1].shown() && !v.indicators[1].outputs().is_empty());
+        assert!(!v.indicators[0].shown());
+
+        // Unknown interval: everything is shown.
+        v.timeframe = None;
+        v.render_base(&mut Texts::default(), full, 1.0, data, &theme);
+        assert!(v.indicators.iter().all(|i| i.shown()));
     }
 }

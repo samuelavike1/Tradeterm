@@ -149,7 +149,7 @@ fn time_tag(c: &mut dyn Canvas, s: &Scene<'_>, x: f32, time_ms: i64, bg: Color32
     let mut r = Align2::CENTER_CENTER.anchor_size(pos2(x, s.time_axis.center().y), sz);
     let dx = (s.plot.left() - r.left()).max(0.0) + (s.plot.right() - r.right()).min(0.0);
     r = r.translate(vec2(dx, 0.0));
-    c.fill_rounded_rect(r, 2.0, bg);
+    c.fill_rounded_rect(r, tt_theme::metrics::R_XS, bg);
     c.text(
         r.center(),
         Align2::CENTER_CENTER,

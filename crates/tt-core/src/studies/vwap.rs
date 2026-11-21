@@ -1,7 +1,7 @@
 //! Session VWAP (reset at 00:00 UTC), hlc3 source.
 
 use super::meta::*;
-use super::{Placement, Source, Study, StudyKind};
+use super::{Placement, Source, Study, StudyKind, StudyState};
 use crate::CandleSeries;
 
 pub(super) const DAY_MS: i64 = 86_400_000;
@@ -27,41 +27,40 @@ pub(super) static META: StudyMeta = StudyMeta {
     bounds: None,
 };
 
-pub(super) fn compute(src: &CandleSeries, out: &mut [Vec<f64>], from: usize) {
+/// Session sums before the checkpoint bar (the session is the day of the
+/// bar before it).
+#[derive(Debug, Clone, Copy, Default)]
+pub(super) struct State {
+    pv: f64,
+    vol: f64,
+}
+
+pub(super) fn compute(src: &CandleSeries, out: &mut [Vec<f64>], from: usize, st: &mut StudyState) {
     let n = src.len();
     // Session VWAP: cumulative typical price × volume since 00:00 UTC.
-    // Walk back to the session start of `from` to resume sums.
     let t = src.open_times();
-    let start = if from == 0 || from >= n {
-        from
-    } else {
-        let day = t[from].div_euclid(DAY_MS);
-        (0..=from)
-            .rev()
-            .take_while(|&j| t[j].div_euclid(DAY_MS) == day)
-            .last()
-            .unwrap_or(from)
-    };
-    let (mut pv, mut vol) = (0.0, 0.0);
-    let mut day = None;
-    for i in start..n {
+    let (from, mut s) = st.resume::<State>(from);
+    let mut day = from.checked_sub(1).map(|j| t[j].div_euclid(DAY_MS));
+    let mut ck = s;
+    for i in from..n {
+        if i + 1 == n {
+            ck = s;
+        }
         let d = t[i].div_euclid(DAY_MS);
         if day != Some(d) {
             day = Some(d);
-            pv = 0.0;
-            vol = 0.0;
+            s = State::default();
         }
         let v = src.volumes()[i];
-        pv += Source::Hlc3.value(src, i) * v;
-        vol += v;
-        if i >= from {
-            out[0][i] = if vol > 0.0 {
-                pv / vol
-            } else {
-                Source::Hlc3.value(src, i)
-            };
-        }
+        s.pv += Source::Hlc3.value(src, i) * v;
+        s.vol += v;
+        out[0][i] = if s.vol > 0.0 {
+            s.pv / s.vol
+        } else {
+            Source::Hlc3.value(src, i)
+        };
     }
+    st.save(n - 1, ck);
 }
 
 pub(super) fn get(s: &Study, id: &str) -> Option<InputValue> {
