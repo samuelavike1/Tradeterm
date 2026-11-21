@@ -33,6 +33,8 @@ pub fn now_ms() -> i64 {
 impl ChartSource for TabSource {
     fn parts(&mut self) -> (&mut ChartView, ChartData<'_>) {
         let tab = &mut self.tab;
+        // Indicator visibility ranges follow the tab's interval.
+        tab.chart.timeframe = Some(tab.timeframe);
         let live = tab.synthetic.is_none();
         let bar_close_ms = tab
             .series

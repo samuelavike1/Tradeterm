@@ -184,6 +184,170 @@ impl IndicatorConfig {
     }
 }
 
+/// An indicator's inputs and style without runtime or pane fields: what
+/// "Save as default" and named presets store.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct IndicatorPreset {
+    pub study: Study,
+    /// Sparse, like [`IndicatorConfig::style`].
+    #[serde(default)]
+    pub style: IndicatorStyle,
+}
+
+impl IndicatorPreset {
+    /// Inputs and (pruned) style of `ind`.
+    pub fn of(ind: &Indicator) -> Self {
+        Self {
+            study: ind.study.clone(),
+            style: ind.style.pruned(ind.study.meta()),
+        }
+    }
+
+    /// Factory settings of `kind`.
+    pub fn factory(kind: StudyKind) -> Self {
+        Self {
+            study: kind.default_study(),
+            style: IndicatorStyle::default(),
+        }
+    }
+
+    pub fn kind(&self) -> StudyKind {
+        self.study.kind()
+    }
+
+    /// Applies inputs and style to `ind` (identity, visibility and pane
+    /// fields stay).
+    pub fn apply_to(&self, ind: &mut Indicator) {
+        ind.study = self.study.clone();
+        ind.style = self.style.clone();
+    }
+}
+
+/// A user-named preset of one indicator kind (a tradeterm extension of
+/// TradingView's Defaults menu).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NamedPreset {
+    pub name: String,
+    pub preset: IndicatorPreset,
+}
+
+/// Longest preset name kept.
+pub const MAX_PRESET_NAME: usize = 64;
+
+/// User defaults by kind ("Save as default").
+pub type IndicatorDefaults = std::collections::BTreeMap<StudyKind, IndicatorPreset>;
+/// Named presets by kind.
+pub type IndicatorPresets = std::collections::BTreeMap<StudyKind, Vec<NamedPreset>>;
+
+/// A new indicator of `kind`: the user default if one was saved, else the
+/// factory settings.
+pub fn new_indicator(kind: StudyKind, defaults: &IndicatorDefaults) -> Indicator {
+    let mut ind = Indicator::new(kind.default_study());
+    if let Some(p) = defaults.get(&kind).filter(|p| p.kind() == kind) {
+        p.apply_to(&mut ind);
+    }
+    ind
+}
+
+/// `name` trimmed and cut to [`MAX_PRESET_NAME`] characters (`None` if
+/// empty).
+pub fn preset_name(name: &str) -> Option<String> {
+    let name: String = name.trim().chars().take(MAX_PRESET_NAME).collect();
+    let name = name.trim_end().to_owned();
+    (!name.is_empty()).then_some(name)
+}
+
+/// Saves `preset` under `name` in its kind's list. Names are unique,
+/// compared case-insensitively: saving under an existing name replaces that
+/// preset in place. Returns `false` for an empty name.
+pub fn save_preset(presets: &mut IndicatorPresets, name: &str, preset: IndicatorPreset) -> bool {
+    let Some(name) = preset_name(name) else {
+        return false;
+    };
+    let list = presets.entry(preset.kind()).or_default();
+    let key = name.to_lowercase();
+    match list.iter_mut().find(|p| p.name.to_lowercase() == key) {
+        Some(p) => {
+            p.name = name;
+            p.preset = preset;
+        }
+        None => list.push(NamedPreset { name, preset }),
+    }
+    true
+}
+
+/// Deletes preset `name` of `kind` (case-insensitive). Returns whether one
+/// was removed.
+pub fn delete_preset(presets: &mut IndicatorPresets, kind: StudyKind, name: &str) -> bool {
+    let Some(list) = presets.get_mut(&kind) else {
+        return false;
+    };
+    let key = name.trim().to_lowercase();
+    let before = list.len();
+    list.retain(|p| p.name.to_lowercase() != key);
+    let removed = list.len() != before;
+    if list.is_empty() {
+        presets.remove(&kind);
+    }
+    removed
+}
+
+/// User defaults per indicator kind ("Save as default"). Read leniently:
+/// an entry for a kind this build does not know, or whose study is of
+/// another kind than its key, is skipped instead of failing the file.
+fn tolerant_defaults<'de, D>(
+    d: D,
+) -> Result<std::collections::BTreeMap<StudyKind, IndicatorPreset>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = std::collections::BTreeMap::<String, serde_json::Value>::deserialize(d)?;
+    Ok(raw
+        .into_iter()
+        .filter_map(|(k, v)| {
+            let kind: StudyKind = serde_json::from_value(serde_json::Value::String(k.clone()))
+                .map_err(|e| warn!("skipping indicator default {k}: {e}"))
+                .ok()?;
+            let p: IndicatorPreset = serde_json::from_value(v)
+                .map_err(|e| warn!("skipping indicator default {k}: {e}"))
+                .ok()?;
+            (p.kind() == kind).then_some((kind, p))
+        })
+        .collect())
+}
+
+/// Named presets per indicator kind, read element by element like
+/// [`tolerant_defaults`].
+fn tolerant_presets<'de, D>(
+    d: D,
+) -> Result<std::collections::BTreeMap<StudyKind, Vec<NamedPreset>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = std::collections::BTreeMap::<String, serde_json::Value>::deserialize(d)?;
+    Ok(raw
+        .into_iter()
+        .filter_map(|(k, v)| {
+            let kind: StudyKind = serde_json::from_value(serde_json::Value::String(k.clone()))
+                .map_err(|e| warn!("skipping indicator presets {k}: {e}"))
+                .ok()?;
+            let list: Vec<NamedPreset> = match v {
+                serde_json::Value::Array(items) => items
+                    .into_iter()
+                    .filter_map(|v| {
+                        serde_json::from_value::<NamedPreset>(v)
+                            .map_err(|e| warn!("skipping indicator preset: {e}"))
+                            .ok()
+                    })
+                    .filter(|p| p.preset.kind() == kind && !p.name.trim().is_empty())
+                    .collect(),
+                _ => return None,
+            };
+            (!list.is_empty()).then_some((kind, list))
+        })
+        .collect())
+}
+
 /// Deserializes a list element by element, skipping (with a warning) the
 /// entries that fail, so one unknown entry, such as a study kind written by
 /// a newer version, does not reject the whole settings file.
@@ -295,6 +459,18 @@ pub struct AppSettings {
     /// Starred entries of the indicators dialog (unknown kinds are skipped).
     #[serde(deserialize_with = "tolerant_vec")]
     pub favorite_indicators: Vec<StudyKind>,
+    /// "Save as default" per indicator kind: new instances start from it.
+    #[serde(
+        deserialize_with = "tolerant_defaults",
+        skip_serializing_if = "std::collections::BTreeMap::is_empty"
+    )]
+    pub indicator_defaults: std::collections::BTreeMap<StudyKind, IndicatorPreset>,
+    /// Named presets per indicator kind, in creation order.
+    #[serde(
+        deserialize_with = "tolerant_presets",
+        skip_serializing_if = "std::collections::BTreeMap::is_empty"
+    )]
+    pub indicator_presets: std::collections::BTreeMap<StudyKind, Vec<NamedPreset>>,
     /// The user default chart settings (TradingView's Settings dialog): new
     /// tabs start from it and tabs without their own `style` follow it.
     pub chart_style: tt_chart::ChartStyle,
@@ -320,6 +496,8 @@ impl Default for AppSettings {
             collapsed_timeframe_sections: Vec::new(),
             favorite_chart_types: Vec::new(),
             favorite_indicators: Vec::new(),
+            indicator_defaults: Default::default(),
+            indicator_presets: Default::default(),
             chart_style: tt_chart::ChartStyle::default(),
             drawings: Default::default(),
         }
@@ -836,6 +1014,115 @@ mod tests {
         assert_eq!(SettingsStore::load(Some(path)).0, changed);
         // The backup survives the new write.
         assert_eq!(std::fs::read_to_string(&backup).unwrap(), "{ not json");
+    }
+
+    #[test]
+    fn indicator_defaults_and_presets_round_trip_and_drive_new_indicators() {
+        let mut s = AppSettings::default();
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(
+            !json.contains("indicator_defaults") && !json.contains("indicator_presets"),
+            "empty maps are not written"
+        );
+
+        // Save as default: RSI 21 on high, purple line 2 px.
+        let mut rsi = Indicator::new(StudyKind::Rsi.default_study());
+        assert!(rsi.study.set("length", tt_core::InputValue::Int(21)));
+        rsi.style.plot_mut("rsi").width = Some(2);
+        rsi.style.plot_mut("rsi").visible = Some(true); // = default, pruned
+        let preset = IndicatorPreset::of(&rsi);
+        assert!(preset.style.plots["rsi"].visible.is_none(), "pruned");
+        s.indicator_defaults.insert(StudyKind::Rsi, preset.clone());
+
+        // Named presets: unique case-insensitively, replaced in place.
+        assert!(save_preset(
+            &mut s.indicator_presets,
+            "  Fast ",
+            preset.clone()
+        ));
+        let mut slow = preset.clone();
+        slow.study.set("length", tt_core::InputValue::Int(50));
+        assert!(save_preset(&mut s.indicator_presets, "Slow", slow.clone()));
+        assert!(save_preset(&mut s.indicator_presets, "FAST", slow.clone()));
+        assert!(!save_preset(&mut s.indicator_presets, "   ", slow.clone()));
+        let list = &s.indicator_presets[&StudyKind::Rsi];
+        assert_eq!(
+            list.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
+            ["FAST", "Slow"]
+        );
+        assert_eq!(list[0].preset, slow);
+
+        let back: AppSettings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back, s);
+
+        // New instances use the default; other kinds use factory settings.
+        let ind = new_indicator(StudyKind::Rsi, &back.indicator_defaults);
+        assert_eq!(ind.study.get("length"), Some(tt_core::InputValue::Int(21)));
+        assert_eq!(ind.style, preset.style);
+        let sma = new_indicator(StudyKind::Sma, &back.indicator_defaults);
+        assert_eq!(sma.study, StudyKind::Sma.default_study());
+
+        // Delete; the last one removes the kind's entry.
+        assert!(delete_preset(
+            &mut s.indicator_presets,
+            StudyKind::Rsi,
+            "fast"
+        ));
+        assert!(!delete_preset(
+            &mut s.indicator_presets,
+            StudyKind::Rsi,
+            "fast"
+        ));
+        assert!(delete_preset(
+            &mut s.indicator_presets,
+            StudyKind::Rsi,
+            "Slow"
+        ));
+        assert!(s.indicator_presets.is_empty());
+    }
+
+    #[test]
+    fn indicator_defaults_and_presets_load_tolerantly() {
+        // An unknown kind (newer version), a broken study, a mismatched key
+        // and an empty name are skipped; the good entries and the rest of
+        // the file survive.
+        let json = r#"{
+            "favorite_indicators": ["Rsi"],
+            "indicator_defaults": {
+                "Supertrend": {"study": {"type": "Supertrend", "length": 10}},
+                "Sma": {"study": {"type": "Sma", "length": "x"}},
+                "Ema": {"study": {"type": "Sma", "length": 5, "source": "Close"}},
+                "Rsi": {"study": {"type": "Rsi", "length": 21, "source": "Close"},
+                        "style": {"precision": 3}}
+            },
+            "indicator_presets": {
+                "Future": [{"name": "a", "preset": {"study": {"type": "Future"}}}],
+                "Macd": "not a list",
+                "Rsi": [
+                    {"name": "ok", "preset": {"study": {"type": "Rsi", "length": 7, "source": "Close"}}},
+                    {"name": "bad", "preset": {"study": {"type": "Nope"}}},
+                    {"name": "  ", "preset": {"study": {"type": "Rsi", "length": 7, "source": "Close"}}},
+                    {"name": "kind", "preset": {"study": {"type": "Atr", "length": 7}}}
+                ]
+            }
+        }"#;
+        let s: AppSettings = serde_json::from_str(json).unwrap();
+        assert_eq!(s.favorite_indicators, [StudyKind::Rsi]);
+        assert_eq!(
+            s.indicator_defaults.keys().copied().collect::<Vec<_>>(),
+            [StudyKind::Rsi]
+        );
+        assert_eq!(
+            s.indicator_defaults[&StudyKind::Rsi].style.precision,
+            Some(3)
+        );
+        let rsi = &s.indicator_presets[&StudyKind::Rsi];
+        assert_eq!(rsi.len(), 1);
+        assert_eq!(rsi[0].name, "ok");
+        assert_eq!(s.indicator_presets.len(), 1);
+        // Files without the fields load as before.
+        let old: AppSettings = serde_json::from_str(r#"{"active_tab":0}"#).unwrap();
+        assert!(old.indicator_defaults.is_empty() && old.indicator_presets.is_empty());
     }
 
     #[test]

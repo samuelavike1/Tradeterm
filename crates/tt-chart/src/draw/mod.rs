@@ -184,7 +184,7 @@ pub(crate) fn draw_base(c: &mut dyn Canvas, s: &Scene<'_>) {
 
     if let Some(vr) = s.volume_rect.filter(|_| !s.main_collapsed) {
         c.set_clip(vr);
-        for ind in s.indicators.iter().filter(|i| i.visible) {
+        for ind in s.indicators.iter().filter(|i| i.shown()) {
             if ind.placement() == Placement::VolumeOverlay {
                 volume(c, s, vr, ind);
             }
@@ -193,7 +193,7 @@ pub(crate) fn draw_base(c: &mut dyn Canvas, s: &Scene<'_>) {
     if !s.main_collapsed {
         c.set_clip(s.vp_rect());
         series(c, s);
-        for ind in s.indicators.iter().filter(|i| i.visible) {
+        for ind in s.indicators.iter().filter(|i| i.shown()) {
             if ind.placement() == Placement::Overlay {
                 study_plots(c, s, &s.vp, ind);
             }
@@ -204,7 +204,7 @@ pub(crate) fn draw_base(c: &mut dyn Canvas, s: &Scene<'_>) {
     for pane in &s.panes {
         c.set_clip(pane.rect());
         let ind = &s.indicators[pane.index];
-        if ind.visible && !pane.collapsed {
+        if ind.shown() && !pane.collapsed {
             study_plots(c, s, &pane.vp, ind);
         }
     }
