@@ -209,16 +209,7 @@ impl ChartSettingsPanel {
         rows.push(Self::row("Lines").control(lines).into_any_element());
 
         rows.push(section("Buttons"));
-        let nav = self
-            .select(
-                "cv.nav_buttons",
-                ButtonsVisibility::ALL.iter().map(|v| (*v, v.label())),
-                cv.nav_buttons,
-                |s, v| s.canvas.nav_buttons = v,
-                cx,
-            )
-            .width(W_SELECT_WIDE);
-        rows.push(Self::row("Navigation").control(nav).into_any_element());
+        // Navigation buttons: hidden until the chart has them (BACKLOG.md).
         let pane = self
             .select(
                 "cv.pane_buttons",

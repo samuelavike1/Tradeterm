@@ -475,7 +475,9 @@ impl<S: ChartSource> Chart<S> {
         let axis_hover = l.price_axis.x_range().contains(p.x)
             && p.y >= l.price_axis.top()
             && p.y <= l.time_axis.bottom();
-        let hover_pane = (p.x >= l.plot.left() && p.x <= l.price_axis.right())
+        let hover_pane = l
+            .panes_x_range()
+            .contains(p.x)
             .then(|| l.panes.iter().position(|r| r.y_range().contains(p.y)))
             .flatten();
         let legend_tip = match hit {
@@ -957,10 +959,23 @@ impl<S: ChartSource> Chart<S> {
     /// `IconButton::Sm` with managed tooltips (G13) on the overlay surface
     /// (G14); they fade in and out (G12).
     fn pane_controls(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
-        use lucide_icons::Icon;
-
-        let l = self.state.read(cx).source.view().last_layout().clone();
+        let view = self.state.read(cx).source.view();
+        let l = view.last_layout().clone();
         let n = l.panes.len();
+        match view.pane_buttons() {
+            tt_chart::style::ButtonsVisibility::Never => return None,
+            tt_chart::style::ButtonsVisibility::Always => {
+                if n < 2 || self.drag.is_some() {
+                    return None;
+                }
+                let mut all = div().absolute().inset_0();
+                for (k, id) in l.pane_ids.iter().copied().enumerate() {
+                    all = all.child(self.pane_row(&l, k, id, 1.0, cx));
+                }
+                return Some(all.into_any_element());
+            }
+            tt_chart::style::ButtonsVisibility::OnHover => {}
+        }
         let shown = self
             .hover_pane
             .filter(|&k| n > 1 && k < n && self.drag.is_none())
@@ -979,6 +994,21 @@ impl<S: ChartSource> Chart<S> {
             self.last_pane = None;
             return None;
         }
+        Some(self.pane_row(&l, k, id, opacity, cx).into_any_element())
+    }
+
+    /// The move / delete / collapse / maximize buttons of pane `k`.
+    fn pane_row(
+        &self,
+        l: &tt_chart::ChartLayout,
+        k: usize,
+        id: u64,
+        opacity: f32,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        use lucide_icons::Icon;
+
+        let n = l.panes.len();
         let view = self.state.read(cx).source.view();
         let (collapsed, maximized) = (view.is_pane_collapsed(id), view.maximized == Some(id));
         let rect = l.panes[k];
@@ -990,10 +1020,17 @@ impl<S: ChartSource> Chart<S> {
                 .size(ControlSize::Sm)
                 .tooltip(tip)
         };
+        // Clear of the price axis on whichever side it is.
+        let right = if l.price_axis_left() {
+            S1_5
+        } else {
+            l.price_axis.width() + S1_5
+        };
         let mut row = div()
+            .id(("pane-row", k))
             .absolute()
             .top(px(rect.top() - origin.y + S1))
-            .right(px(l.price_axis.width() + S1_5))
+            .right(px(right))
             .flex()
             .gap(px(S0_5))
             .p(px(S0_5))
@@ -1044,9 +1081,8 @@ impl<S: ChartSource> Chart<S> {
         } else {
             (Glyph::MAXIMIZE, "Maximize pane")
         };
-        row = row.child(button("pane-maximize", glyph, tip).on_click(
+        row.child(button("pane-maximize", glyph, tip).on_click(
             cx.listener(move |this, _, _, cx| this.edit_panes(cx, |v| v.toggle_pane_maximized(id))),
-        ));
-        Some(row.into_any_element())
+        ))
     }
 }
