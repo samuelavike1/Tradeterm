@@ -13,7 +13,10 @@ mod symbol_info;
 mod timeframe;
 mod types;
 
-pub use bricks::{atr, line_break, renko, renko_box_size};
+pub use bricks::{
+    BoxSize, Bricks, RenkoParams, atr, line_break, line_break_with, renko, renko_box,
+    renko_box_size, renko_with,
+};
 pub use event::{ConnectionStatus, EventSink, MarketEvent};
 pub use heikin_ashi::{HeikinAshi, heikin_ashi, heikin_ashi_bar};
 pub use resample::{ResampleError, Resampler, bucket_start, can_resample, resample};

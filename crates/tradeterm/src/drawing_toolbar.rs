@@ -2,9 +2,10 @@
 //! group (a flyout when the group has more than one implemented tool), then
 //! magnet, keep drawing, lock all, hide all and remove all.
 //!
-//! Groups and their tools come from `DrawingTool::available()` and
-//! `DrawingTool::group()`, so a newly implemented tool shows up here (and a
-//! one-tool group becomes a flyout) without touching this file.
+//! Groups and their tools come from `DrawingTool` (the `LINES` / `FIB` /
+//! `MEASURERS` lists, else `available()` by `group()`), so a newly
+//! implemented tool shows up here (and a one-tool group becomes a flyout)
+//! without touching this file.
 //!
 //! The tool and the toggles are app-wide (like TradingView) and pushed into
 //! every chart; a chart reports back when placing a drawing released the
@@ -46,11 +47,38 @@ fn group_title(g: ToolGroup) -> &'static str {
     }
 }
 
-/// The implemented tools of a group, in toolbar order.
+/// The toolbar group a tool sits in: the explicit flyout lists
+/// (`DrawingTool::LINES`, `FIB`, `MEASURERS`) win over `DrawingTool::group`,
+/// so a tool can live in another flyout until its own group has one (the
+/// arrow in Lines).
+fn toolbar_group(t: DrawingTool) -> ToolGroup {
+    if DrawingTool::LINES.contains(&t) {
+        ToolGroup::Lines
+    } else if DrawingTool::FIB.contains(&t) {
+        ToolGroup::Fib
+    } else if DrawingTool::MEASURERS.contains(&t) {
+        ToolGroup::Measurers
+    } else {
+        t.group()
+    }
+}
+
+/// The implemented tools of a group: the group's list where it has one,
+/// in that order, otherwise in `DrawingTool::ALL` order.
 fn group_tools(g: ToolGroup) -> Vec<DrawingTool> {
-    DrawingTool::available()
-        .filter(|t| t.group() == g)
-        .collect()
+    let listed: &[DrawingTool] = match g {
+        ToolGroup::Lines => &DrawingTool::LINES,
+        ToolGroup::Fib => &DrawingTool::FIB,
+        ToolGroup::Measurers => &DrawingTool::MEASURERS,
+        _ => &[],
+    };
+    if listed.is_empty() {
+        DrawingTool::available()
+            .filter(|t| toolbar_group(*t) == g)
+            .collect()
+    } else {
+        listed.iter().copied().filter(|t| t.is_available()).collect()
+    }
 }
 
 /// Drawing tool and toggles, shared by all charts.
@@ -161,7 +189,7 @@ impl TradeTerm {
     pub fn set_draw_mode(&mut self, f: impl FnOnce(&mut DrawMode), cx: &mut Context<Self>) {
         f(&mut self.draw);
         if let Some(t) = self.draw.tool {
-            self.draw.shown[group_index(t.group())] = Some(t);
+            self.draw.shown[group_index(toolbar_group(t))] = Some(t);
         }
         self.apply_draw_mode(cx);
         cx.notify();
