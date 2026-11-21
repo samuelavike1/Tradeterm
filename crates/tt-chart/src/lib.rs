@@ -41,5 +41,5 @@ pub use kind::{ChartType, ScaleMode};
 pub use style::{ChartStyle, ColorSlot, Rgba, ScaleButtons};
 pub use view::{
     BACKFILL_MARGIN_BARS, ChartData, ChartHit, ChartLayout, ChartStats, ChartView, RenderInput,
-    RenderOutput, WHEEL_ZOOM_PER_POINT,
+    RenderOutput, SymbolLabels, WHEEL_ZOOM_PER_POINT,
 };

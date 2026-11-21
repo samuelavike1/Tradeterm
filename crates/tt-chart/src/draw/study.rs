@@ -536,6 +536,7 @@ pub(super) fn value_color(s: &Scene<'_>, ind: &Indicator, k: usize, j: usize) ->
 /// Value tags on the price axis for every drawn indicator output
 /// (TradingView's "Labels on price scale", per indicator and globally).
 pub(super) fn study_tags(s: &Scene<'_>) -> Vec<(usize, Tag)> {
+    let mode = s.style.scales.indicators;
     let mut tags = Vec::new();
     for (idx, ind) in s.indicators.iter().enumerate() {
         if !ind.visible || !ind.style.labels_on_price_scale {
@@ -565,10 +566,16 @@ pub(super) fn study_tags(s: &Scene<'_>) -> Vec<(usize, Tag)> {
             let y = vp.y_of(v);
             if y >= vp.plot.top && y <= vp.plot.bottom {
                 let bg = value_color(s, ind, k, values.len() - 1);
-                tags.push((
-                    pane_no,
-                    price_axis_tag(s, y, vec![ind.format(v, s.precision)], bg),
-                ));
+                let lines = if mode.shows_value() {
+                    vec![ind.format(v, s.precision)]
+                } else {
+                    Vec::new()
+                };
+                let mut tag = price_axis_tag(s, y, lines, bg);
+                if mode.shows_name() {
+                    tag.name = Some(ind.study.meta().short);
+                }
+                tags.push((pane_no, tag));
             }
         }
     }

@@ -264,8 +264,17 @@ impl ChartTab {
 
     pub fn set_timeframe(&mut self, tf: Timeframe, shared: &Shared) {
         if tf != self.timeframe {
+            // Save chart left edge position when changing interval.
+            let left = self
+                .chart
+                .style
+                .scales
+                .keep_left_edge
+                .then(|| self.chart.left_edge_time(&self.series))
+                .flatten();
             self.timeframe = tf;
             self.restart(shared);
+            self.chart.keep_left_edge(left);
         }
     }
 

@@ -21,6 +21,18 @@ impl TabSource {
             self.tab.timeframe,
             self.tab.source_name(&self.shared)
         );
+        // Name label, currency label and watermark (allocates only on change).
+        let ticker = self.tab.display_symbol();
+        let interval = self.tab.timeframe.to_string();
+        let (quote, description) = match &self.tab.symbol_info {
+            Some(i) if !i.quote.is_empty() => {
+                (i.quote.as_str(), format!("{} / {}", i.base, i.quote))
+            }
+            _ => ("", String::new()),
+        };
+        self.tab
+            .chart
+            .set_symbol_labels(&ticker, &interval, quote, &description);
     }
 }
 

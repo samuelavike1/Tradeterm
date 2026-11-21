@@ -66,6 +66,23 @@ pub struct ChartData<'a> {
     pub bar_close_ms: Option<i64>,
 }
 
+/// Names of the charted symbol for price-scale labels and the watermark,
+/// set by the app when the symbol or interval changes
+/// ([`ChartView::set_symbol_labels`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SymbolLabels {
+    /// "BTCUSDT": the symbol's name label on the price scale.
+    pub ticker: String,
+    /// "1h".
+    pub interval: String,
+    /// Quote currency ("USDT"): the currency and unit label.
+    pub currency: String,
+    /// "BTC / USDT": the watermark's second line.
+    pub description: String,
+    /// "BTCUSDT, 1h" (built once, for the watermark).
+    pub ticker_interval: String,
+}
+
 /// What is under a point, from the last frame's layout
 /// ([`ChartView::hit_test`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,6 +133,22 @@ pub struct ChartLayout {
     pub pane_ids: Vec<u64>,
     /// Per pane: collapsed to a strip.
     pub collapsed: Vec<bool>,
+}
+
+impl ChartLayout {
+    /// Horizontal extent of the panes including the price axis (on either
+    /// side), for pane hover and divider hit tests.
+    pub fn panes_x_range(&self) -> emath::Rangef {
+        emath::Rangef::new(
+            self.plot.left().min(self.price_axis.left()),
+            self.plot.right().max(self.price_axis.right()),
+        )
+    }
+
+    /// Whether the price axis is left of the plot (Scales placement › Left).
+    pub fn price_axis_left(&self) -> bool {
+        self.price_axis.right() <= self.plot.left()
+    }
 }
 
 impl Default for ChartLayout {
@@ -204,6 +237,14 @@ pub struct ChartView {
     lod_kind: Option<ChartType>,
     /// Requested zoom (number of bars to fit), applied on the next frame.
     pending_zoom: Option<usize>,
+    /// Time to put at the left edge once bars arrive (Save chart left edge
+    /// position when changing interval).
+    pending_left_edge: Option<i64>,
+    /// `canvas.margins.right` the offset was last adjusted for, so a changed
+    /// margin moves the view live.
+    applied_right_margin: f32,
+    /// Ticker, currency and description for labels and the watermark.
+    labels: SymbolLabels,
 }
 
 impl Default for ChartView {
@@ -239,7 +280,72 @@ impl ChartView {
             lod: Lod::new(),
             lod_kind: None,
             pending_zoom: None,
+            pending_left_edge: None,
+            applied_right_margin: DEFAULT_RIGHT_OFFSET,
+            labels: SymbolLabels::default(),
         }
+    }
+
+    /// Sets the names shown by the symbol name label, the currency label
+    /// and the watermark. Allocates only when something changed.
+    pub fn set_symbol_labels(
+        &mut self,
+        ticker: &str,
+        interval: &str,
+        currency: &str,
+        description: &str,
+    ) {
+        let l = &self.labels;
+        if l.ticker == ticker
+            && l.interval == interval
+            && l.currency == currency
+            && l.description == description
+        {
+            return;
+        }
+        self.labels = SymbolLabels {
+            ticker: ticker.to_owned(),
+            interval: interval.to_owned(),
+            currency: currency.to_owned(),
+            description: description.to_owned(),
+            ticker_interval: if interval.is_empty() {
+                ticker.to_owned()
+            } else {
+                format!("{ticker}, {interval}")
+            },
+        };
+    }
+
+    pub fn symbol_labels(&self) -> &SymbolLabels {
+        &self.labels
+    }
+
+    /// Open time at the left edge of the last frame (`None` before one).
+    /// `series` is the raw data the chart was drawn from.
+    pub fn left_edge_time(&self, series: &CandleSeries) -> Option<i64> {
+        let fr = self.frame.as_ref()?;
+        let slot = fr.vp.index_at(fr.vp.plot.left) as f64 + 0.5;
+        let display = self.derived.series(self.chart_type).unwrap_or(series);
+        SlotTimes::new(display.open_times(), fr.bar_interval_ms).time_at_frac(slot)
+    }
+
+    /// Puts `time` at the left edge when the next bars arrive, keeping the
+    /// zoom. Call after [`Self::reset_view`] on an interval change when
+    /// `scales.keep_left_edge` is on.
+    pub fn keep_left_edge(&mut self, time: Option<i64>) {
+        self.pending_left_edge = time;
+    }
+
+    /// Canvas › Buttons › Navigation: when the zoom / scroll / reset overlay
+    /// shows (drawn by the backend).
+    pub fn nav_buttons(&self) -> crate::style::ButtonsVisibility {
+        self.style.canvas.nav_buttons
+    }
+
+    /// Canvas › Buttons › Pane: when the pane buttons (move, collapse,
+    /// maximize, remove) show (drawn by the backend).
+    pub fn pane_buttons(&self) -> crate::style::ButtonsVisibility {
+        self.style.canvas.pane_buttons
     }
 
     /// Statistics from the most recent [`Self::show`] call.
@@ -251,6 +357,7 @@ impl ChartView {
     pub fn reset_view(&mut self) {
         self.bar_spacing = DEFAULT_SPACING;
         self.right_offset = self.style.canvas.margins.right;
+        self.applied_right_margin = self.style.canvas.margins.right;
         self.manual_range = None;
     }
 
@@ -312,8 +419,7 @@ impl ChartView {
             if !fixed(k - 1)
                 && !fixed(k)
                 && (p.y - pane.top()).abs() <= 3.0
-                && p.x >= l.plot.left()
-                && p.x <= l.price_axis.right()
+                && l.panes_x_range().contains(p.x)
             {
                 return ChartHit::PaneDivider(k);
             }
@@ -692,6 +798,9 @@ impl ChartView {
                 display,
                 projection_from: derived.projection_from(self.chart_type),
                 last_raw: series.last(),
+                raw: series,
+                labels: &self.labels,
+                time_fmt: crate::scale::TimeFormat::from_style(&self.style.scales),
                 bars: &fr.bars,
                 decimated: fr.decimated,
                 crosshair: input.crosshair.filter(|p| fr.plot.contains(*p)),
@@ -746,6 +855,22 @@ impl ChartView {
             self.bar_spacing = (plot.width() / bars).clamp(MIN_SPACING, MAX_SPACING);
             self.right_offset = 0.0;
             self.manual_range = None;
+        }
+        // Right margin edited in the settings: move the view with it.
+        let margin = self.style.canvas.margins.right;
+        if margin != self.applied_right_margin {
+            self.right_offset += margin - self.applied_right_margin;
+            self.applied_right_margin = margin;
+        }
+        let interval = data
+            .bar_interval_ms
+            .unwrap_or_else(|| bar_interval_ms(series));
+        if n > 0
+            && let Some(t) = self.pending_left_edge.take()
+            && let Some(slot) = SlotTimes::new(display.open_times(), interval).slot_of(t)
+        {
+            // Slot `slot` at the left edge (not before the first bar).
+            self.right_offset = slot.max(0.0) as f32 + plot.width() / self.bar_spacing - n as f32;
         }
         self.clamp_offset(plot, n);
 
@@ -835,6 +960,15 @@ impl ChartView {
             fit_price_range_margins(lo, hi, vp.scale, top, bottom)
         });
         self.last_range = self.manual_range.unwrap_or(auto);
+        if let Some(ratio) = self.style.scales.lock_ratio {
+            self.last_range = locked_range(
+                self.last_range,
+                ratio,
+                price_rect.height(),
+                self.bar_spacing,
+                self.scale_mode,
+            );
+        }
         (vp.price_min, vp.price_max) = self.last_range;
 
         // Indicator panes: same x mapping, own auto-fit value range.
@@ -878,9 +1012,7 @@ impl ChartView {
             time_axis,
             decimated,
             precision,
-            bar_interval_ms: data
-                .bar_interval_ms
-                .unwrap_or_else(|| bar_interval_ms(series)),
+            bar_interval_ms: interval,
         };
         let slots = SlotTimes::new(display.open_times(), frame.bar_interval_ms);
         self.drawings.layout(
@@ -1029,14 +1161,22 @@ impl ChartView {
             _ => crate::scale::format_price(sample_price, precision),
         };
         let axis_w = (canvas.text_size(&sample, self.style.scales.text_size).x + 22.0).max(64.0);
-        let plot_right = full.right() - axis_w;
         let plot_bottom = full.bottom() - self.style.time_axis_height;
+        let time_axis = Rect::from_min_max(pos2(full.left(), plot_bottom), full.max);
+        if self.style.scales.placement == crate::style::ScalePlacement::Left {
+            let plot_left = full.left() + axis_w;
+            let plot =
+                Rect::from_min_max(pos2(plot_left, full.top()), pos2(full.right(), plot_bottom));
+            let price_axis = Rect::from_min_max(full.min, pos2(plot_left, plot_bottom));
+            return (plot, price_axis, time_axis);
+        }
+        // Auto = right (one price scale).
+        let plot_right = full.right() - axis_w;
         let plot = Rect::from_min_max(full.min, pos2(plot_right, plot_bottom));
         let price_axis = Rect::from_min_max(
             pos2(plot_right, full.top()),
             pos2(full.right(), plot_bottom),
         );
-        let time_axis = Rect::from_min_max(pos2(full.left(), plot_bottom), full.max);
         (plot, price_axis, time_axis)
     }
 
@@ -1055,6 +1195,24 @@ impl ChartView {
         self.right_offset += dist / new_spacing - dist / self.bar_spacing;
         self.bar_spacing = new_spacing;
     }
+}
+
+/// Lock price to bar ratio: the price range of a pane `height` points tall
+/// at `ratio` price units per bar, centered on `range`. Linear scale only
+/// (log and percent scales keep `range`).
+fn locked_range(
+    range: (f64, f64),
+    ratio: f64,
+    height: f32,
+    bar_spacing: f32,
+    mode: ScaleMode,
+) -> (f64, f64) {
+    if mode != ScaleMode::Linear || !(ratio > 0.0 && ratio.is_finite()) || bar_spacing <= 0.0 {
+        return range;
+    }
+    let span = ratio * height as f64 / bar_spacing as f64;
+    let mid = (range.0 + range.1) / 2.0;
+    (mid - span / 2.0, mid + span / 2.0)
 }
 
 /// Value range of an indicator pane: the visible values (plus its visible
