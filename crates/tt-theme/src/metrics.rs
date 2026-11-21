@@ -292,26 +292,6 @@ pub const fn control_for_icon(icon: f32) -> f32 {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn control_sizes_follow_the_inset_rule() {
-        assert_eq!(control_for_icon(ICON_XS), CONTROL_XS);
-        assert_eq!(control_for_icon(ICON_SM), CONTROL_SM);
-        assert_eq!(control_for_icon(ICON_MD), CONTROL_MD);
-        assert_eq!(control_for_icon(ICON_LG), CONTROL_LG);
-    }
-
-    #[test]
-    fn drawing_toolbar_gutters() {
-        // 34 px buttons with 9 px gutters (TradingView), holding a 28 icon.
-        assert_eq!(W_DRAWING_TOOLBAR - CONTROL_DRAWING, 18.0);
-        assert_eq!(CONTROL_DRAWING - ICON_SVG, 2.0 * 3.0);
-    }
-}
-
 // ---- alerts: "Create alert" dialog and the Alerts panel (docs/specs/alerts.md)
 //
 // Measured on TradingView (2026-11, CSS px, computed styles).
@@ -342,3 +322,23 @@ pub const AL_TOOL_BUTTON: f32 = 38.0;
 pub const AL_EMPTY_ICON: f32 = 120.0;
 pub const AL_EMPTY_TEXT: f32 = 16.0;
 pub const AL_W_EMPTY: f32 = 260.0;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn control_sizes_follow_the_inset_rule() {
+        assert_eq!(control_for_icon(ICON_XS), CONTROL_XS);
+        assert_eq!(control_for_icon(ICON_SM), CONTROL_SM);
+        assert_eq!(control_for_icon(ICON_MD), CONTROL_MD);
+        assert_eq!(control_for_icon(ICON_LG), CONTROL_LG);
+    }
+
+    #[test]
+    fn drawing_toolbar_gutters() {
+        // 34 px buttons with 9 px gutters (TradingView), holding a 28 icon.
+        assert_eq!(W_DRAWING_TOOLBAR - CONTROL_DRAWING, 18.0);
+        assert_eq!(CONTROL_DRAWING - ICON_SVG, 2.0 * 3.0);
+    }
+}
