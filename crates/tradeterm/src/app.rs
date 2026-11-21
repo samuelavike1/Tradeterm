@@ -1,25 +1,19 @@
 //! The tradeterm window: title bar with chart tabs, toolbar, the active
 //! chart, status bar.
 
-use crate::indicators::{IndicatorSettingsPanel, IndicatorsPanel};
-use crate::search::{self, SymbolSearch};
 use crate::source::TabSource;
-use crate::ui::{self, lucide};
-use ecolor::Color32;
+use crate::ui;
 use futures::StreamExt;
 use futures::channel::mpsc;
-use gpui_kit::component::Selectable as _;
-use gpui_kit::component::button::*;
-use gpui_kit::component::dialog::DialogEntrance;
-use gpui_kit::component::menu::*;
-use gpui_kit::component::{IconName, Sizable, TitleBar, WindowExt as _, h_flex, v_flex};
+use gpui_kit::component::{WindowExt as _, h_flex, v_flex};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tt_brokers::BinanceSource;
 use tt_chart::ChartType;
 use tt_chart_gpui::{Chart, ChartEvent, ChartState, hsla};
-use tt_core::{ConnectionStatus, Symbol, Timeframe};
+use tt_core::{Symbol, Timeframe};
 use tt_session::fsutil::Poll;
 use tt_session::runtime::BackgroundRuntime;
 use tt_session::settings::{AppSettings, RecentSymbol, SettingsStore, TabSettings};
@@ -37,8 +31,14 @@ actions!(
         ToggleTheme,
         LoadSynthetic,
         TogglePerf,
+        /// "Indicators, metrics, and strategies" ("/" on the chart).
+        OpenIndicators,
     ]
 );
+
+/// Key context of the app root. Chart-only shortcuts ("/", drawing tools)
+/// are bound in it; tooltips look their keys up in it.
+pub const KEY_CONTEXT: &str = "Tradeterm";
 
 /// Key bindings.
 pub fn bind_keys(cx: &mut App) {
@@ -50,16 +50,18 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-shift-t", ToggleTheme, None),
         KeyBinding::new("ctrl-shift-d", LoadSynthetic, None),
         KeyBinding::new("f12", TogglePerf, None),
+        KeyBinding::new("/", OpenIndicators, Some(KEY_CONTEXT)),
     ]);
+    cx.bind_keys(crate::drawing_toolbar::key_bindings());
 }
 
 /// F12 overlay numbers (per second, for the active chart).
 #[derive(Debug, Clone, Copy, Default)]
-struct PerfStats {
-    events: u64,
-    prev: (tt_chart_gpui::LayerStats, tt_chart_gpui::LayerStats, u64),
+pub(crate) struct PerfStats {
+    pub(crate) events: u64,
+    pub(crate) prev: (tt_chart_gpui::LayerStats, tt_chart_gpui::LayerStats, u64),
     /// (base paints, base ms avg, overlay paints, overlay ms avg, events)
-    last: (u64, f64, u64, f64, u64),
+    pub(crate) last: (u64, f64, u64, f64, u64),
 }
 
 /// Messages from background threads to the UI thread.
@@ -71,30 +73,30 @@ enum Wake {
 pub type TabChart = Entity<Chart<TabSource>>;
 
 pub struct TradeTerm {
-    shared: Shared,
+    pub(crate) shared: Shared,
     pub(crate) tabs: Vec<TabChart>,
-    active: usize,
+    pub(crate) active: usize,
     next_tab_id: u64,
-    theme_mode: ThemeMode,
+    pub(crate) theme_mode: ThemeMode,
     overrides: ThemeOverrides,
     /// Chart palette for the current appearance.
-    theme: Theme,
+    pub(crate) theme: Theme,
     /// Chart settings shared by all charts (TradingView's Settings dialog).
-    chart_style: tt_chart::ChartStyle,
+    pub(crate) chart_style: tt_chart::ChartStyle,
     store: SettingsStore,
-    recent: Vec<RecentSymbol>,
+    pub(crate) recent: Vec<RecentSymbol>,
     pub(crate) favorite_timeframes: Vec<Timeframe>,
     pub(crate) custom_timeframes: Vec<Timeframe>,
     pub(crate) collapsed_timeframe_sections: Vec<String>,
     pub(crate) favorite_chart_types: Vec<ChartType>,
-    favorite_indicators: Vec<tt_core::StudyKind>,
-    perf: bool,
-    perf_stats: PerfStats,
+    pub(crate) favorite_indicators: Vec<tt_core::StudyKind>,
+    pub(crate) perf: bool,
+    pub(crate) perf_stats: PerfStats,
     /// Quote chip of the symbol search, remembered between openings.
     pub(crate) search_quote: usize,
     /// Drawing tool and toggles (left toolbar), shared by all charts.
     pub(crate) draw: crate::drawing_toolbar::DrawMode,
-    focus: FocusHandle,
+    pub(crate) focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
     /// Owns the tokio thread; dropped after the tabs.
     _runtime: BackgroundRuntime,
@@ -208,7 +210,7 @@ impl TradeTerm {
             _subscriptions: Vec::new(),
             _runtime: runtime,
         };
-        ui::apply_theme(dark, window, cx);
+        ui::apply_theme(&app.theme, cx);
         for (i, t) in settings.tabs.iter().enumerate() {
             let synthetic = (i == settings.active_tab).then_some(synthetic).flatten();
             let chart = app.make_chart(t, synthetic, window, cx);
@@ -391,7 +393,7 @@ impl TradeTerm {
 
     // ---- actions -----------------------------------------------------------
 
-    fn new_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn new_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let settings = self
             .tab_chart()
             .map(|c| c.read(cx).state.read(cx).source.tab.settings())
@@ -429,7 +431,12 @@ impl TradeTerm {
         }
     }
 
-    fn set_theme(&mut self, mode: ThemeMode, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn set_theme(
+        &mut self,
+        mode: ThemeMode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.theme_mode = mode;
         let dark = match mode {
             ThemeMode::Dark => true,
@@ -437,7 +444,7 @@ impl TradeTerm {
             ThemeMode::System => window.appearance() == WindowAppearance::Dark,
         };
         self.theme = Theme::for_dark(dark).with_overrides(self.overrides);
-        ui::apply_theme(dark, window, cx);
+        ui::apply_theme(&self.theme, cx);
         for chart in &self.tabs {
             let theme = self.theme.clone();
             chart.update(cx, |chart, cx| chart.update_state(cx, |s| s.theme = theme));
@@ -446,7 +453,7 @@ impl TradeTerm {
         cx.notify();
     }
 
-    fn toggle_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn toggle_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let next = if self.theme.dark {
             ThemeMode::Light
         } else {
@@ -477,57 +484,6 @@ impl TradeTerm {
         });
     }
 
-    /// Opens the symbol search, optionally with text already typed.
-    pub fn open_search(&mut self, initial: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let app = cx.entity().downgrade();
-        let (source, handle) = (self.shared.source.clone(), self.shared.handle.clone());
-        let (theme, recent) = (self.theme.clone(), search::recent_rows(&self.recent));
-        // Opened from the ticker: the current symbol, selected.
-        let select_all = initial.is_empty();
-        let initial = if select_all {
-            self.tab_chart()
-                .map(|c| c.read(cx).state.read(cx).source.tab.display_symbol())
-                .unwrap_or_default()
-        } else {
-            initial.to_owned()
-        };
-        let quote = self.search_quote;
-        let panel = cx.new(|cx| {
-            SymbolSearch::new(
-                app, source, handle, theme, recent, &initial, quote, select_all, window, cx,
-            )
-        });
-        let focus_once = std::cell::Cell::new(true);
-        window.open_dialog(cx, move |dialog, window, cx| {
-            if focus_once.replace(false) {
-                SymbolSearch::focus_input(&panel, window, cx);
-            }
-            dialog
-                .title("Symbol Search")
-                .w(px(680.))
-                .entrance(DialogEntrance::FadeSlide)
-                .child(panel.clone())
-        });
-    }
-
-    /// "Indicators, metrics, and strategies" (toolbar button or "/").
-    pub fn open_indicators(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let app = cx.entity().downgrade();
-        let (theme, favorites) = (self.theme.clone(), self.favorite_indicators.clone());
-        let panel = cx.new(|cx| IndicatorsPanel::new(app, theme, favorites, window, cx));
-        let focus_once = std::cell::Cell::new(true);
-        window.open_dialog(cx, move |dialog, window, cx| {
-            if focus_once.replace(false) {
-                IndicatorsPanel::focus_input(&panel, window, cx);
-            }
-            dialog
-                .title("Indicators, metrics, and strategies")
-                .w(px(780.))
-                .entrance(DialogEntrance::FadeSlide)
-                .child(panel.clone())
-        });
-    }
-
     pub fn add_indicator(&mut self, kind: tt_core::StudyKind, cx: &mut Context<Self>) {
         self.with_tab(cx, |s, _| {
             s.tab
@@ -544,42 +500,6 @@ impl TradeTerm {
     ) {
         self.favorite_indicators = favorites;
         self.persist(cx);
-    }
-
-    /// Settings of one indicator (legend gear or double-click).
-    fn open_indicator_settings(
-        &mut self,
-        chart: TabChart,
-        id: u64,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let exists = chart
-            .read(cx)
-            .state
-            .read(cx)
-            .source
-            .tab
-            .chart
-            .indicators
-            .iter()
-            .any(|i| i.id == id);
-        if !exists {
-            return;
-        }
-        let theme = self.theme.clone();
-        let panel = cx.new(|cx| {
-            IndicatorSettingsPanel::new(chart, id, theme, window, cx)
-                .expect("indicator checked above")
-        });
-        let title = panel.read(cx).title();
-        window.open_dialog(cx, move |dialog, _, _| {
-            dialog
-                .title(title.clone())
-                .w(px(460.))
-                .entrance(DialogEntrance::FadeSlide)
-                .child(panel.clone())
-        });
     }
 
     fn sample_perf(&mut self, cx: &mut Context<Self>) {
@@ -603,55 +523,6 @@ impl TradeTerm {
         }
     }
 
-    fn perf_overlay(&self, cx: &App) -> Option<Div> {
-        if !self.perf {
-            return None;
-        }
-        let chart = self.tab_chart()?;
-        let s = chart.read(cx).state.read(cx);
-        let (bn, bms, on, oms, events) = self.perf_stats.last;
-        let t = &self.theme;
-        let line = |k: &str, v: String| {
-            h_flex()
-                .gap_3()
-                .child(
-                    div()
-                        .w(px(110.))
-                        .text_color(hsla(t.text_muted))
-                        .child(k.to_owned()),
-                )
-                .child(v)
-        };
-        Some(
-            v_flex()
-                .absolute()
-                .top(px(36.))
-                .right(px(90.))
-                .p_3()
-                .gap_0p5()
-                .rounded(px(8.))
-                .bg(hsla(tt_theme::with_alpha(t.panel, 0.94)))
-                .border_1()
-                .border_color(hsla(t.border))
-                .text_size(px(12.))
-                .font_family("Consolas")
-                .child(div().pb_1().child("Performance (F12)"))
-                .child(line(
-                    "Base layer",
-                    format!("{bn:>3}/s  {bms:5.2} ms  {} prims", s.base_stats.primitives),
-                ))
-                .child(line(
-                    "Overlay",
-                    format!(
-                        "{on:>3}/s  {oms:5.2} ms  {} prims",
-                        s.overlay_stats.primitives
-                    ),
-                ))
-                .child(line("Data events", format!("{events}/s")))
-                .child(line("Bars", s.source.tab.series.len().to_string())),
-        )
-    }
-
     /// Applies chart settings to every chart (and new tabs); saves them if
     /// `persist` (the dialog previews without saving).
     pub fn set_chart_style(
@@ -664,6 +535,9 @@ impl TradeTerm {
         self.theme = Theme::for_dark(self.theme.dark).with_overrides(self.overrides);
         self.shared.chart_style = style.clone();
         self.chart_style = style.clone();
+        if &self.theme != tt_ui::ActiveUiTheme::ui(&**cx) {
+            ui::apply_theme(&self.theme, cx);
+        }
         for chart in &self.tabs {
             let (style, theme) = (style.clone(), self.theme.clone());
             chart.update(cx, |chart, cx| {
@@ -677,21 +551,6 @@ impl TradeTerm {
             self.persist(cx);
         }
         cx.notify();
-    }
-
-    /// TradingView's chart "Settings" dialog.
-    pub fn open_chart_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let app = cx.entity().downgrade();
-        let (style, base) = (self.chart_style.clone(), Theme::for_dark(self.theme.dark));
-        let panel = cx
-            .new(|cx| crate::chart_settings::ChartSettingsPanel::new(app, style, base, window, cx));
-        window.open_dialog(cx, move |dialog, _, _| {
-            dialog
-                .title("Settings")
-                .w(px(780.))
-                .entrance(DialogEntrance::FadeSlide)
-                .child(panel.clone())
-        });
     }
 
     pub fn theme(&self) -> &Theme {
@@ -766,284 +625,15 @@ impl TradeTerm {
         self.set_timeframe(tf, cx);
     }
 
-    pub fn open_custom_interval(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let app = cx.entity().downgrade();
-        let panel = cx.new(|cx| crate::menus::CustomInterval::new(app, window, cx));
-        let focus_once = std::cell::Cell::new(true);
-        window.open_dialog(cx, move |dialog, window, cx| {
-            if focus_once.replace(false) {
-                crate::menus::CustomInterval::focus_input(&panel, window, cx);
-            }
-            dialog
-                .title("Add custom interval")
-                .w(px(520.))
-                .entrance(DialogEntrance::FadeSlide)
-                .child(panel.clone())
-        });
-    }
-
     pub fn set_timeframe(&mut self, tf: Timeframe, cx: &mut Context<Self>) {
         self.with_tab(cx, |s, shared| s.tab.set_timeframe(tf, shared));
     }
 
-    // ---- rendering ---------------------------------------------------------
-
-    fn title_bar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut tabs = h_flex().gap_1().h_full().items_center();
-        for (i, chart) in self.tabs.iter().enumerate() {
-            let s = &chart.read(cx).state.read(cx).source.tab;
-            let (label, badge, change) = (s.display_symbol(), s.base_asset(), s.change_pct());
-            tabs = tabs.child(ui::tab_pill(
-                i,
-                i == self.active,
-                label,
-                badge,
-                change,
-                self.tabs.len() > 1,
-                &self.theme,
-                window,
-                cx,
-            ));
-        }
-        let this = cx.entity().downgrade();
-        let dark = self.theme.dark;
-        let mode = self.theme_mode;
-        TitleBar::new().child(
-            h_flex()
-                .w_full()
-                .h_full()
-                .pr_2()
-                .justify_between()
-                .child(
-                    tabs.child(
-                        Button::new("new-tab")
-                            .ghost()
-                            .small()
-                            .icon(IconName::Plus)
-                            .tooltip("New tab (Ctrl+T)")
-                            .on_click(cx.listener(|this, _, window, cx| this.new_tab(window, cx))),
-                    ),
-                )
-                .child(
-                    h_flex()
-                        .gap_1()
-                        .child(
-                            Button::new("theme")
-                                .ghost()
-                                .small()
-                                .icon(if dark { IconName::Sun } else { IconName::Moon })
-                                .tooltip("Toggle theme (Ctrl+Shift+T)")
-                                .on_click(
-                                    cx.listener(|this, _, window, cx| {
-                                        this.toggle_theme(window, cx)
-                                    }),
-                                ),
-                        )
-                        .child(
-                            Button::new("settings")
-                                .ghost()
-                                .small()
-                                .icon(IconName::Settings)
-                                .dropdown_menu(move |menu, _, _| {
-                                    let item = |label: &'static str, m: ThemeMode| {
-                                        let this = this.clone();
-                                        PopupMenuItem::new(label).checked(mode == m).on_click(
-                                            move |_, window, cx| {
-                                                this.update(cx, |app, cx| {
-                                                    app.set_theme(m, window, cx)
-                                                })
-                                                .ok();
-                                            },
-                                        )
-                                    };
-                                    let synth = this.clone();
-                                    let colors = this.clone();
-                                    menu.min_w(px(240.))
-                                        .label("Theme")
-                                        .item(item("Dark", ThemeMode::Dark))
-                                        .item(item("Light", ThemeMode::Light))
-                                        .item(item("System", ThemeMode::System))
-                                        .separator()
-                                        .item(PopupMenuItem::new("Chart settings…").on_click(
-                                            move |_, window, cx| {
-                                                colors
-                                                    .update(cx, |app, cx| {
-                                                        app.open_chart_settings(window, cx)
-                                                    })
-                                                    .ok();
-                                            },
-                                        ))
-                                        .item(
-                                            PopupMenuItem::new("Load 1M synthetic bars").on_click(
-                                                move |_, _, cx| {
-                                                    synth
-                                                        .update(cx, |app, cx| {
-                                                            app.load_synthetic(cx)
-                                                        })
-                                                        .ok();
-                                                },
-                                            ),
-                                        )
-                                }),
-                        ),
-                ),
-        )
-    }
-
-    fn load_synthetic(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn load_synthetic(&mut self, cx: &mut Context<Self>) {
         self.perf = true;
         self.with_tab(cx, |s, shared| {
             s.tab.set_synthetic(Some(synthetic::DEFAULT_BARS), shared)
         });
-    }
-
-    fn toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let Some(chart) = self.tab_chart() else {
-            return div();
-        };
-        let state = chart.read(cx).state.read(cx);
-        let tab = &state.source.tab;
-        let (symbol, tf, chart_type) = (tab.display_symbol(), tab.timeframe, tab.chart.chart_type);
-
-        let mut tfs = h_flex().gap_0p5();
-        let mut favorites = self.favorite_timeframes.clone();
-        if !favorites.contains(&tf) {
-            favorites.push(tf);
-        }
-        favorites.sort_by_key(|t| t.duration_ms());
-        for t in favorites {
-            tfs = tfs.child(
-                Button::new(SharedString::from(format!("tf-{}", t.code())))
-                    .ghost()
-                    .small()
-                    .label(t.label())
-                    .selected(t == tf)
-                    .on_click(cx.listener(move |this, _, _, cx| this.set_timeframe(t, cx))),
-            );
-        }
-        let tf_menu = crate::menus::timeframe_menu(cx);
-        // Favorite chart types as quick buttons, then the current type's menu.
-        let mut chart_types = h_flex().gap_0p5();
-        for fav in self.favorite_chart_types.clone() {
-            if fav == chart_type {
-                continue;
-            }
-            chart_types = chart_types.child(
-                Button::new(SharedString::from(format!("ct-fav-{}", fav.label())))
-                    .ghost()
-                    .small()
-                    .child(lucide(ui::chart_type_icon(fav), 17.))
-                    .tooltip(fav.label())
-                    .on_click(cx.listener(move |this, _, _, cx| this.set_chart_type(fav, cx))),
-            );
-        }
-        let ct_menu = chart_types.child(crate::menus::chart_type_menu(chart_type, cx));
-
-        h_flex()
-            .h(px(40.))
-            .px_2()
-            .gap_1()
-            .items_center()
-            .border_b_1()
-            .border_color(hsla(self.theme.border))
-            .child(
-                Button::new("ticker")
-                    .ghost()
-                    .small()
-                    .icon(IconName::Search)
-                    .label(symbol)
-                    .tooltip("Symbol search (or just start typing)")
-                    .on_click(cx.listener(|this, _, window, cx| this.open_search("", window, cx))),
-            )
-            .child(ui::separator(&self.theme))
-            .child(tfs)
-            .child(tf_menu)
-            .child(ui::separator(&self.theme))
-            .child(ct_menu)
-            .child(ui::separator(&self.theme))
-            .child(
-                Button::new("indicators")
-                    .ghost()
-                    .small()
-                    .child(
-                        h_flex()
-                            .gap_1p5()
-                            .child(lucide(lucide_icons::Icon::SquareFunction, 17.))
-                            .child("Indicators"),
-                    )
-                    .tooltip("Indicators, metrics, and strategies (/)")
-                    .on_click(cx.listener(|this, _, window, cx| this.open_indicators(window, cx))),
-            )
-            .child(div().flex_1())
-    }
-
-    fn status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let t = &self.theme;
-        let Some(chart) = self.tab_chart() else {
-            return div();
-        };
-        let state = chart.read(cx).state.read(cx);
-        let tab = &state.source.tab;
-        let (dot, text) = match &tab.status {
-            ConnectionStatus::Connected => (t.up, "Connected".to_owned()),
-            ConnectionStatus::Connecting => (
-                Color32::from_rgb(0xf5, 0xb5, 0x2e),
-                "Connecting…".to_owned(),
-            ),
-            other => (t.down, format!("{other:?}")),
-        };
-        let last = tab.series.last();
-        let precision = tab.price_precision();
-        let muted = hsla(t.text_muted);
-        let mut bar = h_flex()
-            .h(px(28.))
-            .px_3()
-            .gap_4()
-            .items_center()
-            .text_size(px(12.5))
-            .border_t_1()
-            .border_color(hsla(t.border))
-            .child(
-                h_flex()
-                    .gap_1p5()
-                    .items_center()
-                    .child(ui::status_dot(
-                        dot,
-                        tab.status == ConnectionStatus::Connecting,
-                    ))
-                    .child(text),
-            );
-        if let Some(c) = last {
-            let color = if c.is_bullish() { t.up } else { t.down };
-            bar = bar.child(
-                h_flex()
-                    .gap_1()
-                    .child(div().text_color(muted).child("Last"))
-                    .child(
-                        div()
-                            .text_color(hsla(color))
-                            .child(tt_chart::scale::format_price(c.close, precision)),
-                    ),
-            );
-        }
-        bar = bar.child(
-            h_flex()
-                .gap_1()
-                .child(div().text_color(muted).child("Bars"))
-                .child(tab.series.len().to_string()),
-        );
-        let info = tab
-            .symbol_info
-            .as_ref()
-            .map(|i| format!("{} / {}  tick {}", i.base, i.quote, i.tick_size))
-            .unwrap_or_default();
-        bar.child(div().flex_1())
-            .child(div().text_color(muted).child(info))
-            .child(
-                div()
-                    .text_color(muted)
-                    .child(format!("{} · UTC", tab.source_name(&self.shared))),
-            )
     }
 }
 
@@ -1053,7 +643,7 @@ impl Render for TradeTerm {
         let chart = self.tab_chart().cloned();
         v_flex()
             .id("tradeterm")
-            .key_context("Tradeterm")
+            .key_context(KEY_CONTEXT)
             .track_focus(&self.focus)
             .size_full()
             .bg(hsla(t.bg))
@@ -1067,22 +657,14 @@ impl Render for TradeTerm {
                 if window.has_active_dialog(cx) || !this.focus.is_focused(window) {
                     return;
                 }
-                // Drawing keys: Escape, Enter, Delete / Backspace, Alt shortcuts.
+                // Drawing keys: Escape, Enter, Delete / Backspace. (The Alt
+                // tool shortcuts are actions, see `drawing_toolbar::key_bindings`.)
                 if let Some(chart) = this.tab_chart().cloned() {
                     let handled = match k.key.as_str() {
                         "escape" if !m.modified() => chart.update(cx, |c, cx| c.cancel_drawing(cx)),
                         "enter" if !m.modified() => chart.update(cx, |c, cx| c.finish_drawing(cx)),
                         "delete" | "backspace" if !m.modified() => {
                             chart.update(cx, |c, cx| c.delete_selected_drawing(cx))
-                        }
-                        key if m.alt && !m.control && !m.platform => {
-                            match crate::drawing_toolbar::shortcut_tool(key, m.shift) {
-                                Some(tool) => {
-                                    this.pick_tool(Some(tool), cx);
-                                    true
-                                }
-                                None => false,
-                            }
                         }
                         _ => false,
                     };
@@ -1095,6 +677,8 @@ impl Render for TradeTerm {
                     return;
                 }
                 let text = k.key_char.clone().unwrap_or_else(|| k.key.clone());
+                // "/" is the `OpenIndicators` binding; this catches layouts
+                // where the binding's keystroke does not match.
                 if text == "/" {
                     this.open_indicators(window, cx);
                     cx.stop_propagation();
@@ -1123,6 +707,16 @@ impl Render for TradeTerm {
                 this.perf = !this.perf;
                 cx.notify();
             }))
+            .on_action(cx.listener(|this, _: &OpenIndicators, window, cx| {
+                // As the old "/" key handler: only while the chart area has
+                // the keyboard.
+                if window.has_active_dialog(cx) || !this.focus.is_focused(window) {
+                    cx.propagate();
+                    return;
+                }
+                this.open_indicators(window, cx);
+            }))
+            .map(|root| crate::drawing_toolbar::on_pick_actions(root, cx))
             .child(self.title_bar(window, cx))
             .child(self.toolbar(cx))
             .child(
@@ -1151,7 +745,7 @@ impl Render for TradeTerm {
 }
 
 impl TradeTerm {
-    /// Tab strip clicks (called from `ui::tab_pill`).
+    /// Tab strip clicks (called from `title_bar::tab_pill`).
     pub fn on_tab_click(&mut self, index: usize, close: bool, cx: &mut Context<Self>) {
         if close {
             self.close_tab(index, cx);

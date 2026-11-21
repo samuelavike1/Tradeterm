@@ -6890,6 +6890,7 @@ dependencies = [
  "tt-core",
  "tt-session",
  "tt-theme",
+ "tt-ui",
 ]
 
 [[package]]
@@ -6987,6 +6988,16 @@ version = "0.1.0"
 dependencies = [
  "ecolor",
  "serde",
+]
+
+[[package]]
+name = "tt-ui"
+version = "0.1.0"
+dependencies = [
+ "ecolor",
+ "gpui-kit",
+ "lucide-icons",
+ "tt-theme",
 ]
 
 [[package]]

@@ -3,6 +3,12 @@
 //! Every color drawn by tradeterm comes from a [`Theme`]: the chart reads the
 //! tokens directly and the app's chrome uses them alongside gpui-component's
 //! theme. Colors are [`ecolor::Color32`] (sRGB, premultiplied alpha).
+//!
+//! [`metrics`] holds the numeric design tokens (spacing, radii, text, icon
+//! and control sizes, motion) shared by the canvas and the gpui kit
+//! (`tt-ui`), which also projects these colors into gpui-component's theme.
+
+pub mod metrics;
 
 pub use ecolor::Color32;
 use serde::{Deserialize, Serialize};
@@ -53,7 +59,10 @@ pub struct Theme {
     pub grid: Color32,
     pub text: Color32,
     pub text_muted: Color32,
-    /// Focus rings and emphasis; neutral, not a brand color.
+    /// Neutral emphasis (chart crosshair labels).
+    ///
+    /// **Deprecated for UI code**: use [`Theme::active`] for "on" states and
+    /// focus, [`Theme::selection`] / [`Theme::hover`] for backgrounds.
     pub accent: Color32,
     /// Text drawn on top of `accent`, `up`, `down` or `crosshair_label_bg`.
     pub text_on_accent: Color32,
@@ -63,9 +72,28 @@ pub struct Theme {
     pub down_wick: Color32,
     pub crosshair: Color32,
     pub crosshair_label_bg: Color32,
-    /// Background of selected controls (active timeframe, chosen list row)
-    /// and text selection.
+    /// Background of selected controls (active timeframe, chosen list row),
+    /// toggled buttons, pressed state and text selection.
     pub selection: Color32,
+    /// Hover background of any control or row (one step from `selection`).
+    pub hover: Color32,
+    /// "On" state: active drawing tool icon, A/L/% when on, search match
+    /// highlight, links (TradingView's blue).
+    pub active: Color32,
+    /// Tinted background where a blue fill is wanted (`active` at low alpha).
+    pub active_bg: Color32,
+    /// Keyboard focus outline.
+    pub focus_ring: Color32,
+    /// Disabled labels.
+    pub text_disabled: Color32,
+    /// Favorite stars.
+    pub favorite: Color32,
+    /// Connecting status, warnings.
+    pub warning: Color32,
+    /// Destructive menu rows, validation errors (separate from `down`).
+    pub danger: Color32,
+    /// Floating toolbars, perf overlay, menus and popovers.
+    pub overlay_bg: Color32,
     pub volume_up: Color32,
     pub volume_down: Color32,
     pub series_palette: [Color32; 8],
@@ -87,6 +115,30 @@ pub fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
     let [br, bg, bb, ba] = b.to_srgba_unmultiplied();
     let l = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
     Color32::from_rgba_unmultiplied(l(ar, br), l(ag, bg), l(ab, bb), l(aa, ba))
+}
+
+/// TradingView's blue: the `active` token in both palettes.
+const ACTIVE: Color32 = rgb(0x2962ff);
+
+/// Black or white, whichever reads better on `bg` (badges on palette colors).
+pub fn badge_fg(bg: Color32) -> Color32 {
+    let [r, g, b, _] = bg.to_srgba_unmultiplied();
+    // Relative luminance (sRGB to linear, Rec. 709 weights).
+    let lin = |c: u8| {
+        let c = c as f32 / 255.0;
+        if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let l = 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+    // WCAG contrast against white vs. against near-black; pick the larger.
+    if 1.05 / (l + 0.05) >= (l + 0.05) / 0.05 {
+        Color32::WHITE
+    } else {
+        rgb(0x0a0a0a)
+    }
 }
 
 const SERIES_PALETTE: [Color32; 8] = [
@@ -126,6 +178,15 @@ impl Theme {
             crosshair: rgb(0x9c9c9c),
             crosshair_label_bg: rgb(0x303030),
             selection: rgb(0x2e2e2e),
+            hover: rgb(0x232323),
+            active: ACTIVE,
+            active_bg: with_alpha(ACTIVE, 0.18),
+            focus_ring: with_alpha(ACTIVE, 0.60),
+            text_disabled: rgb(0x5c5c5c),
+            favorite: rgb(0xf5b52e),
+            warning: rgb(0xf5b52e),
+            danger: rgb(0xf23645),
+            overlay_bg: rgb(0x141414),
             volume_up: with_alpha(up, 0.55),
             volume_down: with_alpha(down, 0.55),
             series_palette: SERIES_PALETTE,
@@ -156,6 +217,15 @@ impl Theme {
             crosshair: rgb(0x9c9c9c),
             crosshair_label_bg: rgb(0x171717),
             selection: rgb(0xe5e5e5),
+            hover: rgb(0xf0f0f0),
+            active: ACTIVE,
+            active_bg: with_alpha(ACTIVE, 0.12),
+            focus_ring: with_alpha(ACTIVE, 0.50),
+            text_disabled: rgb(0xa3a3a3),
+            favorite: rgb(0xf5a623),
+            warning: rgb(0xd48806),
+            danger: rgb(0xe0293a),
+            overlay_bg: rgb(0xffffff),
             volume_up: with_alpha(up, 0.50),
             volume_down: with_alpha(down, 0.50),
             series_palette: SERIES_PALETTE,
@@ -205,6 +275,25 @@ mod tests {
         assert!(Theme::dark().bg.intensity() < 0.2);
         assert!(Theme::light().bg.intensity() > 0.8);
         assert!(Theme::dark().dark && !Theme::light().dark);
+    }
+
+    #[test]
+    fn badge_fg_picks_contrast() {
+        assert_eq!(badge_fg(rgb(0xfdd835)), rgb(0x0a0a0a));
+        assert_eq!(badge_fg(rgb(0x2962ff)), Color32::WHITE);
+        assert_eq!(badge_fg(rgb(0x000000)), Color32::WHITE);
+    }
+
+    #[test]
+    fn hover_sits_between_panel_and_selection() {
+        for t in [Theme::dark(), Theme::light()] {
+            let (p, h, s) = (
+                t.panel.intensity(),
+                t.hover.intensity(),
+                t.selection.intensity(),
+            );
+            assert!((p < h && h < s) || (p > h && h > s), "dark={}", t.dark);
+        }
     }
 
     #[test]
