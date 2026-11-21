@@ -150,6 +150,14 @@ impl TradeTerm {
             .map(Path::to_path_buf)
             .or_else(SettingsStore::default_path)
             .and_then(|p| tt_session::assets::AssetCache::dir_for(&p));
+        // The symbol list (symbol search): read from its disk cache now, off
+        // this thread, so the first search doesn't wait for the 6 MB
+        // download.
+        let symbols = tt_session::symbols::SymbolList::start(
+            assets_dir.clone(),
+            source.clone(),
+            runtime.handle(),
+        );
         let assets = tt_session::assets::AssetCache::start(
             assets_dir,
             source.clone(),
@@ -166,6 +174,7 @@ impl TradeTerm {
             chart_style: style.clone(),
             drawings: Arc::new(std::sync::Mutex::new(settings.drawings.clone())),
             assets,
+            symbols,
         };
 
         // Background data → UI: drain all pending wake-ups, then apply events

@@ -10,6 +10,7 @@ pub mod indicator_templates;
 pub mod layouts;
 pub mod runtime;
 pub mod settings;
+pub mod symbols;
 pub mod synthetic;
 pub mod tab;
 pub mod templates;

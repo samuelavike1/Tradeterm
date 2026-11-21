@@ -45,6 +45,8 @@ pub struct Shared {
     pub drawings: DrawingStore,
     /// Asset names and logos (tab badges, search rows, status line).
     pub assets: crate::assets::AssetCache,
+    /// The exchange's symbol list (symbol search), cached on disk.
+    pub symbols: crate::symbols::SymbolList,
 }
 
 /// Drawings per symbol key (see [`ChartTab::drawings_key`]).

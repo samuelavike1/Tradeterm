@@ -59,7 +59,7 @@ pub fn is_stale(fetched_at_ms: Option<i64>, now_ms: i64) -> bool {
 }
 
 /// How long until the list fetched at `fetched_at_ms` is due for a refresh.
-fn due_in(fetched_at_ms: Option<i64>, now_ms: i64) -> Duration {
+pub(crate) fn due_in(fetched_at_ms: Option<i64>, now_ms: i64) -> Duration {
     let Some(at) = fetched_at_ms else {
         return Duration::ZERO;
     };
@@ -71,7 +71,7 @@ fn due_in(fetched_at_ms: Option<i64>, now_ms: i64) -> Duration {
     Duration::from_millis((every - age) as u64)
 }
 
-fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_millis() as i64)

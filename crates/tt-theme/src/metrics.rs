@@ -208,6 +208,53 @@ pub const FT_BAR_W: f32 = 22.0;
 pub const FT_BAR_H: f32 = 4.0;
 /// "— 1px" line-width button.
 pub const FT_W_WIDTH_BUTTON: f32 = 68.0;
+
+// ---- search dialogs: symbol search, indicator picker (§2.10) ----------------
+//
+// Measured on TradingView (2026-11, CSS px, computed styles): the symbol
+// search and "Indicators, metrics, and strategies". Screenshots of
+// TradingView taken in a zoomed browser (devicePixelRatio 1.22) look 22 %
+// bigger; these are the real sizes at 100 %.
+
+/// Symbol search: 840 × 680, radius `C_R_DIALOG`, no title row.
+pub const SS_W_DIALOG: f32 = 840.0;
+pub const SS_H_DIALOG: f32 = 680.0;
+/// Search header: 16 top / 4 bottom padding around a 40 px field row.
+pub const SS_PAD_TOP: f32 = 16.0;
+pub const SS_PAD_BOTTOM: f32 = 4.0;
+/// A search field row (header or boxed field).
+pub const SEARCH_H_FIELD: f32 = 40.0;
+/// Query text in search fields.
+pub const SEARCH_TEXT: f32 = 16.0;
+/// Magnifier: a 28 box with a 20 icon.
+pub const SEARCH_ICON_BOX: f32 = 28.0;
+pub const SEARCH_ICON: f32 = 20.0;
+/// "Clear" text button: 28 tall, 7 px side padding, radius 8.
+pub const SEARCH_H_CLEAR: f32 = 28.0;
+/// Filter pills: 28 tall, fully round, 14 px, 8 apart; 16 px to the list.
+pub const PILL_H: f32 = 28.0;
+pub const PILL_PAD_X: f32 = 12.0;
+pub const PILL_GAP: f32 = 8.0;
+pub const SS_PILLS_BOTTOM: f32 = 16.0;
+/// Result rows: 58 tall (8 + 42 + 8), hover fill inset 12 from the dialog
+/// edge with radius 8, content 20 in.
+pub const H_LIST_ROW_LG: f32 = 58.0;
+pub const LIST_LG_INSET: f32 = 12.0;
+/// Symbol logo in a result row; logo to text 16.
+pub const LOGO_LG: f32 = 36.0;
+/// Row title 16 / 24, second line 13 / 18.
+pub const TEXT_ROW_LG: f32 = 16.0;
+pub const LINE_ROW_LG: f32 = 24.0;
+pub const TEXT_ROW_LG_SECONDARY: f32 = 13.0;
+pub const LINE_ROW_LG_SECONDARY: f32 = 18.0;
+/// Type badge ("SPOT CRYPTO"): 8 px bold uppercase, 12 tall, radius 3.
+pub const TEXT_BADGE: f32 = 8.0;
+pub const H_BADGE: f32 = 12.0;
+pub const R_BADGE: f32 = 3.0;
+/// Exchange logo at the right of a result row; 24 px from the text column.
+pub const LOGO_EXCHANGE: f32 = 24.0;
+/// Indicator picker surface radius (smaller than other dialogs').
+pub const PICKER_R_DIALOG: f32 = 12.0;
 /// Text on chart drawings: gap kept on each side of text that sits on a
 /// line (the line breaks behind it).
 pub const TEXT_LINE_GAP: f32 = 6.0;
