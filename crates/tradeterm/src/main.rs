@@ -2,11 +2,16 @@
 
 mod app;
 mod chart_settings;
+mod custom_interval;
+mod dialogs;
 mod drawing_toolbar;
 mod indicators;
 mod menus;
 mod search;
 mod source;
+mod status_bar;
+mod title_bar;
+mod top_toolbar;
 mod ui;
 
 use app::TradeTerm;
@@ -29,7 +34,9 @@ fn main() {
         .with_assets(gpui_kit::assets::Assets)
         .run(move |cx| {
             gpui_kit::init(cx);
-            tt_chart_gpui::init(cx);
+            // Registers the Lucide icon font the chart canvas uses too
+            // (`tt_chart_gpui::ICON_FONT` is the same family).
+            tt_ui::init(cx);
             app::bind_keys(cx);
             let opts = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
