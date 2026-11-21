@@ -48,7 +48,7 @@ use tt_ui::{DialogOpts, Menu, MenuNav, MenuWidth, open_dialog};
 pub const SIZE: DialogSize = DialogSize::Sm;
 
 /// From / to fields of a visibility range (a 3-digit count and stepper).
-const W_RANGE_FIELD: f32 = W_FIELD_NUMBER * 0.6;
+const W_RANGE_FIELD: f32 = W_FIELD_NUMBER * 0.75;
 /// Width / style field of a line (sample + caret).
 const W_LINE_FIELD: f32 = CONTROL_LG + CONTROL_SM;
 /// Plot type select.
@@ -1171,7 +1171,7 @@ impl IndicatorSettingsPanel {
                         .ok();
                     },
                 )
-                .label_width(SIZE.label_width() * 0.6);
+                .label_width(SIZE.label_width() * 0.55);
                 let field = |slot| {
                     self.number(slot)
                         .map(|s| NumberField::new(s).width(W_RANGE_FIELD))
