@@ -20,6 +20,7 @@ use tt_brokers::BinanceSource;
 use tt_chart::ChartType;
 use tt_chart_gpui::{Chart, ChartEvent, ChartState, hsla};
 use tt_core::{ConnectionStatus, Symbol, Timeframe};
+use tt_session::fsutil::Poll;
 use tt_session::runtime::BackgroundRuntime;
 use tt_session::settings::{AppSettings, RecentSymbol, SettingsStore, TabSettings};
 use tt_session::synthetic;
@@ -349,25 +350,44 @@ impl TradeTerm {
         }
     }
 
-    /// Saves settings (debounced by the store).
+    /// Saves settings (debounced by the store). Cheap: only marks them
+    /// changed; the snapshot is built once they have been stable for the
+    /// debounce time, and written on the store's background thread.
     pub(crate) fn persist(&mut self, cx: &mut Context<Self>) {
+        // Dirty-flag check per tab; keeps a closing tab's drawings.
         self.stash_drawings(cx);
-        let snapshot = self.settings_snapshot(cx);
-        if let Some(wait) = self.store.tick(&snapshot, Instant::now()) {
-            cx.spawn(async move |this, cx| {
-                cx.background_executor()
-                    .timer(wait + Duration::from_millis(10))
-                    .await;
-                this.update(cx, |app, cx| app.persist(cx)).ok();
-            })
-            .detach();
+        if let Some(wait) = self.store.mark_changed(Instant::now()) {
+            self.schedule_settings_check(wait, cx);
         }
     }
 
+    fn schedule_settings_check(&self, wait: Duration, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(wait + Duration::from_millis(10))
+                .await;
+            this.update(cx, |app, cx| app.check_settings(cx)).ok();
+        })
+        .detach();
+    }
+
+    fn check_settings(&mut self, cx: &mut Context<Self>) {
+        match self.store.poll(Instant::now()) {
+            Poll::Due => {
+                self.stash_drawings(cx);
+                let snapshot = self.settings_snapshot(cx);
+                self.store.save(snapshot);
+            }
+            Poll::Wait(wait) => self.schedule_settings_check(wait, cx),
+            Poll::Idle => {}
+        }
+    }
+
+    /// Writes pending changes and waits for the background writer (on quit).
     pub fn flush_settings(&mut self, cx: &mut App) {
         self.stash_drawings(cx);
         let snapshot = self.settings_snapshot(cx);
-        self.store.flush(&snapshot);
+        self.store.flush_with(|| snapshot);
     }
 
     // ---- actions -----------------------------------------------------------

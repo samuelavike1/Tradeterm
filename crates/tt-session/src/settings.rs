@@ -3,17 +3,21 @@
 //! `~/Library/Application Support/tradeterm/settings.json`,
 //! `~/.config/tradeterm/settings.json`).
 
+use crate::fsutil::{DebouncedFile, Poll};
 use ecolor::Color32;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
-use tracing::{debug, warn};
+use tracing::warn;
 use tt_chart::{ChartType, Indicator, ScaleMode};
 use tt_core::{Study, StudyKind, Timeframe};
 use tt_theme::{ThemeMode, ThemeOverrides};
 
 /// Environment variable that overrides the settings file location.
 pub const SETTINGS_ENV: &str = "TRADETERM_SETTINGS";
+
+/// Current `AppSettings::schema_version`. Files without the field are version 1.
+pub const SCHEMA_VERSION: u32 = 1;
 
 /// Changes are written once settings have been stable for this long.
 pub const SAVE_DEBOUNCE: Duration = Duration::from_millis(750);
@@ -123,6 +127,8 @@ impl Default for TabSettings {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppSettings {
+    /// File format version, for migrations in [`Self::normalized`]. Missing = 1.
+    pub schema_version: u32,
     pub theme_mode: ThemeMode,
     /// `None` = palette default. Stored as `[r, g, b]`.
     pub up_color: Option<[u8; 3]>,
@@ -151,6 +157,7 @@ pub struct AppSettings {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
+            schema_version: SCHEMA_VERSION,
             theme_mode: ThemeMode::System,
             up_color: None,
             down_color: None,
@@ -171,6 +178,14 @@ impl Default for AppSettings {
 impl AppSettings {
     /// Guarantees at least one tab and a valid active index.
     pub fn normalized(mut self) -> Self {
+        if self.schema_version > SCHEMA_VERSION {
+            warn!(
+                version = self.schema_version,
+                "settings file is from a newer version; unknown fields are dropped on save"
+            );
+        }
+        // Migrations by version go here (none yet beyond the field-level ones below).
+        self.schema_version = SCHEMA_VERSION;
         if self.tabs.is_empty() {
             self.tabs.push(TabSettings::default());
         }
@@ -206,15 +221,14 @@ impl AppSettings {
     }
 }
 
-/// Loads settings at startup and writes them back, debounced.
+/// Loads settings at startup and writes them back, debounced, on a
+/// background thread (see [`DebouncedFile`]).
 pub struct SettingsStore {
-    path: Option<PathBuf>,
-    saved: AppSettings,
-    pending: Option<(AppSettings, Instant)>,
+    file: DebouncedFile<AppSettings>,
+    corrupt_backup: Option<PathBuf>,
 }
 
 impl SettingsStore {
-    /// Default location from the `directories` crate.
     /// `$TRADETERM_SETTINGS` if set (e.g. for a portable install or test
     /// runs that must not touch the user's settings), otherwise the OS config
     /// directory from the `directories` crate.
@@ -226,92 +240,103 @@ impl SettingsStore {
             .map(|d| d.config_dir().join("settings.json"))
     }
 
-    /// Loads from `path`; missing or unreadable files fall back to defaults.
+    /// Loads from `path`; missing files fall back to defaults. An unparseable
+    /// file is renamed to `settings.json.corrupt-<unix-ms>` first, so it is
+    /// never overwritten. If it can't be read or moved aside, saving is
+    /// disabled for this session.
     pub fn load(path: Option<PathBuf>) -> (AppSettings, Self) {
-        let settings = path
-            .as_deref()
-            .and_then(read_settings)
-            .unwrap_or_default()
-            .normalized();
+        let (settings, path, corrupt_backup) = match path {
+            None => (None, None, None),
+            Some(p) => match read_settings(&p) {
+                Read::Missing => (None, Some(p), None),
+                Read::Ok(s) => (Some(*s), Some(p), None),
+                Read::Unreadable => (None, None, None),
+                Read::Corrupt => match crate::fsutil::backup_corrupt(&p) {
+                    Ok(backup) => {
+                        warn!(
+                            path = %p.display(),
+                            backup = %backup.display(),
+                            "invalid settings file moved aside; starting with defaults"
+                        );
+                        (None, Some(p), Some(backup))
+                    }
+                    Err(e) => {
+                        warn!(
+                            path = %p.display(),
+                            "invalid settings file could not be moved aside ({e}); settings will not be saved"
+                        );
+                        (None, None, None)
+                    }
+                },
+            },
+        };
+        let settings = settings.unwrap_or_default().normalized();
+        let file = DebouncedFile::new(path, SAVE_DEBOUNCE, Some(&settings));
         let store = Self {
-            path,
-            saved: settings.clone(),
-            pending: None,
+            file,
+            corrupt_backup,
         };
         (settings, store)
     }
 
-    /// Call every frame with the current settings. Saves once they have been
-    /// unchanged for [`SAVE_DEBOUNCE`]. Returns how long until the next check
-    /// is needed, so the caller can schedule a repaint.
-    pub fn tick(&mut self, current: &AppSettings, now: Instant) -> Option<Duration> {
-        if *current == self.saved {
-            self.pending = None;
-            return None;
-        }
-        match &self.pending {
-            Some((p, since)) if p == current => {
-                let elapsed = now.saturating_duration_since(*since);
-                if elapsed >= SAVE_DEBOUNCE {
-                    self.save_now(current);
-                    None
-                } else {
-                    Some(SAVE_DEBOUNCE - elapsed)
-                }
-            }
-            _ => {
-                self.pending = Some((current.clone(), now));
-                Some(SAVE_DEBOUNCE)
-            }
-        }
+    /// Where an unparseable settings file was moved at load, if any (for a
+    /// one-time notice).
+    pub fn corrupt_backup(&self) -> Option<&Path> {
+        self.corrupt_backup.as_deref()
     }
 
-    /// Writes immediately if anything changed (used on exit).
-    pub fn flush(&mut self, current: &AppSettings) {
-        if *current != self.saved {
-            self.save_now(current);
-        }
+    /// Records that settings changed (cheap). Returns `Some(wait)` when the
+    /// caller must call [`Self::poll`] after `wait`.
+    pub fn mark_changed(&mut self, now: Instant) -> Option<Duration> {
+        self.file.mark_changed(now)
     }
 
-    fn save_now(&mut self, current: &AppSettings) {
-        self.pending = None;
-        // Record as saved even on failure so a broken disk doesn't cause a retry storm.
-        self.saved = current.clone();
-        let Some(path) = &self.path else { return };
-        match write_settings(path, current) {
-            Ok(()) => debug!(path = %path.display(), "settings saved"),
-            Err(e) => warn!(path = %path.display(), "could not save settings: {e:#}"),
-        }
+    /// [`Poll::Due`]: settings have been stable for [`SAVE_DEBOUNCE`]; build a
+    /// snapshot and pass it to [`Self::save`]. [`Poll::Wait`]: poll again later.
+    pub fn poll(&mut self, now: Instant) -> Poll {
+        self.file.poll(now)
+    }
+
+    /// Queues a background write (skipped if the content is unchanged).
+    pub fn save(&mut self, settings: AppSettings) {
+        self.file.save(settings);
+    }
+
+    /// Writes now if anything changed and waits for all writes to finish
+    /// (used on exit).
+    pub fn flush_with(&mut self, settings: impl FnOnce() -> AppSettings) {
+        self.file.flush_with(settings);
+    }
+
+    /// Blocks until queued writes are on disk.
+    pub fn wait_idle(&self) {
+        self.file.wait_idle();
     }
 }
 
-fn read_settings(path: &Path) -> Option<AppSettings> {
-    let text = match std::fs::read_to_string(path) {
+enum Read {
+    Missing,
+    Ok(Box<AppSettings>),
+    Unreadable,
+    Corrupt,
+}
+
+fn read_settings(path: &Path) -> Read {
+    let bytes = match std::fs::read(path) {
         Ok(t) => t,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Read::Missing,
         Err(e) => {
-            warn!(path = %path.display(), "could not read settings: {e}");
-            return None;
+            warn!(path = %path.display(), "could not read settings ({e}); settings will not be saved");
+            return Read::Unreadable;
         }
     };
-    match serde_json::from_str(&text) {
-        Ok(s) => Some(s),
+    match serde_json::from_slice(&bytes) {
+        Ok(s) => Read::Ok(Box::new(s)),
         Err(e) => {
-            warn!(path = %path.display(), "ignoring invalid settings file: {e}");
-            None
+            warn!(path = %path.display(), "invalid settings file: {e}");
+            Read::Corrupt
         }
     }
-}
-
-/// Atomic write: temp file in the same directory, then rename.
-fn write_settings(path: &Path, settings: &AppSettings) -> anyhow::Result<()> {
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, serde_json::to_vec_pretty(settings)?)?;
-    std::fs::rename(&tmp, path)?;
-    Ok(())
 }
 
 #[cfg(test)]
@@ -412,36 +437,78 @@ mod tests {
 
         let t0 = Instant::now();
         s.tabs[0].symbol = "ETHUSDT".into();
-        assert_eq!(store.tick(&s, t0), Some(SAVE_DEBOUNCE));
-        assert!(!path.exists(), "must not save before the debounce elapses");
+        assert_eq!(store.mark_changed(t0), Some(SAVE_DEBOUNCE));
+        assert_eq!(
+            store.poll(t0 + Duration::from_millis(500)),
+            Poll::Wait(Duration::from_millis(250))
+        );
 
-        // Another change restarts the timer.
+        // Another change restarts the timer (no second check is scheduled).
         s.tabs[0].legend_collapsed = true;
-        store.tick(&s, t0 + Duration::from_millis(500));
-        store.tick(&s, t0 + Duration::from_millis(1000));
-        assert!(!path.exists());
-        assert_eq!(store.tick(&s, t0 + Duration::from_millis(1300)), None);
+        assert_eq!(store.mark_changed(t0 + Duration::from_millis(500)), None);
+        assert!(matches!(
+            store.poll(t0 + Duration::from_millis(1000)),
+            Poll::Wait(_)
+        ));
+        store.wait_idle();
+        assert!(!path.exists(), "must not save before the debounce elapses");
+        assert_eq!(store.poll(t0 + Duration::from_millis(1300)), Poll::Due);
+        store.save(s.clone());
+        store.wait_idle();
         assert!(path.exists());
 
         let (loaded, _) = SettingsStore::load(Some(path.clone()));
         assert_eq!(loaded, s);
 
-        // Unchanged settings never write.
+        // Nothing changed: idle, and identical content is never rewritten.
+        assert_eq!(store.poll(t0 + Duration::from_secs(10)), Poll::Idle);
         std::fs::remove_file(&path).unwrap();
-        assert_eq!(store.tick(&s, t0 + Duration::from_secs(10)), None);
+        store.mark_changed(t0 + Duration::from_secs(10));
+        store.save(s.clone());
+        store.wait_idle();
         assert!(!path.exists());
+
+        // Quit flushes pending changes synchronously.
+        s.tabs[0].symbol = "SOLUSDT".into();
+        store.mark_changed(t0 + Duration::from_secs(11));
+        store.flush_with(|| s.clone());
+        assert_eq!(SettingsStore::load(Some(path.clone())).0, s);
+        // Not dirty: flush doesn't build a snapshot.
+        store.flush_with(|| unreachable!());
     }
 
     #[test]
-    fn corrupt_file_falls_back_to_defaults() {
+    fn corrupt_file_is_backed_up_not_overwritten() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
         std::fs::write(&path, "{ not json").unwrap();
         let (s, mut store) = SettingsStore::load(Some(path.clone()));
         assert_eq!(s, AppSettings::default());
+
+        let backup = store.corrupt_backup().expect("backed up").to_owned();
+        assert!(!path.exists());
+        assert_eq!(std::fs::read_to_string(&backup).unwrap(), "{ not json");
+        let name = backup.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(name.starts_with("settings.json.corrupt-"), "{name}");
+
         let mut changed = s.clone();
         changed.tabs[0].symbol = "BNBUSDT".into();
-        store.flush(&changed);
+        store.mark_changed(Instant::now());
+        store.flush_with(|| changed.clone());
         assert_eq!(SettingsStore::load(Some(path)).0, changed);
+        // The backup survives the new write.
+        assert_eq!(std::fs::read_to_string(&backup).unwrap(), "{ not json");
+    }
+
+    #[test]
+    fn schema_version_defaults_and_is_written() {
+        let old: AppSettings = serde_json::from_str(r#"{"active_tab":0}"#).unwrap();
+        assert_eq!(old.schema_version, 1);
+        assert_eq!(AppSettings::default().schema_version, SCHEMA_VERSION);
+        let json = serde_json::to_string(&AppSettings::default()).unwrap();
+        assert!(json.contains(r#""schema_version":1"#), "{json}");
+        // A newer file still loads; it is normalized to the current version.
+        let newer: AppSettings = serde_json::from_str(r#"{"schema_version":99}"#).unwrap();
+        assert_eq!(newer.normalized().schema_version, SCHEMA_VERSION);
     }
 }
