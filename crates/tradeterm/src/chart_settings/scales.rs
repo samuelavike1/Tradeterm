@@ -89,7 +89,8 @@ impl ChartSettingsPanel {
         CheckSelect::new(ElementId::Name(id.into()), items, mode.label())
             .width(W_SELECT_LG)
             .on_toggle(move |i, on, _, cx| {
-                let (mut n, mut v, mut l) = (mode.shows_name(), mode.shows_value(), mode.shows_line());
+                let (mut n, mut v, mut l) =
+                    (mode.shows_name(), mode.shows_value(), mode.shows_line());
                 match i {
                     0 => n = on,
                     1 => v = on,
@@ -206,12 +207,7 @@ impl ChartSettingsPanel {
             None,
             cx,
         );
-        rows.push(
-            Self::row("Symbol")
-                .control(mode)
-                .control(price_line)
-                .into(),
-        );
+        rows.push(Self::row("Symbol").control(mode).control(price_line).into());
         let value_mode = self
             .select(
                 "sc.symbol_value",

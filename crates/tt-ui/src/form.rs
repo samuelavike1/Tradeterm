@@ -439,7 +439,9 @@ fn select_trigger(
         .py_0()
         // TradingView: label 7 px in, chevron slot 22 (a 180 select fits
         // "Visible on mouse over").
-        .when(comfortable, |b| b.rounded(px(C_R_CONTROL)).pl(px(7.0)).pr(px(S1)))
+        .when(comfortable, |b| {
+            b.rounded(px(C_R_CONTROL)).pl(px(7.0)).pr(px(S1))
+        })
         .child(
             h_flex()
                 .w_full()

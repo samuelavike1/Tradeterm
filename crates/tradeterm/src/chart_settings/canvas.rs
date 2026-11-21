@@ -78,7 +78,9 @@ impl ChartSettingsPanel {
                 "cv.grid_h_on",
                 "Horizontal grid lines",
                 cv.grid_lines.horizontal(),
-                |s, v| s.canvas.grid_lines = GridLines::from_flags(s.canvas.grid_lines.vertical(), v),
+                |s, v| {
+                    s.canvas.grid_lines = GridLines::from_flags(s.canvas.grid_lines.vertical(), v)
+                },
                 cx,
             )
             .control(h_line)

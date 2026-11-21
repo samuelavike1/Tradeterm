@@ -401,33 +401,36 @@ impl ChartSettingsPanel {
         let color = hsla(effective(&self.draft, &self.theme()));
         let value = LineValue {
             color,
-            width: width.as_ref().map_or(1, |(w, _)| w.round().clamp(1.0, 4.0) as u8),
+            width: width
+                .as_ref()
+                .map_or(1, |(w, _)| w.round().clamp(1.0, 4.0) as u8),
             dash: kind.as_ref().map_or(LineDash::Solid, |(k, _)| dash(*k)),
         };
         let (has_width, has_kind) = (width.is_some(), kind.is_some());
         let set_w = width.map(|(_, f)| f);
         let set_k = kind.map(|(_, f)| f);
         let this = cx.entity().downgrade();
-        let picker = LinePicker::new(ElementId::Name(id.into()), value).on_change(move |lv, _, cx| {
-            // Only what changed: a width change keeps a theme-default
-            // color following the theme.
-            let apply = |s: &mut ChartStyle| {
-                if lv.color != value.color {
-                    set(s, Some(rgba(lv.color)));
-                }
-                if let Some(f) = &set_w
-                    && lv.width != value.width
-                {
-                    f(s, lv.width as f32);
-                }
-                if let Some(f) = &set_k
-                    && lv.dash != value.dash
-                {
-                    f(s, line_kind(lv.dash));
-                }
-            };
-            this.update(cx, |p, cx| p.edit(cx, apply)).ok();
-        });
+        let picker =
+            LinePicker::new(ElementId::Name(id.into()), value).on_change(move |lv, _, cx| {
+                // Only what changed: a width change keeps a theme-default
+                // color following the theme.
+                let apply = |s: &mut ChartStyle| {
+                    if lv.color != value.color {
+                        set(s, Some(rgba(lv.color)));
+                    }
+                    if let Some(f) = &set_w
+                        && lv.width != value.width
+                    {
+                        f(s, lv.width as f32);
+                    }
+                    if let Some(f) = &set_k
+                        && lv.dash != value.dash
+                    {
+                        f(s, line_kind(lv.dash));
+                    }
+                };
+                this.update(cx, |p, cx| p.edit(cx, apply)).ok();
+            });
         let picker = if has_width {
             picker
         } else {
@@ -623,7 +626,10 @@ fn layout(rows: Rows, window: &Window) -> Vec<AnyElement> {
 impl Render for ChartSettingsPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let this = cx.entity().downgrade();
-        let mut frame = SideNavFrame::new("chart-settings").selected(self.page.id());
+        // One id per page: each page opens scrolled to its top.
+        let mut frame =
+            SideNavFrame::new(SharedString::from(format!("chart-settings-{}", self.page.id())))
+                .selected(self.page.id());
         for (_, id, label, icon) in Page::ALL {
             frame = frame.item(id, label, Some(icon.into()));
         }

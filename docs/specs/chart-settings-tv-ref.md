@@ -9,7 +9,10 @@ type's Symbol page and set back to Candles / 5m afterwards.
 
 Our implementation: `crates/tradeterm/src/chart_settings/` with the kit's
 `SideNavFrame` (`crates/tt-ui/src/side_nav.rs`), comfortable density
-(ui-guidelines §2.10). Our screenshots: `img/cs-tv-<page>-<theme>.png`.
+(ui-guidelines §2.10). Our screenshots (release build, `scripts/cs-tv/shot.ps1`
+with a seeded `TRADETERM_SETTINGS` file): `img/cs-tv-<page>-<theme>.png`
+(`-2`: scrolled), `img/cs-tv-symbol-<type>-dark.png` per chart type,
+`img/cs-tv-custom-interval-<theme>.png`.
 
 ## Frame
 

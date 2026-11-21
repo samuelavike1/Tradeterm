@@ -402,12 +402,7 @@ impl ChartSettingsPanel {
             symbol.baseline.bottom_fill_2,
             |_, t| alpha(t.down, 0.28)
         );
-        rows.push(
-            Self::row("Fill bottom area")
-                .control(f1)
-                .control(f2)
-                .into(),
-        );
+        rows.push(Self::row("Fill bottom area").control(f1).control(f2).into());
         let level = self.number(
             "baseline.level",
             |s| s.symbol.baseline.level_pct as f64,
