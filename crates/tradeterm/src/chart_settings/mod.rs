@@ -627,9 +627,11 @@ impl Render for ChartSettingsPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let this = cx.entity().downgrade();
         // One id per page: each page opens scrolled to its top.
-        let mut frame =
-            SideNavFrame::new(SharedString::from(format!("chart-settings-{}", self.page.id())))
-                .selected(self.page.id());
+        let mut frame = SideNavFrame::new(SharedString::from(format!(
+            "chart-settings-{}",
+            self.page.id()
+        )))
+        .selected(self.page.id());
         for (_, id, label, icon) in Page::ALL {
             frame = frame.item(id, label, Some(icon.into()));
         }
