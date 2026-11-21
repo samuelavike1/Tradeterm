@@ -21,6 +21,7 @@ mod status_bar;
 mod title_bar;
 mod top_toolbar;
 mod ui;
+mod visibility_tv;
 
 use app::TradeTerm;
 use gpui_kit::*;

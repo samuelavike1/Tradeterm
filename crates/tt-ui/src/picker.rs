@@ -970,7 +970,7 @@ impl RenderOnce for LineStyleButton {
 const W_BOXED_WIDTH: f32 = 54.0;
 
 /// A bordered dialog button (`C_CONTROL` tall, `C_R_TOGGLE`).
-fn boxed_button(id: ElementId, w: f32, t: &Theme, cx: &App) -> Button {
+pub(crate) fn boxed_button(id: ElementId, w: f32, t: &Theme, cx: &App) -> Button {
     bare_button(id, w, C_CONTROL, C_R_TOGGLE, t, cx)
         .border_1()
         .border_color(toggle_border(t))
