@@ -1000,14 +1000,12 @@ impl ChartView {
     }
 }
 
-/// Value range of an indicator pane: the visible values (plus guide levels
-/// for bounded oscillators) with some padding.
+/// Value range of an indicator pane: the visible values (plus its visible
+/// levels, e.g. RSI 30/70) with some padding.
 fn pane_range(ind: &Indicator, range: std::ops::Range<usize>, stride: usize) -> (f64, f64) {
     let mut ext = ind.extent_sampled(range, stride);
-    if let Some((_, _, levels)) = ind.study.bounds()
-        && let (Some(a), Some(b)) = (levels.first(), levels.last())
-    {
-        ext = Some(ext.map_or((*a, *b), |(lo, hi)| (lo.min(*a), hi.max(*b))));
+    if let Some((a, b)) = ind.hline_extent() {
+        ext = Some(ext.map_or((a, b), |(lo, hi)| (lo.min(a), hi.max(b))));
     }
     let (lo, hi) = ext.unwrap_or((0.0, 1.0));
     let span = hi - lo;
