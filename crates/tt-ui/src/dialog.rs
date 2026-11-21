@@ -8,7 +8,7 @@
 
 use crate::button::{ToolbarButton, child_id};
 use crate::glyph::{Glyph, glyph};
-use crate::menu::MenuRow;
+use crate::menu::{Menu, MenuRow};
 use crate::theme::{ActiveUiTheme, hsla};
 use crate::tokens::*;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -298,10 +298,14 @@ impl RenderOnce for NavTabs {
     }
 }
 
+type MenuBuild = Rc<dyn Fn(Menu, &mut Window, &mut App) -> Menu>;
+
 /// "Template ▾": Apply defaults (later: Save as…).
 #[derive(Clone)]
 pub struct TemplateMenu {
     rows: Vec<(SharedString, Handler)>,
+    label: Option<SharedString>,
+    build: Option<MenuBuild>,
 }
 
 impl TemplateMenu {
@@ -309,7 +313,26 @@ impl TemplateMenu {
     pub fn defaults(on_apply: impl Fn(&mut Window, &mut App) + 'static) -> Self {
         Self {
             rows: vec![("Apply defaults".into(), Rc::new(on_apply))],
+            label: None,
+            build: None,
         }
+    }
+
+    /// A menu built each time it opens (rows that change while the dialog
+    /// is open: saved presets, "Reset to factory" once a default exists).
+    pub fn dynamic(build: impl Fn(Menu, &mut Window, &mut App) -> Menu + 'static) -> Self {
+        Self {
+            rows: Vec::new(),
+            label: None,
+            build: Some(Rc::new(build)),
+        }
+    }
+
+    /// Trigger label (default "Template"; indicator settings use
+    /// TradingView's "Defaults").
+    pub fn label(mut self, label: impl Into<SharedString>) -> Self {
+        self.label = Some(label.into());
+        self
     }
 
     pub fn item(
@@ -396,10 +419,11 @@ impl RenderOnce for DialogFooter {
                 .py_0()
         };
         let left = self.template.map(|tm| {
-            let rows = tm.rows;
-            ToolbarButton::text("dialog-template", "Template")
+            let (rows, build) = (tm.rows, tm.build);
+            let label = tm.label.unwrap_or_else(|| "Template".into());
+            ToolbarButton::text("dialog-template", label)
                 .caret()
-                .menu(move |menu, _, _| {
+                .menu(move |menu, window, cx| {
                     let mut menu = menu;
                     for (i, (label, f)) in rows.iter().enumerate() {
                         let f = f.clone();
@@ -408,7 +432,10 @@ impl RenderOnce for DialogFooter {
                                 .on_select(move |w, cx| f(w, cx)),
                         );
                     }
-                    menu
+                    match &build {
+                        Some(b) => b(menu, window, cx),
+                        None => menu,
+                    }
                 })
         });
         let cancel = self.cancel.map(|label| {

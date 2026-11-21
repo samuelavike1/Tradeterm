@@ -120,7 +120,7 @@ fn legend_row(
         ind.study.meta().short.to_owned()
     };
     let name = Rect::from_min_size(pos, c.text_size(&title, size));
-    let name_color = if ind.visible {
+    let name_color = if ind.shown() {
         t.text
     } else {
         with_alpha(t.text_muted, 0.6)
@@ -178,7 +178,7 @@ fn legend_row(
     if !shown.is_empty() {
         x += 6.0;
     }
-    if ind.visible
+    if ind.shown()
         && st.indicator_values
         && ind.style.values_in_status_line
         && let Some(i) = bar

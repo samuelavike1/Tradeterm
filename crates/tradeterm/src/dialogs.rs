@@ -3,7 +3,8 @@
 //! can each own their function.
 
 use crate::app::{TabChart, TradeTerm};
-use crate::indicators::{IndicatorSettingsPanel, IndicatorsPanel};
+use crate::indicator_settings::IndicatorSettingsPanel;
+use crate::indicators::IndicatorsPanel;
 use crate::search::{self, SymbolSearch};
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::dialog::DialogEntrance;
@@ -41,19 +42,16 @@ impl TradeTerm {
     /// "Indicators, metrics, and strategies" (toolbar button or "/").
     pub fn open_indicators(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let app = cx.entity().downgrade();
-        let (theme, favorites) = (self.theme.clone(), self.favorite_indicators.clone());
-        let panel = cx.new(|cx| IndicatorsPanel::new(app, theme, favorites, window, cx));
-        let focus_once = std::cell::Cell::new(true);
-        window.open_dialog(cx, move |dialog, window, cx| {
-            if focus_once.replace(false) {
-                IndicatorsPanel::focus_input(&panel, window, cx);
-            }
-            dialog
-                .title("Indicators, metrics, and strategies")
-                .w(px(780.))
-                .entrance(DialogEntrance::FadeSlide)
-                .child(panel.clone())
-        });
+        let favorites = self.favorite_indicators.clone();
+        let panel = cx.new(|cx| IndicatorsPanel::new(app, favorites, window, cx));
+        let focus = panel.clone();
+        // Picker dialog: no footer, Enter adds (§3.6).
+        let opts = tt_ui::DialogOpts::new(
+            "Indicators, metrics, and strategies",
+            crate::indicators::SIZE,
+        )
+        .on_open(move |window, cx| IndicatorsPanel::focus_input(&focus, window, cx));
+        tt_ui::open_dialog(window, cx, opts, panel);
     }
 
     /// Settings of one indicator (legend gear or double-click).
@@ -77,19 +75,29 @@ impl TradeTerm {
         if !exists {
             return;
         }
-        let theme = self.theme.clone();
+        let app = cx.entity().downgrade();
         let panel = cx.new(|cx| {
-            IndicatorSettingsPanel::new(chart, id, theme, window, cx)
+            IndicatorSettingsPanel::new(app, chart, id, window, cx)
                 .expect("indicator checked above")
         });
         let title = panel.read(cx).title();
-        window.open_dialog(cx, move |dialog, _, _| {
-            dialog
-                .title(title.clone())
-                .w(px(460.))
-                .entrance(DialogEntrance::FadeSlide)
-                .child(panel.clone())
-        });
+        let menu_panel = panel.downgrade();
+        let ok_panel = panel.downgrade();
+        let footer = tt_ui::DialogFooter::new()
+            .template(
+                tt_ui::TemplateMenu::dynamic(move |menu, _, cx| {
+                    IndicatorSettingsPanel::defaults_menu(&menu_panel, menu, cx)
+                })
+                .label("Defaults"),
+            )
+            .cancel()
+            .ok("Ok")
+            .on_ok(move |_, cx| {
+                ok_panel.update(cx, |p, cx| p.commit(cx)).ok();
+                true
+            });
+        let opts = tt_ui::DialogOpts::new(title, crate::indicator_settings::SIZE).footer(footer);
+        tt_ui::open_dialog(window, cx, opts, panel);
     }
 
     /// TradingView's chart "Settings" dialog.

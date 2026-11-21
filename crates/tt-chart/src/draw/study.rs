@@ -538,7 +538,7 @@ pub(super) fn value_color(s: &Scene<'_>, ind: &Indicator, k: usize, j: usize) ->
 pub(super) fn study_tags(s: &Scene<'_>) -> Vec<(usize, Tag)> {
     let mut tags = Vec::new();
     for (idx, ind) in s.indicators.iter().enumerate() {
-        if !ind.visible || !ind.style.labels_on_price_scale {
+        if !ind.shown() || !ind.style.labels_on_price_scale {
             continue;
         }
         let (pane_no, vp) = match ind.placement() {

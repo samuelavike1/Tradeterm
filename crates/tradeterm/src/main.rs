@@ -5,6 +5,7 @@ mod chart_settings;
 mod custom_interval;
 mod dialogs;
 mod drawing_toolbar;
+mod indicator_settings;
 mod indicators;
 mod menus;
 mod search;

@@ -34,6 +34,9 @@ pub struct Indicator {
     pub pane_weight: f32,
     /// Its pane is collapsed to a strip with just the legend.
     pub pane_collapsed: bool,
+    /// Hidden on the chart's current interval by `style.visibility` (set by
+    /// the view each frame; not persisted).
+    interval_hidden: bool,
     cache: Cache,
 }
 
@@ -46,12 +49,37 @@ impl Indicator {
             style: IndicatorStyle::default(),
             pane_weight: 1.0,
             pane_collapsed: false,
+            interval_hidden: false,
             cache: Cache::default(),
         }
     }
 
     pub fn placement(&self) -> Placement {
         self.study.placement()
+    }
+
+    /// Applies the Visibility tab for interval `tf` (`None`: unknown, shown).
+    pub fn set_interval(&mut self, tf: Option<tt_core::Timeframe>) {
+        self.interval_hidden = tf.is_some_and(|tf| !self.style.visibility.shows(tf));
+    }
+
+    /// Hidden on the current interval by its visibility ranges.
+    #[inline]
+    pub fn interval_hidden(&self) -> bool {
+        self.interval_hidden
+    }
+
+    /// Drawn: its eye is on and the current interval is in its ranges.
+    #[inline]
+    pub fn shown(&self) -> bool {
+        self.visible && !self.interval_hidden
+    }
+
+    /// Has its own pane: a pane study that is not hidden on this interval
+    /// (an interval-hidden pane indicator gives its space back).
+    #[inline]
+    pub fn in_pane(&self) -> bool {
+        self.placement() == Placement::Pane && !self.interval_hidden
     }
 
     /// Definition of output `k`.
