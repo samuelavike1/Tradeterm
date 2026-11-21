@@ -104,3 +104,10 @@ Add to this list whenever something is skipped; remove an entry when it lands.
 - Navigation buttons on the chart (zoom / scroll / reset at the bottom): setting
   exists in the model, dialog row hidden.
 - Pre/post market and Plus button on the price scale (n/a for crypto / blocked).
+
+## Drawing settings (TradingView parity follow-ups)
+- Rotated text on the chart canvas (vertical line text is stacked upright today).
+- Fib: per-level text row and the rainbow line-color button on the floating toolbar.
+- Trend angle: "Angle" field on the Coordinates tab.
+- Parallel channel: dim unchecked level rows like TradingView.
+
