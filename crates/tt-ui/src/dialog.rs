@@ -18,8 +18,62 @@ use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::{Disableable as _, Sizable as _, Size, WindowExt as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+
+/// Pointer and dialog offset when a header drag started.
+type DragStart = Option<(Point<Pixels>, Point<Pixels>)>;
+
+/// Moves a dialog by its header, like TradingView: the offset from the
+/// default (centered) position, applied as a relative offset every render.
+#[derive(Clone, Default)]
+pub(crate) struct DialogDrag {
+    offset: Rc<Cell<Point<Pixels>>>,
+    /// Pointer and offset when the press started (`None`: not dragging).
+    start: Rc<Cell<DragStart>>,
+}
+
+/// The value gpui carries while a dialog header is dragged.
+struct DialogDragValue;
+
+/// Nothing follows the pointer: the dialog itself moves.
+struct DragGhost;
+
+impl Render for DragGhost {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        Empty
+    }
+}
+
+impl DialogDrag {
+    /// The offset to apply, kept so the header stays reachable in `view`.
+    fn offset_in(&self, view: gpui_kit::Size<Pixels>, width: Pixels) -> Point<Pixels> {
+        let o = self.offset.get();
+        let max_x = ((view.width + width) / 2. - px(80.)).max(px(0.));
+        // The dialog starts a tenth of the window down; keep its header in
+        // the window.
+        let min_y = -(view.height / 10.);
+        let max_y = (view.height - view.height / 10. - px(C_H_HEADER)).max(px(0.));
+        point(o.x.clamp(-max_x, max_x), o.y.clamp(min_y, max_y))
+    }
+
+    /// Makes `el` (the title area) the drag handle.
+    fn handle(&self, el: Div) -> Stateful<Div> {
+        let (down, up, moving) = (self.clone(), self.clone(), self.clone());
+        el.id("dialog-drag")
+            .on_mouse_down(MouseButton::Left, move |e, _, _| {
+                down.start.set(Some((e.position, down.offset.get())));
+            })
+            .on_mouse_up(MouseButton::Left, move |_, _, _| up.start.set(None))
+            .on_drag(DialogDragValue, |_, _, _, cx| cx.new(|_| DragGhost))
+            .on_drag_move::<DialogDragValue>(move |e, window, _| {
+                if let Some((p0, o0)) = moving.start.get() {
+                    moving.offset.set(o0 + (e.event.position - p0));
+                    window.refresh();
+                }
+            })
+    }
+}
 
 type Handler = Rc<dyn Fn(&mut Window, &mut App)>;
 type OnceHandler = Box<dyn FnOnce(&mut Window, &mut App)>;
@@ -146,13 +200,15 @@ pub fn open_dialog<P: Render>(
         rename,
     } = opts;
     let on_open = RefCell::new(on_open);
+    let drag = DialogDrag::default();
     let header = comfortable.then(|| {
         let (shown, on_rename) = match rename {
             Some((cur, f)) => (Some(cur), Some(f)),
             None => (None, None),
         };
         let default = title.clone();
-        cx.new(|cx| DialogHeader::new(default, shown, on_rename, window, cx))
+        let drag = drag.clone();
+        cx.new(|cx| DialogHeader::new(default, shown, on_rename, drag, window, cx))
     });
     let width = width.unwrap_or(if comfortable {
         C_W_DIALOG
@@ -169,9 +225,14 @@ pub fn open_dialog<P: Render>(
                 .close_button(false)
                 .p(px(0.))
                 .rounded(px(C_R_DIALOG)),
-            None => dialog.title(title.clone()),
+            None => dialog.title(drag.handle(div().w_full().child(title.clone()))),
         };
+        // Dragged by its header: shift the (centered) surface.
+        let o = drag.offset_in(window.viewport_size(), px(width));
         let dialog = dialog
+            .relative()
+            .left(o.x)
+            .top(o.y)
             .w(px(width))
             .entrance(DialogEntrance::FadeSlide)
             .child(panel.clone());
@@ -689,6 +750,7 @@ pub struct DialogHeader {
     editing: bool,
     input: Entity<InputState>,
     on_rename: Option<RenameHandler>,
+    drag: DialogDrag,
     _subs: Vec<Subscription>,
 }
 
@@ -697,6 +759,7 @@ impl DialogHeader {
         default: SharedString,
         name: Option<SharedString>,
         on_rename: Option<RenameHandler>,
+        drag: DialogDrag,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -711,6 +774,7 @@ impl DialogHeader {
             editing: false,
             input,
             on_rename,
+            drag,
             _subs: vec![sub],
         }
     }
@@ -820,7 +884,8 @@ impl Render for DialogHeader {
                 })
                 .into_any_element()
         };
-        h_flex()
+        self.drag
+            .handle(h_flex())
             .w_full()
             .h(px(C_H_HEADER - S2))
             .pt(px((C_H_HEADER - C_HEADER_BUTTON) / 2.0))
