@@ -60,8 +60,13 @@ pub const ICON_XS: f32 = 14.0;
 pub const ICON_SM: f32 = 16.0;
 /// Top toolbar (32 px buttons), title bar buttons.
 pub const ICON_MD: f32 = 18.0;
-/// Left drawing toolbar (36 px buttons).
+/// Left drawing toolbar Lucide glyphs, in-panel list icons.
 pub const ICON_LG: f32 = 20.0;
+/// Our 1-stroke SVG icons (chart types, drawing tools) where a Lucide glyph
+/// would be 18–20: TradingView draws its icons in a 28 box with their own
+/// inner margin. Smaller slots use 24 (16) and 20 (14), see
+/// `Glyph::svg_size`.
+pub const ICON_SVG: f32 = 28.0;
 
 // ---- control heights (§2.4) -------------------------------------------------
 
@@ -80,6 +85,13 @@ pub const CONTROL_MD: f32 = 32.0;
 /// Drawing toolbar buttons.
 pub const CONTROL_LG: f32 = 36.0;
 pub const H_MENU_ROW: f32 = 32.0;
+/// Large menu rows with 28 px icons: the chart-type menu and the drawing
+/// flyouts (TradingView-measured, 2026-11: 40 tall, radius 6, icon at x 4,
+/// label at x 36, text 14; groups split by a 13 px separator 6 + 1 + 6).
+pub const H_MENU_ROW_LG: f32 = 40.0;
+/// Left drawing toolbar buttons: 34 square hover / toggled background,
+/// 4 px apart (38 px pitch), TradingView-measured.
+pub const CONTROL_DRAWING: f32 = 34.0;
 pub const H_SECTION: f32 = 28.0;
 /// Nav tabs, indicator list, form rows.
 pub const H_LIST_ROW: f32 = 36.0;
@@ -88,7 +100,8 @@ pub const H_LIST_ROW_TALL: f32 = 48.0;
 
 // ---- widths (§2.4) ----------------------------------------------------------
 
-pub const W_DRAWING_TOOLBAR: f32 = 48.0;
+/// TradingView's left toolbar: 52 wide, 34 px buttons 9 px from each edge.
+pub const W_DRAWING_TOOLBAR: f32 = 52.0;
 pub const W_MENU_SM: f32 = 200.0;
 pub const W_MENU_MD: f32 = 240.0;
 /// Only with a shortcut column.
@@ -290,7 +303,8 @@ mod tests {
 
     #[test]
     fn drawing_toolbar_gutters() {
-        // 36 px buttons with 6 px gutters.
-        assert_eq!(W_DRAWING_TOOLBAR - CONTROL_LG, 2.0 * S1_5);
+        // 34 px buttons with 9 px gutters (TradingView), holding a 28 icon.
+        assert_eq!(W_DRAWING_TOOLBAR - CONTROL_DRAWING, 18.0);
+        assert_eq!(CONTROL_DRAWING - ICON_SVG, 2.0 * 3.0);
     }
 }

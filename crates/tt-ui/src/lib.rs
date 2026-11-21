@@ -7,9 +7,11 @@
 //!
 //! Dependency graph: `tt-theme` ← `tt-ui` ← `tt-chart-gpui` ← `tradeterm`.
 //!
-//! Start with [`init`] (registers the Lucide icon font), then call
+//! Start the app with `.with_assets(tt_ui::Assets)` (our SVG icons plus
+//! gpui-kit's bundle), call [`init`] (registers the Lucide icon font), then
 //! [`theme::sync`] whenever the palette changes.
 
+pub mod assets;
 pub mod button;
 pub mod dialog;
 pub mod divider;
@@ -28,6 +30,7 @@ pub mod theme;
 pub mod tokens;
 pub mod tooltip;
 
+pub use assets::Assets;
 pub use button::{Chip, ControlSize, IconButton, ToolbarButton};
 pub use dialog::{
     DialogFooter, DialogFrame, DialogHeader, DialogOpts, DialogSize, NavTabs, TemplateMenu,

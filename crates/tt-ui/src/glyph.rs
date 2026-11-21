@@ -1,9 +1,17 @@
-//! One icon set: Lucide, drawn with the Lucide font (§3.2).
+//! Icons: Lucide, drawn with the Lucide font (§3.2), plus our own 1-stroke
+//! SVG set for chart types and drawing tools ([`Glyph::Svg`], served by
+//! [`crate::Assets`]).
 //!
 //! Color follows `text_color`, so hover and active tints need no extra
-//! state. The one exception is [`Glyph::StarFilled`]: the font has no filled
-//! star, so it renders gpui-component's `IconName::StarFill` (also Lucide).
+//! state. [`Glyph::StarFilled`]: the font has no filled star, so it renders
+//! gpui-component's `IconName::StarFill` (also Lucide).
+//!
+//! The SVG icons are drawn in a 28 box with a 1 px stroke and their own
+//! inner margin (like TradingView's), so they are shown at 28 (menus, the
+//! drawing toolbar, the chart-type button) where a Lucide glyph would be
+//! about 20; [`Glyph::svg_size`] maps a Lucide slot size to that.
 
+use crate::tokens::{ICON_MD, ICON_SM, ICON_SVG};
 use gpui_kit::component::{Icon, IconName};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -33,6 +41,8 @@ pub fn register_icon_font(cx: &mut App) {
 pub enum Glyph {
     Lucide(Lucide),
     StarFilled,
+    /// One of our SVG icons: its asset path (`tt-icons/<name>.svg`).
+    Svg(&'static str),
 }
 
 impl PartialEq for Glyph {
@@ -40,6 +50,7 @@ impl PartialEq for Glyph {
         match (self, other) {
             (Glyph::Lucide(a), Glyph::Lucide(b)) => char::from(*a) == char::from(*b),
             (Glyph::StarFilled, Glyph::StarFilled) => true,
+            (Glyph::Svg(a), Glyph::Svg(b)) => a == b,
             _ => false,
         }
     }
@@ -105,11 +116,116 @@ impl Glyph {
     pub const PAINT_BUCKET: Glyph = Glyph::Lucide(Lucide::PaintBucket);
     pub const GRID_PLUS: Glyph = Glyph::Lucide(Lucide::Grid2x2Plus);
 
-    /// The font character (`None` for [`Glyph::StarFilled`]).
+    // Our SVG set (crates/tt-ui/assets/icons, written by scripts/icons/gen.py).
+    pub const CHART_BARS: Glyph = Glyph::Svg("tt-icons/chart-bars.svg");
+    pub const CHART_CANDLES: Glyph = Glyph::Svg("tt-icons/chart-candles.svg");
+    pub const CHART_HOLLOW_CANDLES: Glyph = Glyph::Svg("tt-icons/chart-hollow-candles.svg");
+    pub const CHART_VOLUME_CANDLES: Glyph = Glyph::Svg("tt-icons/chart-volume-candles.svg");
+    pub const CHART_LINE: Glyph = Glyph::Svg("tt-icons/chart-line.svg");
+    pub const CHART_LINE_MARKERS: Glyph = Glyph::Svg("tt-icons/chart-line-markers.svg");
+    pub const CHART_STEP_LINE: Glyph = Glyph::Svg("tt-icons/chart-step-line.svg");
+    pub const CHART_AREA: Glyph = Glyph::Svg("tt-icons/chart-area.svg");
+    pub const CHART_HLC_AREA: Glyph = Glyph::Svg("tt-icons/chart-hlc-area.svg");
+    pub const CHART_BASELINE: Glyph = Glyph::Svg("tt-icons/chart-baseline.svg");
+    pub const CHART_COLUMNS: Glyph = Glyph::Svg("tt-icons/chart-columns.svg");
+    pub const CHART_HIGH_LOW: Glyph = Glyph::Svg("tt-icons/chart-high-low.svg");
+    pub const CHART_HEIKIN_ASHI: Glyph = Glyph::Svg("tt-icons/chart-heikin-ashi.svg");
+    pub const CHART_RENKO: Glyph = Glyph::Svg("tt-icons/chart-renko.svg");
+    pub const CHART_LINE_BREAK: Glyph = Glyph::Svg("tt-icons/chart-line-break.svg");
+    pub const DRAW_CURSOR: Glyph = Glyph::Svg("tt-icons/draw-cursor-cross.svg");
+    pub const DRAW_TREND_LINE: Glyph = Glyph::Svg("tt-icons/draw-trend-line.svg");
+    pub const DRAW_RAY: Glyph = Glyph::Svg("tt-icons/draw-ray.svg");
+    pub const DRAW_INFO_LINE: Glyph = Glyph::Svg("tt-icons/draw-info-line.svg");
+    pub const DRAW_EXTENDED_LINE: Glyph = Glyph::Svg("tt-icons/draw-extended-line.svg");
+    pub const DRAW_TREND_ANGLE: Glyph = Glyph::Svg("tt-icons/draw-trend-angle.svg");
+    pub const DRAW_HORIZONTAL_LINE: Glyph = Glyph::Svg("tt-icons/draw-horizontal-line.svg");
+    pub const DRAW_HORIZONTAL_RAY: Glyph = Glyph::Svg("tt-icons/draw-horizontal-ray.svg");
+    pub const DRAW_VERTICAL_LINE: Glyph = Glyph::Svg("tt-icons/draw-vertical-line.svg");
+    pub const DRAW_CROSS_LINE: Glyph = Glyph::Svg("tt-icons/draw-cross-line.svg");
+    pub const DRAW_PARALLEL_CHANNEL: Glyph = Glyph::Svg("tt-icons/draw-parallel-channel.svg");
+    pub const DRAW_ARROW: Glyph = Glyph::Svg("tt-icons/draw-arrow.svg");
+    pub const DRAW_FIB_RETRACEMENT: Glyph = Glyph::Svg("tt-icons/draw-fib-retracement.svg");
+    pub const DRAW_FIB_EXTENSION: Glyph = Glyph::Svg("tt-icons/draw-fib-extension.svg");
+    pub const DRAW_RECTANGLE: Glyph = Glyph::Svg("tt-icons/draw-rectangle.svg");
+    pub const DRAW_PRICE_RANGE: Glyph = Glyph::Svg("tt-icons/draw-price-range.svg");
+    pub const DRAW_DATE_RANGE: Glyph = Glyph::Svg("tt-icons/draw-date-range.svg");
+    pub const DRAW_DATE_PRICE_RANGE: Glyph = Glyph::Svg("tt-icons/draw-date-price-range.svg");
+    pub const DRAW_MAGNET: Glyph = Glyph::Svg("tt-icons/draw-magnet.svg");
+    pub const DRAW_KEEP_DRAWING: Glyph = Glyph::Svg("tt-icons/draw-keep-drawing.svg");
+    pub const DRAW_LOCK: Glyph = Glyph::Svg("tt-icons/draw-lock.svg");
+    pub const DRAW_UNLOCK: Glyph = Glyph::Svg("tt-icons/draw-unlock.svg");
+    pub const DRAW_EYE: Glyph = Glyph::Svg("tt-icons/draw-eye.svg");
+    pub const DRAW_EYE_OFF: Glyph = Glyph::Svg("tt-icons/draw-eye-off.svg");
+    pub const DRAW_TRASH: Glyph = Glyph::Svg("tt-icons/draw-trash.svg");
+
+    /// Every SVG glyph with a name (gallery contact sheet).
+    pub const SVG_SET: [(&'static str, Glyph); 40] = [
+        ("Bars", Glyph::CHART_BARS),
+        ("Candles", Glyph::CHART_CANDLES),
+        ("Hollow candles", Glyph::CHART_HOLLOW_CANDLES),
+        ("Volume candles", Glyph::CHART_VOLUME_CANDLES),
+        ("Line", Glyph::CHART_LINE),
+        ("Line with markers", Glyph::CHART_LINE_MARKERS),
+        ("Step line", Glyph::CHART_STEP_LINE),
+        ("Area", Glyph::CHART_AREA),
+        ("HLC area", Glyph::CHART_HLC_AREA),
+        ("Baseline", Glyph::CHART_BASELINE),
+        ("Columns", Glyph::CHART_COLUMNS),
+        ("High-low", Glyph::CHART_HIGH_LOW),
+        ("Heikin Ashi", Glyph::CHART_HEIKIN_ASHI),
+        ("Renko", Glyph::CHART_RENKO),
+        ("Line break", Glyph::CHART_LINE_BREAK),
+        ("Cross", Glyph::DRAW_CURSOR),
+        ("Trend line", Glyph::DRAW_TREND_LINE),
+        ("Ray", Glyph::DRAW_RAY),
+        ("Info line", Glyph::DRAW_INFO_LINE),
+        ("Extended line", Glyph::DRAW_EXTENDED_LINE),
+        ("Trend angle", Glyph::DRAW_TREND_ANGLE),
+        ("Horizontal line", Glyph::DRAW_HORIZONTAL_LINE),
+        ("Horizontal ray", Glyph::DRAW_HORIZONTAL_RAY),
+        ("Vertical line", Glyph::DRAW_VERTICAL_LINE),
+        ("Cross line", Glyph::DRAW_CROSS_LINE),
+        ("Parallel channel", Glyph::DRAW_PARALLEL_CHANNEL),
+        ("Arrow", Glyph::DRAW_ARROW),
+        ("Fib retracement", Glyph::DRAW_FIB_RETRACEMENT),
+        ("Fib extension", Glyph::DRAW_FIB_EXTENSION),
+        ("Rectangle", Glyph::DRAW_RECTANGLE),
+        ("Price range", Glyph::DRAW_PRICE_RANGE),
+        ("Date range", Glyph::DRAW_DATE_RANGE),
+        ("Date and price range", Glyph::DRAW_DATE_PRICE_RANGE),
+        ("Magnet", Glyph::DRAW_MAGNET),
+        ("Keep drawing", Glyph::DRAW_KEEP_DRAWING),
+        ("Lock", Glyph::DRAW_LOCK),
+        ("Unlock", Glyph::DRAW_UNLOCK),
+        ("Show", Glyph::DRAW_EYE),
+        ("Hide", Glyph::DRAW_EYE_OFF),
+        ("Remove", Glyph::DRAW_TRASH),
+    ];
+
+    /// The font character (`None` for [`Glyph::StarFilled`] and SVGs).
     pub fn char(self) -> Option<char> {
         match self {
             Glyph::Lucide(i) => Some(char::from(i)),
-            Glyph::StarFilled => None,
+            Glyph::StarFilled | Glyph::Svg(_) => None,
+        }
+    }
+
+    /// One of our SVG icons.
+    pub fn is_svg(self) -> bool {
+        matches!(self, Glyph::Svg(_))
+    }
+
+    /// Display size in a slot sized for a Lucide glyph of `lucide` px. SVG
+    /// icons carry their own inner margin (28 box, about 20 of ink), so they
+    /// are drawn larger, at one of three sizes: 28 for slots of 18 and up
+    /// (toolbars, large menu rows), 24 for 16 (menu rows), 20 below. Font
+    /// glyphs keep `lucide`.
+    pub fn svg_size(self, lucide: f32) -> f32 {
+        match self {
+            Glyph::Svg(_) if lucide >= ICON_MD => ICON_SVG,
+            Glyph::Svg(_) if lucide >= ICON_SM => 24.0,
+            Glyph::Svg(_) => 20.0,
+            _ => lucide,
         }
     }
 }
@@ -141,7 +257,7 @@ impl GlyphEl {
 }
 
 impl RenderOnce for GlyphEl {
-    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, _: &mut App) -> impl IntoElement {
         let s = px(self.size);
         let base = div()
             .flex_none()
@@ -160,6 +276,15 @@ impl RenderOnce for GlyphEl {
                 Icon::new(IconName::StarFill)
                     .size(s)
                     .when_some(self.color, |i, c| i.text_color(c)),
+            ),
+            // `svg()` paints with its own text color (not the inherited
+            // one), so pass the inherited color unless one is set.
+            Glyph::Svg(path) => base.child(
+                svg()
+                    .path(path)
+                    .flex_none()
+                    .size(s)
+                    .text_color(self.color.unwrap_or(window.text_style().color)),
             ),
         }
     }

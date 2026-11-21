@@ -42,6 +42,9 @@ pub enum ControlSize {
     /// 38 px, icon 20: the floating drawing toolbar (section 2.10,
     /// TradingView-measured).
     Xl,
+    /// 34 px: the left drawing toolbar (TradingView-measured). SVG icons
+    /// 28, Lucide glyphs 20.
+    Drawing,
 }
 
 impl ControlSize {
@@ -53,15 +56,18 @@ impl ControlSize {
             ControlSize::Md => CONTROL_MD,
             ControlSize::Lg => CONTROL_LG,
             ControlSize::Xl => FT_BUTTON,
+            ControlSize::Drawing => CONTROL_DRAWING,
         }
     }
 
+    /// Lucide glyph size; an SVG glyph is drawn at
+    /// [`Glyph::svg_size`] of this (28 from Md up).
     pub fn icon(self) -> f32 {
         match self {
             ControlSize::Xs => ICON_XS,
             ControlSize::Sm => ICON_SM,
             ControlSize::Md => ICON_MD,
-            ControlSize::Lg | ControlSize::Xl => FT_ICON,
+            ControlSize::Lg | ControlSize::Xl | ControlSize::Drawing => FT_ICON,
         }
     }
 
@@ -265,7 +271,7 @@ impl IconButton {
             t.text
         };
         let content = match self.content {
-            Content::Glyph(g) => glyph(g, self.size.icon()).into_any_element(),
+            Content::Glyph(g) => glyph(g, g.svg_size(self.size.icon())).into_any_element(),
             Content::Text(text) => div()
                 .text_size(px(self.size.text()))
                 .font_weight(FontWeight::MEDIUM)
@@ -628,7 +634,7 @@ impl ToolbarButton {
                     g.color(hsla(t.text_muted))
                 }))
             })
-            .when_some(self.glyph, |d, g| d.child(glyph(g, icon)))
+            .when_some(self.glyph, |d, g| d.child(glyph(g, g.svg_size(icon))))
             .when_some(self.label, |d, l| {
                 d.child(
                     div()
