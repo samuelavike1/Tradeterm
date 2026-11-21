@@ -335,6 +335,30 @@ impl Canvas for GpuiCanvas<'_> {
         }
     }
 
+    /// All dashes go into one merged mesh, like [`Self::polyline`].
+    fn dashed_polyline(
+        &mut self,
+        points: &[Pos2],
+        width: f32,
+        color: Color32,
+        dash: f32,
+        gap: f32,
+    ) {
+        if points.len() < 2 || color.a() == 0 {
+            return;
+        }
+        let h = width.max(1.0 / self.ppp) / 2.0;
+        let mesh = self.mesh(color, points[0]);
+        tt_chart::render::dash_pieces(points, dash, gap, |a, b| {
+            let d = b - a;
+            let l = d.length();
+            if l > 0.0 {
+                let n = Vec2::new(-d.y, d.x) / l * h;
+                push_quad(mesh, a + n, b + n, b - n, a - n);
+            }
+        });
+    }
+
     fn dotted_line(&mut self, a: Pos2, b: Pos2, color: Color32) {
         let px1 = 1.0 / self.ppp;
         if a.x == b.x || a.y == b.y {
@@ -381,7 +405,7 @@ impl Canvas for GpuiCanvas<'_> {
         &mut self,
         points: &[Pos2],
         baseline_y: f32,
-        _gradient_top_y: f32,
+        gradient_top_y: f32,
         top: Color32,
         bottom: Color32,
     ) {
@@ -394,9 +418,15 @@ impl Canvas for GpuiCanvas<'_> {
             let (a0, b0) = (Pos2::new(a.x, baseline_y), Pos2::new(b.x, baseline_y));
             push_quad(&mut path, a, b, b0, a0);
         }
-        // gpui gradients span the path's bounds (not a fixed top y).
+        // gpui gradients span the path's bounds (not a fixed top y). An
+        // area below its baseline (baseline charts) has `top` at the bottom.
+        let angle = if gradient_top_y > baseline_y {
+            0.
+        } else {
+            180.
+        };
         let bg = gpui_kit::linear_gradient(
-            180.,
+            angle,
             gpui_kit::linear_color_stop(hsla(top), 0.),
             gpui_kit::linear_color_stop(hsla(bottom), 1.),
         );

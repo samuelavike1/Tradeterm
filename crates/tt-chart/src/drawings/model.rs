@@ -163,16 +163,23 @@ impl DrawingTool {
         DrawingTool::DateAndPriceRange,
     ];
 
-    /// TradingView's "Lines" group (available tools).
-    pub const LINES: [DrawingTool; 7] = [
+    /// The left toolbar's Lines flyout: TradingView's "Lines" group, plus
+    /// the arrow until a Shapes flyout exists.
+    pub const LINES: [DrawingTool; 11] = [
         DrawingTool::TrendLine,
         DrawingTool::Ray,
+        DrawingTool::InfoLine,
         DrawingTool::ExtendedLine,
+        DrawingTool::TrendAngle,
         DrawingTool::HorizontalLine,
         DrawingTool::HorizontalRay,
         DrawingTool::VerticalLine,
         DrawingTool::CrossLine,
+        DrawingTool::ParallelChannel,
+        DrawingTool::Arrow,
     ];
+    /// TradingView's Fibonacci group.
+    pub const FIB: [DrawingTool; 2] = [DrawingTool::FibRetracement, DrawingTool::FibExtension];
     /// TradingView's "Measurers".
     pub const MEASURERS: [DrawingTool; 3] = [
         DrawingTool::PriceRange,
@@ -185,12 +192,11 @@ impl DrawingTool {
     pub fn is_available(self) -> bool {
         use DrawingTool::*;
         match self {
-            TrendLine | Ray | ExtendedLine | HorizontalLine | HorizontalRay | VerticalLine
-            | CrossLine | FibRetracement | Rectangle | PriceRange | DateRange
-            | DateAndPriceRange => true,
-            InfoLine | TrendAngle | ParallelChannel | FibExtension | Circle | Ellipse | Path
-            | Polyline | Arrow | Brush | Text | Note | Callout | PriceLabel | LongPosition
-            | ShortPosition => false,
+            TrendLine | Ray | ExtendedLine | InfoLine | TrendAngle | Arrow | HorizontalLine
+            | HorizontalRay | VerticalLine | CrossLine | ParallelChannel | FibRetracement
+            | FibExtension | Rectangle | PriceRange | DateRange | DateAndPriceRange => true,
+            Circle | Ellipse | Path | Polyline | Brush | Text | Note | Callout | PriceLabel
+            | LongPosition | ShortPosition => false,
         }
     }
 

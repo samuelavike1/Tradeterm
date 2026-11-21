@@ -99,18 +99,23 @@ impl ChartType {
             ChartType::Area => "Filled area under the close line",
             ChartType::HlcArea => "High, low and close lines with filled bands",
             ChartType::Baseline => {
-                "Closes vs a baseline (mid of the visible range): green above, red below"
+                "Closes vs a base level of the visible range: green above, red below"
             }
             ChartType::Columns => "Columns from the bottom to each close",
             ChartType::HighLow => "Bars spanning each high-low range",
             ChartType::HeikinAshi => "Smoothed candles from averaged prices",
-            ChartType::Renko => "Fixed-size bricks (box = ATR 14); ignores time",
-            ChartType::LineBreak => "Three-line break: new line only on breakouts",
+            ChartType::Renko => {
+                "Fixed-size bricks (box by ATR, fixed size or percent); ignores time"
+            }
+            ChartType::LineBreak => {
+                "Line break (three lines by default): new line only on breakouts"
+            }
         }
     }
 
-    /// Price scaling uses closes only (line-like types).
-    pub fn uses_close_only(self) -> bool {
+    /// Plots one value per bar, the type's price source (close, hl2, ...):
+    /// price scaling uses only that value.
+    pub fn uses_source_only(self) -> bool {
         matches!(
             self,
             ChartType::Line
@@ -124,7 +129,7 @@ impl ChartType {
 
     /// Drawn as a line (also when decimated).
     pub fn is_line_like(self) -> bool {
-        self.uses_close_only()
+        self.uses_source_only()
     }
 }
 

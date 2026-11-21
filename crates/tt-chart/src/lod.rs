@@ -3,14 +3,16 @@
 //! When bars are narrower than ~2 px, drawing each bar is wasted work. This
 //! module keeps a min/max pyramid over the series: level `k` aggregates
 //! blocks of `8 << k` bars (open of first, max high, min low, close of last,
-//! min/max close, summed volume). Per frame, each physical pixel column is
+//! last and min/max of the price source, summed volume). Per frame, each physical pixel column is
 //! built from the coarsest level whose blocks still fit inside one column, so
 //! drawing 1,000,000 bars on a 1,600 px plot touches ~2,000 blocks.
 //!
 //! Live updates touch only the last block of each level (O(levels)); the
-//! pyramid is rebuilt only when the series changes structurally.
+//! pyramid is rebuilt only when the series changes structurally or the
+//! price source (close, hl2, …) changes.
 
-use crate::bars::DrawBar;
+use crate::bars::{DrawBar, source_value};
+use crate::style::PriceSource;
 use crate::viewport::Viewport;
 use std::ops::Range;
 use tt_core::{Candle, CandleSeries};
@@ -24,21 +26,26 @@ struct Agg {
     high: f64,
     low: f64,
     close: f64,
-    close_min: f64,
-    close_max: f64,
+    /// The price source of the last bar, and its min / max over the block.
+    value: f64,
+    value_min: f64,
+    value_max: f64,
     volume: f64,
 }
 
 impl Agg {
-    fn bar(s: &CandleSeries, i: usize) -> Self {
-        let c = s.closes()[i];
+    #[inline]
+    fn bar(s: &CandleSeries, i: usize, source: PriceSource) -> Self {
+        let (open, high, low, close) = (s.opens()[i], s.highs()[i], s.lows()[i], s.closes()[i]);
+        let value = source_value(source, open, high, low, close);
         Self {
-            open: s.opens()[i],
-            high: s.highs()[i],
-            low: s.lows()[i],
-            close: c,
-            close_min: c,
-            close_max: c,
+            open,
+            high,
+            low,
+            close,
+            value,
+            value_min: value,
+            value_max: value,
             volume: s.volumes()[i],
         }
     }
@@ -50,8 +57,9 @@ impl Agg {
             high: self.high.max(next.high),
             low: self.low.min(next.low),
             close: next.close,
-            close_min: self.close_min.min(next.close_min),
-            close_max: self.close_max.max(next.close_max),
+            value: next.value,
+            value_min: self.value_min.min(next.value_min),
+            value_max: self.value_max.max(next.value_max),
             volume: self.volume + next.volume,
         }
     }
@@ -62,6 +70,7 @@ impl Agg {
 pub struct Lod {
     /// `levels[k]` holds blocks of `BASE_BLOCK << k` bars.
     levels: Vec<Vec<Agg>>,
+    source: PriceSource,
     src_version: Option<u64>,
     src_len: usize,
     src_last: Option<Candle>,
@@ -76,9 +85,12 @@ impl Lod {
         BASE_BLOCK << k
     }
 
-    /// Brings the pyramid up to date with `src`.
-    pub fn sync(&mut self, src: &CandleSeries) {
-        let same_structure = self.src_version == Some(src.version()) && src.len() >= self.src_len;
+    /// Brings the pyramid up to date with `src`, aggregating `source`.
+    pub fn sync(&mut self, src: &CandleSeries, source: PriceSource) {
+        let same_structure = self.src_version == Some(src.version())
+            && src.len() >= self.src_len
+            && self.source == source;
+        self.source = source;
         if same_structure && self.src_len == src.len() && self.src_last == src.last() {
             return;
         }
@@ -103,7 +115,7 @@ impl Lod {
             return;
         }
         let level0: Vec<Agg> = (0..n.div_ceil(BASE_BLOCK))
-            .map(|j| Self::from_raw(src, j))
+            .map(|j| self.block_of(src, j))
             .collect();
         self.levels.push(level0);
         self.grow_top();
@@ -122,10 +134,11 @@ impl Lod {
         }
     }
 
-    fn from_raw(src: &CandleSeries, j: usize) -> Agg {
+    fn block_of(&self, src: &CandleSeries, j: usize) -> Agg {
         let start = j * BASE_BLOCK;
         let end = (start + BASE_BLOCK).min(src.len());
-        (start + 1..end).fold(Agg::bar(src, start), |a, i| a.then(Agg::bar(src, i)))
+        let s = self.source;
+        (start + 1..end).fold(Agg::bar(src, start, s), |a, i| a.then(Agg::bar(src, i, s)))
     }
 
     /// Recomputes every block containing raw bar `i`.
@@ -136,7 +149,7 @@ impl Lod {
         for k in 0..self.levels.len() {
             let j = i / Self::block(k);
             let agg = if k == 0 {
-                Self::from_raw(src, j)
+                self.block_of(src, j)
             } else {
                 let child = &self.levels[k - 1];
                 match child.get(2 * j + 1) {
@@ -175,20 +188,23 @@ impl Lod {
             .find(|&k| Self::block(k) as f32 <= bars_per_px);
 
         let mut acc: Option<(i64, Agg)> = None;
-        let mut prev_close: Option<f64> = None;
+        let mut prev: Option<(f64, f64)> = None;
         let mut flush = |col: i64, a: Agg, out: &mut Vec<DrawBar>| {
+            let (prev_close, prev_value) = prev.unwrap_or((a.open, a.open));
             out.push(DrawBar {
                 x: col as f32 / ppp,
                 open: a.open,
                 high: a.high,
                 low: a.low,
                 close: a.close,
-                prev_close: prev_close.unwrap_or(a.open),
-                close_min: a.close_min,
-                close_max: a.close_max,
+                prev_close,
+                value: a.value,
+                prev_value,
+                value_min: a.value_min,
+                value_max: a.value_max,
                 volume: a.volume,
             });
-            prev_close = Some(a.close);
+            prev = Some((a.close, a.value));
         };
         let mut add = |center: f32, a: Agg, out: &mut Vec<DrawBar>| {
             let col = (vp.x_of(center) * ppp).floor() as i64;
@@ -220,7 +236,7 @@ impl Lod {
             }
             None => {
                 for i in range {
-                    add(i as f32, Agg::bar(src, i), &mut out);
+                    add(i as f32, Agg::bar(src, i, self.source), &mut out);
                 }
             }
         }
@@ -258,12 +274,16 @@ mod tests {
         s
     }
 
-    fn brute(s: &CandleSeries, r: Range<usize>) -> Agg {
-        let mut a = Agg::bar(s, r.start);
+    fn brute_src(s: &CandleSeries, r: Range<usize>, src: PriceSource) -> Agg {
+        let mut a = Agg::bar(s, r.start, src);
         for i in r.start + 1..r.end {
-            a = a.then(Agg::bar(s, i));
+            a = a.then(Agg::bar(s, i, src));
         }
         a
+    }
+
+    fn brute(s: &CandleSeries, r: Range<usize>) -> Agg {
+        brute_src(s, r, PriceSource::Close)
     }
 
     fn vp(n: usize, spacing: f32, width: f32) -> Viewport {
@@ -287,7 +307,7 @@ mod tests {
     fn levels_match_brute_force() {
         let s = series(1000);
         let mut lod = Lod::new();
-        lod.sync(&s);
+        lod.sync(&s, PriceSource::Close);
         for k in 0..4 {
             let b = Lod::block(k);
             for (j, agg) in lod.level(k).iter().enumerate() {
@@ -302,7 +322,7 @@ mod tests {
     fn incremental_updates_match_rebuild() {
         let mut s = series(500);
         let mut lod = Lod::new();
-        lod.sync(&s);
+        lod.sync(&s, PriceSource::Close);
         for step in 0..300 {
             let n = s.len();
             let mut c = s.last().unwrap();
@@ -313,9 +333,9 @@ mod tests {
             c.close += 1.0;
             c.volume += 1.0;
             s.upsert(c);
-            lod.sync(&s);
+            lod.sync(&s, PriceSource::Close);
             let mut fresh = Lod::new();
-            fresh.sync(&s);
+            fresh.sync(&s, PriceSource::Close);
             assert_eq!(lod.levels, fresh.levels, "step {step} (len {n})");
         }
     }
@@ -324,7 +344,7 @@ mod tests {
     fn structural_change_rebuilds() {
         let mut s = series(100);
         let mut lod = Lod::new();
-        lod.sync(&s);
+        lod.sync(&s, PriceSource::Close);
         s.prepend(series(50).open_times().iter().map(|t| Candle {
             open_time_ms: t - 1_000_000_000,
             open: 1.0,
@@ -333,7 +353,7 @@ mod tests {
             close: 1.0,
             volume: 0.0,
         }));
-        lod.sync(&s);
+        lod.sync(&s, PriceSource::Close);
         assert_eq!(lod.levels.last().unwrap()[0].high, 1000.0);
     }
 
@@ -342,7 +362,7 @@ mod tests {
         let n = 100_000;
         let s = series(n);
         let mut lod = Lod::new();
-        lod.sync(&s);
+        lod.sync(&s, PriceSource::Close);
         // 100k bars on 500 px: 200 bars per pixel.
         let v = vp(n, 500.0 / n as f32, 500.0);
         let cols = lod.columns(&s, 0..n, &v, 1.0);
@@ -362,12 +382,42 @@ mod tests {
         let n = 3000;
         let s = series(n);
         let mut lod = Lod::new();
-        lod.sync(&s);
+        lod.sync(&s, PriceSource::Close);
         // 3 bars per pixel: below the smallest block, so raw bars are merged.
         let v = vp(n, 1.0 / 3.0, 1000.0);
         let cols = lod.columns(&s, 0..n, &v, 1.0);
         assert!((999..=1001).contains(&cols.len()), "{}", cols.len());
         let vol: f64 = cols.iter().map(|c| c.volume).sum();
         assert!((vol - brute(&s, 0..n).volume).abs() < 1e-6);
+    }
+
+    #[test]
+    fn columns_follow_the_price_source() {
+        let n = 50_000;
+        let s = series(n);
+        let mut lod = Lod::new();
+        lod.sync(&s, PriceSource::Close);
+        let v = vp(n, 500.0 / n as f32, 500.0);
+        for src in [PriceSource::Hl2, PriceSource::High, PriceSource::Ohlc4] {
+            lod.sync(&s, src);
+            let cols = lod.columns(&s, 0..n, &v, 1.0);
+            let all = brute_src(&s, 0..n, src);
+            let hi = cols.iter().map(|c| c.value_max).fold(f64::MIN, f64::max);
+            let lo = cols.iter().map(|c| c.value_min).fold(f64::MAX, f64::min);
+            assert_eq!((lo, hi), (all.value_min, all.value_max), "{src:?}");
+            let last = s.last().unwrap();
+            let want = source_value(src, last.open, last.high, last.low, last.close);
+            assert_eq!(cols.last().unwrap().value, want, "{src:?}");
+            // Same as a fresh pyramid built on that source.
+            let mut fresh = Lod::new();
+            fresh.sync(&s, src);
+            assert_eq!(lod.levels, fresh.levels, "{src:?}");
+        }
+        // Raw-bar path (few bars per pixel) too.
+        lod.sync(&s, PriceSource::Low);
+        let v = vp(3000, 1.0 / 3.0, 1000.0);
+        let cols = lod.columns(&s, 0..3000, &v, 1.0);
+        let lo = cols.iter().map(|c| c.value_min).fold(f64::MAX, f64::min);
+        assert_eq!(lo, brute(&s, 0..3000).low);
     }
 }
