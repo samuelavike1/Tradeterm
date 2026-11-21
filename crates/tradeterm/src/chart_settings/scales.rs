@@ -11,7 +11,7 @@ impl ChartSettingsPanel {
         cx: &mut Context<Self>,
     ) -> Div {
         let this = cx.entity().downgrade();
-        let current = d.scale_buttons;
+        let current = d.scales.scale_buttons;
         body.child(section("PRICE SCALE", muted))
             .child(
                 row("Scale modes (A, L and %)").child(
@@ -28,7 +28,7 @@ impl ChartSettingsPanel {
                                         .checked(option == current)
                                         .on_click(move |_, _, cx| {
                                             this.update(cx, |p, cx| {
-                                                p.edit(cx, |s| s.scale_buttons = option)
+                                                p.edit(cx, |s| s.scales.scale_buttons = option)
                                             })
                                             .ok();
                                         }),
@@ -42,44 +42,44 @@ impl ChartSettingsPanel {
             .child(row(self.check(
                 "no-overlap",
                 "No overlapping labels",
-                d.no_overlapping_labels,
-                |s, v| s.no_overlapping_labels = v,
+                d.scales.no_overlapping_labels,
+                |s, v| s.scales.no_overlapping_labels = v,
                 cx,
             )))
             .child(row(self.check(
                 "countdown",
                 "Countdown to bar close",
-                d.countdown,
-                |s, v| s.countdown = v,
+                d.scales.countdown,
+                |s, v| s.scales.countdown = v,
                 cx,
             )))
             .child(row(self.check(
                 "last-label",
                 "Symbol last price label",
-                d.last_price_label,
-                |s, v| s.last_price_label = v,
+                d.scales.symbol_label.shows_value(),
+                |s, v| s.scales.symbol_label = s.scales.symbol_label.with_value(v),
                 cx,
             )))
             .child(row(self.check(
                 "last-line",
                 "Symbol price line",
-                d.last_price_line,
-                |s, v| s.last_price_line = v,
+                d.scales.symbol_label.shows_line(),
+                |s, v| s.scales.symbol_label = s.scales.symbol_label.with_line(v),
                 cx,
             )))
             .child(row(self.check(
                 "ind-labels",
                 "Indicator value labels",
-                d.indicator_value_labels,
-                |s, v| s.indicator_value_labels = v,
+                d.scales.indicators.shows_value(),
+                |s, v| s.scales.indicators = s.scales.indicators.with_value(v),
                 cx,
             )))
             .child(section("TIME SCALE", muted))
             .child(row(self.check(
                 "weekday",
                 "Day of week on labels",
-                d.day_of_week,
-                |s, v| s.day_of_week = v,
+                d.scales.day_of_week,
+                |s, v| s.scales.day_of_week = v,
                 cx,
             )))
     }

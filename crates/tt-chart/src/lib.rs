@@ -23,7 +23,7 @@ mod kind;
 pub mod lod;
 pub mod render;
 pub mod scale;
-mod style;
+pub mod style;
 pub mod time_axis;
 mod view;
 pub mod viewport;
@@ -34,7 +34,7 @@ pub use drawings::{
 };
 pub use indicators::Indicator;
 pub use kind::{ChartType, ScaleMode};
-pub use style::{ChartColors, ChartStyle, ScaleButtons};
+pub use style::{ChartStyle, ColorSlot, Rgba, ScaleButtons};
 pub use view::{
     BACKFILL_MARGIN_BARS, ChartData, ChartHit, ChartLayout, ChartStats, ChartView, RenderInput,
     RenderOutput, WHEEL_ZOOM_PER_POINT,

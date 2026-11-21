@@ -4,6 +4,7 @@ use crate::bars::{DrawBar, max_volume};
 use crate::indicators::{Indicator, format_value, histogram_down};
 use crate::render::Canvas;
 use crate::scale::{self, format_countdown, format_full_time, format_percent, format_price};
+use crate::style::LineKind;
 use crate::time_axis;
 use crate::viewport::Viewport;
 use crate::{ChartStyle, ChartType, ScaleMode};
@@ -129,7 +130,7 @@ pub(crate) fn draw_base(c: &mut dyn Canvas, s: &Scene<'_>) {
             s.plot.center(),
             Align2::CENTER_CENTER,
             "Waiting for data…",
-            s.style.font_size + 1.0,
+            s.style.scales.text_size + 1.0,
             t.text_muted,
         );
         return;
@@ -142,11 +143,14 @@ pub(crate) fn draw_base(c: &mut dyn Canvas, s: &Scene<'_>) {
 
     // Grid: one line per price label and per time label, like TradingView.
     let ppp = c.pixels_per_point();
-    if s.style.grid_horizontal {
+    let cv = &s.style.canvas;
+    let grid_h = (s.style.grid_color(t, false), cv.grid_h_kind);
+    let grid_v = (s.style.grid_color(t, true), cv.grid_v_kind);
+    if cv.grid_lines.horizontal() {
         c.set_clip(s.vp_rect());
         for (y, _) in price_ticks.iter().filter(|_| !s.main_collapsed) {
             let y = crisp(*y, ppp);
-            grid_line(c, s, false, pos2(s.plot.left(), y), pos2(s.plot.right(), y));
+            grid_line(c, grid_h, pos2(s.plot.left(), y), pos2(s.plot.right(), y));
         }
         for (pane, ticks) in s.panes.iter().zip(&pane_ticks) {
             if pane.collapsed {
@@ -155,17 +159,16 @@ pub(crate) fn draw_base(c: &mut dyn Canvas, s: &Scene<'_>) {
             c.set_clip(pane.rect());
             for (y, _) in ticks {
                 let y = crisp(*y, ppp);
-                grid_line(c, s, false, pos2(s.plot.left(), y), pos2(s.plot.right(), y));
+                grid_line(c, grid_h, pos2(s.plot.left(), y), pos2(s.plot.right(), y));
             }
         }
     }
     c.set_clip(s.plot);
-    if s.style.grid_vertical {
+    if cv.grid_lines.vertical() {
         for tick in &time_ticks {
             grid_line(
                 c,
-                s,
-                true,
+                grid_v,
                 pos2(tick.x, s.plot.top()),
                 pos2(tick.x, s.plot.bottom()),
             );
@@ -215,7 +218,7 @@ pub(crate) fn draw_base(c: &mut dyn Canvas, s: &Scene<'_>) {
     // be hidden. (The crosshair's tags are opaque and drawn by the overlay.)
     c.set_clip(s.full);
     // Axis tags per pane (0 = price pane), spread so they don't overlap.
-    let mut grouped = if s.style.indicator_value_labels {
+    let mut grouped = if s.style.scales.indicators.shows_value() {
         study_tags(s)
     } else {
         Vec::new()
@@ -241,7 +244,7 @@ pub(crate) fn draw_base(c: &mut dyn Canvas, s: &Scene<'_>) {
             .filter(|(p, _)| *p == pane)
             .map(|(_, t)| t.clone())
             .collect();
-        if s.style.no_overlapping_labels {
+        if s.style.scales.no_overlapping_labels {
             spread_tags(&mut group, top, bottom);
         }
         tags.extend(group);
@@ -297,9 +300,10 @@ impl Scene<'_> {
         vp_rect(&self.vp)
     }
 
-    /// Whether a bar counts as rising ("Color bars based on previous close").
-    fn rising(&self, b: &DrawBar) -> bool {
-        if self.style.color_by_prev_close {
+    /// Whether a bar counts as rising; `by_prev_close` is the chart type's
+    /// "Color bars based on previous close" (read once per frame).
+    fn rising(by_prev_close: bool, b: &DrawBar) -> bool {
+        if by_prev_close {
             b.close >= b.prev_close
         } else {
             b.close >= b.open
@@ -586,12 +590,11 @@ fn study_tags(s: &Scene<'_>) -> Vec<(usize, Tag)> {
 }
 
 /// One grid line: dotted (1 px on, 3 px off) or solid, per the style.
-fn grid_line(c: &mut dyn Canvas, s: &Scene<'_>, vertical: bool, a: Pos2, b: Pos2) {
-    let color = s.style.grid_color(s.theme, vertical);
-    if s.style.dotted_grid {
-        c.dotted_line(a, b, color);
-    } else {
+fn grid_line(c: &mut dyn Canvas, (color, kind): (Color32, LineKind), a: Pos2, b: Pos2) {
+    if kind == LineKind::Solid {
         c.line(a, b, 1.0, color);
+    } else {
+        c.dotted_line(a, b, color);
     }
 }
 
@@ -610,7 +613,7 @@ fn time_ticks(c: &mut dyn Canvas, s: &Scene<'_>) -> Vec<time_axis::TimeTick> {
     let vp = s.vp;
     // Examine at most one candidate bar per ~3 points.
     let stride = (3.0 / vp.bar_spacing).ceil().max(1.0) as usize;
-    let size = s.style.font_size;
+    let size = s.style.scales.text_size;
     // Gap chosen so regular labels land ~`time_label_spacing` apart.
     let typical = c.text_size("00:00", size).x;
     let gap = (s.style.time_label_spacing - typical).max(16.0);
@@ -658,7 +661,7 @@ pub(crate) struct Tag {
 
 pub(crate) fn draw_tag(c: &mut dyn Canvas, s: &Scene<'_>, tag: &Tag) {
     c.fill_rounded_rect(tag.rect, 2.0, tag.bg);
-    let line_h = s.style.font_size + 3.0;
+    let line_h = s.style.scales.text_size + 3.0;
     let top = tag.rect.center().y - line_h * tag.lines.len() as f32 / 2.0;
     for (i, text) in tag.lines.iter().enumerate() {
         let y = top + line_h * (i as f32 + 0.5);
@@ -668,13 +671,19 @@ pub(crate) fn draw_tag(c: &mut dyn Canvas, s: &Scene<'_>, tag: &Tag) {
         } else {
             (pos2(tag.rect.center().x, y), Align2::CENTER_CENTER)
         };
-        c.text(pos, align, text, s.style.font_size, s.theme.text_on_accent);
+        c.text(
+            pos,
+            align,
+            text,
+            s.style.scales.text_size,
+            s.theme.text_on_accent,
+        );
     }
 }
 
 /// A tag spanning the price axis, centered on `y`.
 pub(crate) fn price_axis_tag(s: &Scene<'_>, y: f32, lines: Vec<String>, bg: Color32) -> Tag {
-    let line_h = s.style.font_size + 3.0;
+    let line_h = s.style.scales.text_size + 3.0;
     let h = line_h * lines.len() as f32 + 6.0;
     let rect = Rect::from_min_max(
         pos2(s.price_axis.left() + 1.0, y - h / 2.0),
@@ -696,7 +705,7 @@ fn price_labels(
     (top, bottom): (f32, f32),
 ) {
     let x = s.price_axis.left() + 8.0;
-    let half = s.style.font_size * 0.7;
+    let half = s.style.scales.text_size * 0.7;
     for (y, label) in ticks {
         if *y < top + half || *y > bottom - half {
             continue;
@@ -712,7 +721,7 @@ fn price_labels(
             pos2(x, *y),
             Align2::LEFT_CENTER,
             label,
-            s.style.font_size,
+            s.style.scales.text_size,
             s.theme.text_muted,
         );
     }
@@ -725,7 +734,7 @@ fn time_labels(
     tag: Option<&Tag>,
 ) {
     let y = s.time_axis.center().y;
-    let size = s.style.font_size;
+    let size = s.style.scales.text_size;
     for t in ticks {
         let w = c.text_size_styled(&t.label, size, t.major).x;
         let (l, r) = (t.x - w / 2.0, t.x + w / 2.0);
@@ -757,7 +766,7 @@ fn axis_value_label(s: &Scene<'_>, price: f64) -> String {
 
 /// Dotted last-price line across the plot in the last candle's color.
 fn last_price_line(c: &mut dyn Canvas, s: &Scene<'_>) {
-    if !s.style.last_price_line {
+    if !s.style.scales.symbol_label.shows_line() {
         return;
     }
     let Some(last) = s.last_raw else { return };
@@ -780,7 +789,7 @@ fn last_price_line(c: &mut dyn Canvas, s: &Scene<'_>) {
 
 /// Last-price tag: price plus the time left until the bar closes.
 fn last_price_tag(c: &mut dyn Canvas, s: &Scene<'_>) -> Option<Tag> {
-    if !s.style.last_price_label {
+    if !s.style.scales.symbol_label.shows_value() {
         return None;
     }
     let last = s.last_raw?;
@@ -790,7 +799,7 @@ fn last_price_tag(c: &mut dyn Canvas, s: &Scene<'_>) -> Option<Tag> {
         return None;
     }
     let mut lines = vec![axis_value_label(s, last.close)];
-    if let (true, Some(now), Some(close)) = (s.style.countdown, s.now_ms, s.bar_close_ms) {
+    if let (true, Some(now), Some(close)) = (s.style.scales.countdown, s.now_ms, s.bar_close_ms) {
         // Hidden once the bar should have closed (e.g. market closed / stale).
         let remaining = close - now;
         if remaining > 0 && close - last.open_time_ms >= remaining {
@@ -840,12 +849,12 @@ fn crosshair(c: &mut dyn Canvas, s: &Scene<'_>, p: Pos2, slot: Option<i64>) -> (
     let slots = time_axis::SlotTimes::new(s.display.open_times(), s.bar_interval_ms);
     let time_tag = slot.and_then(|i| slots.time_at(i)).map(|t| {
         let mut text = format_full_time(t, s.bar_interval_ms);
-        if !s.style.day_of_week
+        if !s.style.scales.day_of_week
             && let Some((_, rest)) = text.split_once(' ')
         {
             text = rest.to_owned();
         }
-        let size = c.text_size(&text, s.style.font_size) + vec2(16.0, 8.0);
+        let size = c.text_size(&text, s.style.scales.text_size) + vec2(16.0, 8.0);
         let mut rect = Align2::CENTER_CENTER.anchor_size(pos2(x, s.time_axis.center().y), size);
         // Keep it inside the time axis.
         let dx = (s.plot.left() - rect.left()).max(0.0) + (s.plot.right() - rect.right()).min(0.0);

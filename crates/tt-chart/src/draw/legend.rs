@@ -17,7 +17,7 @@ const LEGEND_BUTTON: f32 = 20.0;
 /// each pane's indicator at its top left. Values are for `bar`.
 pub(super) fn legends(c: &mut dyn Canvas, s: &Scene<'_>, bar: Option<usize>) -> Vec<LegendHit> {
     let mut hits = Vec::new();
-    let row_h = s.style.font_size + 10.0;
+    let row_h = s.style.scales.text_size + 10.0;
     let mut pos = s.plot.left_top() + vec2(10.0, 8.0 + row_h);
     let main: Vec<&Indicator> = s
         .indicators
@@ -40,7 +40,7 @@ pub(super) fn legends(c: &mut dyn Canvas, s: &Scene<'_>, bar: Option<usize>) -> 
         let text_w = if count.is_empty() {
             0.0
         } else {
-            c.text_size(&count, s.style.font_size).x + 6.0
+            c.text_size(&count, s.style.scales.text_size).x + 6.0
         };
         let rect = Rect::from_min_size(
             pos - vec2(4.0, 2.0),
@@ -70,7 +70,7 @@ pub(super) fn legends(c: &mut dyn Canvas, s: &Scene<'_>, bar: Option<usize>) -> 
                 pos2(ic.right() + 2.0, rect.center().y),
                 Align2::LEFT_CENTER,
                 &count,
-                s.style.font_size,
+                s.style.scales.text_size,
                 s.theme.text,
             );
         }
@@ -96,10 +96,13 @@ fn legend_row(
     bar: Option<usize>,
 ) -> LegendHit {
     let t = s.theme;
-    let size = s.style.font_size;
+    let size = s.style.scales.text_size;
     let hovered = s.legend_hover == Some(ind.id);
     let full = ind.study.legend_title();
-    let title = match (s.style.legend_titles, s.style.legend_inputs) {
+    let title = match (
+        s.style.status_line.indicator_titles,
+        s.style.status_line.indicator_inputs,
+    ) {
         (false, _) => String::new(),
         (true, true) => full,
         (true, false) => full.split_whitespace().next().unwrap_or("").to_owned(),
@@ -144,7 +147,7 @@ fn legend_row(
         x += 6.0;
     }
     if ind.visible
-        && s.style.legend_values
+        && s.style.status_line.indicator_values
         && let Some(i) = bar
     {
         let outs = ind.outputs();
@@ -184,15 +187,15 @@ fn legend_row(
 /// hovered (or last) bar.
 pub(super) fn readout(c: &mut dyn Canvas, s: &Scene<'_>, bar: Option<usize>) {
     let t = s.theme;
-    let size = s.style.font_size;
+    let size = s.style.scales.text_size;
     let mut pos = s.plot.left_top() + vec2(10.0, 8.0);
     let mut put = |c: &mut dyn Canvas, text: &str, color: Color32, gap: f32| {
         let r = c.text(pos, Align2::LEFT_TOP, text, size, color);
         pos.x = r.right() + gap;
     };
 
-    let st = s.style;
-    if st.status_title && !s.title.is_empty() {
+    let st = &s.style.status_line;
+    if st.title && !s.title.is_empty() {
         put(c, s.title, t.text, 14.0);
     }
     let Some(i) = bar else { return };
@@ -204,13 +207,13 @@ pub(super) fn readout(c: &mut dyn Canvas, s: &Scene<'_>, bar: Option<usize>) {
     let change = k.close - prev_close;
     let (color, _) = s.colors(change >= 0.0);
     let d = s.precision;
-    if st.status_values {
+    if st.chart_values {
         for (name, v) in [("O", k.open), ("H", k.high), ("L", k.low), ("C", k.close)] {
             put(c, name, t.text_muted, 3.0);
             put(c, &format_price(v, d), color, 10.0);
         }
     }
-    if st.status_change {
+    if st.bar_change {
         let pct = if prev_close != 0.0 {
             change / prev_close * 100.0
         } else {
@@ -223,7 +226,7 @@ pub(super) fn readout(c: &mut dyn Canvas, s: &Scene<'_>, bar: Option<usize>) {
             14.0,
         );
     }
-    if st.status_volume {
+    if st.volume {
         put(c, "Vol", t.text_muted, 3.0);
         put(c, &scale::format_volume(k.volume), color, 10.0);
     }

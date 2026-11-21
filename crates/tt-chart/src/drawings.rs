@@ -939,7 +939,7 @@ fn fib(c: &mut dyn Canvas, s: &Scene<'_>, d: &Drawing, pts: &[Pos2]) {
             pos2(x0 - 4.0, *y),
             Align2::RIGHT_CENTER,
             &label,
-            s.style.font_size - 1.0,
+            s.style.scales.text_size - 1.0,
             *col,
         );
     }
@@ -1002,7 +1002,7 @@ fn measurer(c: &mut dyn Canvas, s: &Scene<'_>, d: &Drawing, pts: &[Pos2]) {
             format_span(b.time_ms - a.time_ms)
         ));
     }
-    let size = s.style.font_size;
+    let size = s.style.scales.text_size;
     let line_h = size + 4.0;
     let width = lines
         .iter()

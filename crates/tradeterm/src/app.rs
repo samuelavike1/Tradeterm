@@ -111,8 +111,7 @@ impl TradeTerm {
         // Chart settings; older up/down color overrides move into them.
         let mut style = settings.chart_style.clone();
         let old = settings.overrides();
-        style.colors.up_body = style.colors.up_body.or(old.up);
-        style.colors.down_body = style.colors.down_body.or(old.down);
+        style.adopt_legacy_up_down(old.up, old.down);
         let (tx, mut rx) = mpsc::unbounded::<Wake>();
         let tx_after = tx.clone();
         let source = Arc::new(BinanceSource::new().expect("HTTP client"));
@@ -250,7 +249,7 @@ impl TradeTerm {
                     app.open_indicator_settings(chart.clone(), *id, window, cx)
                 }
                 ChartEvent::Changed => app.persist(cx),
-                ChartEvent::StyleChanged(style) => app.set_chart_style(style.clone(), true, cx),
+                ChartEvent::StyleChanged(style) => app.set_chart_style((**style).clone(), true, cx),
                 ChartEvent::OpenSettings => app.open_chart_settings(window, cx),
                 ChartEvent::DrawingsChanged => app.drawings_changed(chart, cx),
             },
@@ -1149,8 +1148,6 @@ impl TradeTerm {
 /// Theme up/down overrides that follow the chart's candle body colors, so
 /// the tab strip and status bar match the chart.
 fn style_overrides(style: &tt_chart::ChartStyle) -> ThemeOverrides {
-    ThemeOverrides {
-        up: style.colors.up_body,
-        down: style.colors.down_body,
-    }
+    let (up, down) = style.up_down_overrides();
+    ThemeOverrides { up, down }
 }

@@ -2,9 +2,9 @@
 //! bar geometry they share.
 
 use super::{Scene, crisp};
-use crate::ChartType;
 use crate::bars::{DrawBar, max_volume};
 use crate::render::Canvas;
+use crate::{ChartStyle, ChartType};
 use ecolor::Color32;
 use emath::{Pos2, Rect, pos2};
 use tt_theme::with_alpha;
@@ -218,14 +218,19 @@ fn bricks(c: &mut dyn Canvas, s: &Scene<'_>) {
 
 fn candles(c: &mut dyn Canvas, s: &Scene<'_>, g: &BarGeom, hollow: bool) {
     let vp = &s.vp;
-    let st = s.style;
+    let st = s.style.symbol.candle(s.chart_type);
+    let by_prev_close = st.color_by_prev_close;
+    let borders = [
+        ChartStyle::border_color(st, s.theme, false),
+        ChartStyle::border_color(st, s.theme, true),
+    ];
     for b in s.bars {
         let rising = b.close >= b.open;
         // Hollow candles: color by close vs previous close, hollow when rising.
         let up = if hollow {
             b.close >= b.prev_close
         } else {
-            s.rising(b)
+            Scene::rising(by_prev_close, b)
         };
         let (body, wick) = s.colors(up);
         let cx = g.center_px(b.x);
@@ -252,7 +257,7 @@ fn candles(c: &mut dyn Canvas, s: &Scene<'_>, g: &BarGeom, hollow: bool) {
                 c.fill_rect(rect, body);
             }
             // Borders only cost a primitive when they differ from the body.
-            let border = st.border_color(s.theme, up);
+            let border = borders[up as usize];
             if st.borders && (!st.body || border != body) {
                 c.stroke_rect(rect, 1.0 / g.ppp, border);
             }
@@ -264,8 +269,9 @@ fn ohlc_bars(c: &mut dyn Canvas, s: &Scene<'_>, g: &BarGeom) {
     let vp = &s.vp;
     let tick_px = ((g.body_px - g.wick_px) / 2.0).floor().max(1.0);
     let w = g.wick_px / g.ppp;
+    let by_prev_close = s.style.symbol.bars.color_by_prev_close;
     for b in s.bars {
-        let (color, _) = s.colors(s.rising(b));
+        let (color, _) = s.colors(Scene::rising(by_prev_close, b));
         let cx = g.center_px(b.x);
         c.fill_rect(
             g.column(cx, g.wick_px, vp.y_of(b.high), vp.y_of(b.low)),

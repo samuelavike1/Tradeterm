@@ -189,9 +189,12 @@ crates/
      time_axis.rs  Index-based time ticks with weighted, non-overlapping labels.
      bars.rs       The per-frame DrawBar list (one per bar, or one per pixel column).
      lod.rs        Min/max pyramid used for decimation.
-     draw.rs       Builds the picture from Canvas primitives only, in two layers:
+     draw/         Builds the picture from Canvas primitives only, in two layers:
                    draw_base (everything static) and draw_overlay (crosshair,
-                   readout, legends).
+                   readout, legends). series.rs: one function per chart type;
+                   legend.rs: the OHLC readout and indicator legends.
+     style/        ChartStyle (the Settings dialog), one struct per tab and per
+                   chart type; v1 settings files migrate on load (legacy.rs).
      render/       Canvas trait (the backend boundary). Geometry and colors are
                    emath / ecolor types; the crate has no UI-toolkit dependency.
      indicators.rs Indicator: a Study + colors/visibility, with cached outputs.

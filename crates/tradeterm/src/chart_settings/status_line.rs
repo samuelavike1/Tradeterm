@@ -14,51 +14,51 @@ impl ChartSettingsPanel {
             .child(row(self.check(
                 "st-title",
                 "Title",
-                d.status_title,
-                |s, v| s.status_title = v,
+                d.status_line.title,
+                |s, v| s.status_line.title = v,
                 cx,
             )))
             .child(row(self.check(
                 "st-values",
                 "Chart values",
-                d.status_values,
-                |s, v| s.status_values = v,
+                d.status_line.chart_values,
+                |s, v| s.status_line.chart_values = v,
                 cx,
             )))
             .child(row(self.check(
                 "st-change",
                 "Bar change values",
-                d.status_change,
-                |s, v| s.status_change = v,
+                d.status_line.bar_change,
+                |s, v| s.status_line.bar_change = v,
                 cx,
             )))
             .child(row(self.check(
                 "st-volume",
                 "Volume",
-                d.status_volume,
-                |s, v| s.status_volume = v,
+                d.status_line.volume,
+                |s, v| s.status_line.volume = v,
                 cx,
             )))
             .child(section("INDICATORS", muted))
             .child(row(self.check(
                 "lg-titles",
                 "Titles",
-                d.legend_titles,
-                |s, v| s.legend_titles = v,
+                d.status_line.indicator_titles,
+                |s, v| s.status_line.indicator_titles = v,
                 cx,
             )))
             .child(row(self.check(
                 "lg-inputs",
                 "Inputs",
-                d.legend_inputs,
-                |s, v| s.legend_inputs = v,
+                d.status_line.indicator_inputs,
+                |s, v| s.status_line.indicator_inputs = v,
                 cx,
             )))
             .child(row(self.check(
                 "lg-values",
                 "Values",
-                d.legend_values,
-                |s, v| s.legend_values = v,
+                d.status_line.indicator_values,
+                |s, v| s.status_line.indicator_values = v,
                 cx,
             )))
     }

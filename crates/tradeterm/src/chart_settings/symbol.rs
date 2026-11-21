@@ -14,24 +14,42 @@ impl ChartSettingsPanel {
             .child(row(self.check(
                 "prev-close",
                 "Color bars based on previous close",
-                d.color_by_prev_close,
-                |s, v| s.color_by_prev_close = v,
+                d.shared_flag(SharedCandleFlag::ColorByPrevClose),
+                |s, v| s.apply_shared_flag(SharedCandleFlag::ColorByPrevClose, v),
                 cx,
             )))
             .child(
-                row(self.check("body", "Body", d.body, |s, v| s.body = v, cx))
-                    .child(self.picker(ColorKey::UpBody))
-                    .child(self.picker(ColorKey::DownBody)),
+                row(self.check(
+                    "body",
+                    "Body",
+                    d.shared_flag(SharedCandleFlag::Body),
+                    |s, v| s.apply_shared_flag(SharedCandleFlag::Body, v),
+                    cx,
+                ))
+                .child(self.picker(ColorKey::UpBody))
+                .child(self.picker(ColorKey::DownBody)),
             )
             .child(
-                row(self.check("borders", "Borders", d.borders, |s, v| s.borders = v, cx))
-                    .child(self.picker(ColorKey::UpBorder))
-                    .child(self.picker(ColorKey::DownBorder)),
+                row(self.check(
+                    "borders",
+                    "Borders",
+                    d.shared_flag(SharedCandleFlag::Borders),
+                    |s, v| s.apply_shared_flag(SharedCandleFlag::Borders, v),
+                    cx,
+                ))
+                .child(self.picker(ColorKey::UpBorder))
+                .child(self.picker(ColorKey::DownBorder)),
             )
             .child(
-                row(self.check("wick", "Wick", d.wick, |s, v| s.wick = v, cx))
-                    .child(self.picker(ColorKey::UpWick))
-                    .child(self.picker(ColorKey::DownWick)),
+                row(self.check(
+                    "wick",
+                    "Wick",
+                    d.shared_flag(SharedCandleFlag::Wick),
+                    |s, v| s.apply_shared_flag(SharedCandleFlag::Wick, v),
+                    cx,
+                ))
+                .child(self.picker(ColorKey::UpWick))
+                .child(self.picker(ColorKey::DownWick)),
             )
     }
 }

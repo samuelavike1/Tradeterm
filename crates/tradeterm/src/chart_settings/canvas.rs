@@ -1,6 +1,7 @@
 //! The Canvas page: background, grid, crosshair, scales text and margins.
 
 use super::*;
+use tt_chart::style::GridLines;
 
 impl ChartSettingsPanel {
     pub(super) fn canvas_page(
@@ -11,7 +12,7 @@ impl ChartSettingsPanel {
         cx: &mut Context<Self>,
     ) -> Div {
         let this = cx.entity().downgrade();
-        let size = d.font_size;
+        let size = d.scales.text_size;
         body = body
             .child(section("CHART BASIC STYLES", muted))
             .child(row("Background").child(self.picker(ColorKey::Background)))
@@ -19,8 +20,11 @@ impl ChartSettingsPanel {
                 row(self.check(
                     "grid-v",
                     "Vertical grid lines",
-                    d.grid_vertical,
-                    |s, v| s.grid_vertical = v,
+                    d.canvas.grid_lines.vertical(),
+                    |s, v| {
+                        let g = s.canvas.grid_lines;
+                        s.canvas.grid_lines = GridLines::from_flags(v, g.horizontal())
+                    },
                     cx,
                 ))
                 .child(self.picker(ColorKey::GridV)),
@@ -29,8 +33,11 @@ impl ChartSettingsPanel {
                 row(self.check(
                     "grid-h",
                     "Horizontal grid lines",
-                    d.grid_horizontal,
-                    |s, v| s.grid_horizontal = v,
+                    d.canvas.grid_lines.horizontal(),
+                    |s, v| {
+                        let g = s.canvas.grid_lines;
+                        s.canvas.grid_lines = GridLines::from_flags(g.vertical(), v)
+                    },
                     cx,
                 ))
                 .child(self.picker(ColorKey::GridH)),
@@ -52,7 +59,7 @@ impl ChartSettingsPanel {
                                         .checked(s == size)
                                         .on_click(move |_, _, cx| {
                                             this.update(cx, |p, cx| {
-                                                p.edit(cx, |st| st.font_size = s)
+                                                p.edit(cx, |st| st.scales.text_size = s)
                                             })
                                             .ok();
                                         }),

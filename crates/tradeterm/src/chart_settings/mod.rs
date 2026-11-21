@@ -14,7 +14,8 @@ use gpui_kit::component::menu::*;
 use gpui_kit::component::{Sizable, WindowExt as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use tt_chart::{ChartColors, ChartStyle, ScaleButtons};
+use tt_chart::style::{SharedCandleColor, SharedCandleFlag};
+use tt_chart::{ChartStyle, ColorSlot, ScaleButtons};
 use tt_chart_gpui::hsla;
 use tt_theme::Theme;
 
@@ -77,21 +78,35 @@ impl ColorKey {
         ColorKey::ScaleLines,
     ];
 
-    fn slot(self, c: &mut ChartColors) -> &mut Option<Color32> {
-        match self {
-            ColorKey::UpBody => &mut c.up_body,
-            ColorKey::DownBody => &mut c.down_body,
-            ColorKey::UpBorder => &mut c.up_border,
-            ColorKey::DownBorder => &mut c.down_border,
-            ColorKey::UpWick => &mut c.up_wick,
-            ColorKey::DownWick => &mut c.down_wick,
+    /// The candle colors as v1 applied them (to every chart type).
+    fn shared(self) -> Option<SharedCandleColor> {
+        Some(match self {
+            ColorKey::UpBody => SharedCandleColor::UpBody,
+            ColorKey::DownBody => SharedCandleColor::DownBody,
+            ColorKey::UpBorder => SharedCandleColor::UpBorder,
+            ColorKey::DownBorder => SharedCandleColor::DownBorder,
+            ColorKey::UpWick => SharedCandleColor::UpWick,
+            ColorKey::DownWick => SharedCandleColor::DownWick,
+            _ => return None,
+        })
+    }
+
+    fn set(self, s: &mut ChartStyle, v: ColorSlot) {
+        if let Some(key) = self.shared() {
+            s.apply_shared_color(key, v);
+            return;
+        }
+        let c = &mut s.canvas;
+        let slot = match self {
             ColorKey::Background => &mut c.background,
-            ColorKey::GridV => &mut c.grid_vertical,
-            ColorKey::GridH => &mut c.grid_horizontal,
+            ColorKey::GridV => &mut c.grid_v_color,
+            ColorKey::GridH => &mut c.grid_h_color,
             ColorKey::Crosshair => &mut c.crosshair,
             ColorKey::ScaleText => &mut c.scale_text,
             ColorKey::ScaleLines => &mut c.scale_lines,
-        }
+            _ => unreachable!("candle colors are shared"),
+        };
+        *slot = v;
     }
 
     /// The color in effect (override or theme) for `style` on `base`.
@@ -100,8 +115,8 @@ impl ColorKey {
         match self {
             ColorKey::UpBody => t.up,
             ColorKey::DownBody => t.down,
-            ColorKey::UpBorder => style.border_color(&t, true),
-            ColorKey::DownBorder => style.border_color(&t, false),
+            ColorKey::UpBorder => ChartStyle::border_color(&style.symbol.candles, &t, true),
+            ColorKey::DownBorder => ChartStyle::border_color(&style.symbol.candles, &t, false),
             ColorKey::UpWick => t.up_wick,
             ColorKey::DownWick => t.down_wick,
             ColorKey::Background => t.bg,
@@ -114,14 +129,11 @@ impl ColorKey {
     }
 }
 
-fn color32(c: Hsla) -> Color32 {
+/// A picked color, unmultiplied (as the picker shows it).
+fn rgba(c: Hsla) -> tt_chart::Rgba {
     let r = Rgba::from(c);
-    Color32::from_rgba_unmultiplied(
-        (r.r * 255.0).round() as u8,
-        (r.g * 255.0).round() as u8,
-        (r.b * 255.0).round() as u8,
-        (r.a * 255.0).round() as u8,
-    )
+    let b = |v: f32| (v * 255.0).round() as u8;
+    tt_chart::Rgba::new(b(r.r), b(r.g), b(r.b), b(r.a))
 }
 
 /// Numeric fields: (label, unit, getter, setter, min, max).
@@ -131,24 +143,24 @@ const NUMBERS: [(&str, &str, NumGet, NumSet, f32, f32); 3] = [
     (
         "Top",
         "%",
-        |s| s.margin_top,
-        |s, v| s.margin_top = v,
+        |s| s.canvas.margins.top,
+        |s, v| s.canvas.margins.top = v,
         0.0,
         40.0,
     ),
     (
         "Bottom",
         "%",
-        |s| s.margin_bottom,
-        |s, v| s.margin_bottom = v,
+        |s| s.canvas.margins.bottom,
+        |s, v| s.canvas.margins.bottom = v,
         0.0,
         40.0,
     ),
     (
         "Right",
         "bars",
-        |s| s.margin_right,
-        |s, v| s.margin_right = v,
+        |s| s.canvas.margins.right,
+        |s, v| s.canvas.margins.right = v,
         0.0,
         100.0,
     ),
@@ -184,8 +196,8 @@ impl ChartSettingsPanel {
             subs.push(
                 cx.subscribe(&picker, move |this, _, ev: &ColorPickerEvent, cx| {
                     if let ColorPickerEvent::Change(Some(c)) = ev {
-                        let c = color32(*c);
-                        this.edit(cx, |s| *key.slot(&mut s.colors) = Some(c));
+                        let c = rgba(*c);
+                        this.edit(cx, |s| key.set(s, Some(c)));
                     }
                 }),
             );
