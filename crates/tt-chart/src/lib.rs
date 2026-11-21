@@ -30,8 +30,9 @@ pub mod viewport;
 
 pub use draw::LegendButton;
 pub use drawings::{
-    Anchor, Drawing, DrawingList, DrawingMap, DrawingPart, DrawingPress, DrawingTool, Drawings,
-    LineStyle, Mods, Placement, Props, Repaint, ToolGroup, Visibility,
+    Anchor, Drawing, DrawingList, DrawingMap, DrawingMenuTarget, DrawingPart, DrawingPress,
+    DrawingTool, Drawings, LineStyle, MagnetMode, Mods, Placement, Props, Repaint, ToolGroup,
+    Visibility, VisualOrder,
 };
 pub use indicators::Indicator;
 pub use kind::{ChartType, ScaleMode};

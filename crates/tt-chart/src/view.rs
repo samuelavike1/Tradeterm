@@ -1,7 +1,7 @@
 use crate::bars::{collect_bars, price_extent};
 use crate::derived::Derived;
 use crate::draw::{self, LegendButton, LegendHit, Pane, Scene};
-use crate::drawings::{DrawingPress, Drawings, Mapper, Mods, Repaint};
+use crate::drawings::{DrawingMenuTarget, DrawingPress, Drawings, Mapper, Mods, Repaint};
 use crate::indicators::Indicator;
 use crate::lod::Lod;
 use crate::render::Canvas;
@@ -490,6 +490,63 @@ impl ChartView {
     /// Pointer released; returns whether drawings changed.
     pub fn drawing_release(&mut self, p: Pos2, mods: Mods) -> bool {
         self.drawings.release(p, mods)
+    }
+
+    /// A right-click: what the drawing context menu is for. A drawing not
+    /// in the selection becomes the selection; while placing a path or
+    /// polyline the click finishes it instead (no menu).
+    pub fn drawing_context_press(&mut self, p: Pos2) -> DrawingMenuTarget {
+        let ds = &mut self.drawings;
+        if ds.placing() {
+            return if ds.finish_placing() {
+                DrawingMenuTarget::Finished
+            } else {
+                DrawingMenuTarget::None
+            };
+        }
+        if ds.busy() || !self.in_drawing_area(p) {
+            return DrawingMenuTarget::None;
+        }
+        let ds = &mut self.drawings;
+        match ds.hit(p) {
+            Some((id, _)) => {
+                if !ds.is_selected(id) {
+                    ds.select_only(id);
+                }
+                DrawingMenuTarget::Drawing(id)
+            }
+            None => DrawingMenuTarget::Empty,
+        }
+    }
+
+    /// Arrow keys: nudges the selected drawings by `bars` bars and `ticks`
+    /// price ticks (the symbol's tick, at least one screen point of price so
+    /// a nudge is visible).
+    pub fn nudge_drawings(&mut self, bars: i32, ticks: i32, data: ChartData<'_>) -> bool {
+        let tick = data.tick_size.filter(|t| *t > 0.0);
+        self.with_mapper(data, |d, m, _| {
+            let point = (m.vp.price_at(0.0) - m.vp.price_at(1.0)).abs();
+            // Whole ticks.
+            let step = tick.map_or(point, |t| (point / t).ceil().max(1.0) * t);
+            d.nudge(bars, ticks as f64 * step, m)
+        })
+        .unwrap_or(false)
+    }
+
+    /// Pastes copies of `items` (the clipboard) and selects them.
+    pub fn paste_drawings(
+        &mut self,
+        items: &[crate::drawings::Drawing],
+        data: ChartData<'_>,
+    ) -> bool {
+        self.with_mapper(data, |d, m, _| d.paste(items, m))
+            .unwrap_or(false)
+    }
+
+    /// Clones the selected drawings (context menu "Clone").
+    pub fn clone_selected_drawings(&mut self, data: ChartData<'_>) -> bool {
+        self.with_mapper(data, |d, m, _| d.clone_selected(m))
+            .unwrap_or(false)
     }
 
     /// Clicks a legend button; returns the indicator whose settings should

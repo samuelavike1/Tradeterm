@@ -77,17 +77,23 @@ pub(crate) fn draw_overlay(c: &mut dyn Canvas, s: &Scene<'_>) {
         return;
     }
     c.set_clip(s.vp_rect());
-    for id in [ds.selected, ds.hovered.filter(|h| Some(*h) != ds.selected)]
-        .into_iter()
-        .flatten()
-    {
+    let hovered = ds.hovered.filter(|h| !ds.is_selected(*h));
+    for &id in ds.selection().iter().chain(hovered.as_ref()) {
         if let (Some(d), Some(pts)) = (ds.items.iter().find(|d| d.id == id), ds.screen_of(id)) {
             handles(c, s, d.tool, pts, d.color());
         }
     }
-    // Selected lines and rectangles also show their prices on the axis.
+    // The Ctrl + drag rubber band.
+    if let Some((a, b)) = ds.band {
+        let r = emath::Rect::from_two_pos(a, b);
+        c.fill_rect(r, tt_theme::with_alpha(s.theme.accent, 0.12));
+        c.stroke_rect(r, 1.0, tt_theme::with_alpha(s.theme.accent, 0.8));
+    }
+    // A selected line or rectangle (alone) also shows its prices on the axis.
     c.set_clip(s.full);
-    if let Some(d) = ds.selected_drawing() {
+    if let [_] = ds.selection()
+        && let Some(d) = ds.selected_drawing()
+    {
         let pts = ds.screen_of(d.id).unwrap_or(&[]);
         if matches!(
             d.tool,

@@ -10,15 +10,16 @@ impl Drawings {
         if self.hidden || !self.pane.contains(p) {
             return None;
         }
-        // Handles of the selected drawing win.
-        if let Some(id) = self.selected
-            && self.items.iter().any(|d| d.id == id && has_handles(d.tool))
-            && let Some(pts) = self.screen_of(id)
-            && let Some(k) = pts
-                .iter()
-                .position(|q| q.distance(p) <= HANDLE_RADIUS + 2.0)
-        {
-            return Some((id, DrawingPart::Handle(k)));
+        // Handles of the selected drawings win.
+        for &id in &self.selection {
+            if self.items.iter().any(|d| d.id == id && has_handles(d.tool))
+                && let Some(pts) = self.screen_of(id)
+                && let Some(k) = pts
+                    .iter()
+                    .position(|q| q.distance(p) <= HANDLE_RADIUS + 2.0)
+            {
+                return Some((id, DrawingPart::Handle(k)));
+            }
         }
         for d in self.items.iter().rev() {
             if d.hidden {

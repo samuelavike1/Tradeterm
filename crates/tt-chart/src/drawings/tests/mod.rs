@@ -7,12 +7,14 @@ use ecolor::Color32;
 use emath::vec2;
 use serde::{Deserialize, Serialize};
 
-const NO_MODS: Mods = Mods {
+mod interaction;
+
+pub(super) const NO_MODS: Mods = Mods {
     shift: false,
     ctrl: false,
 };
 
-fn mapper(times: &[i64]) -> Mapper<'_> {
+pub(super) fn mapper(times: &[i64]) -> Mapper<'_> {
     Mapper {
         vp: Viewport {
             bar_spacing: 10.0,
@@ -32,7 +34,7 @@ fn mapper(times: &[i64]) -> Mapper<'_> {
     }
 }
 
-fn series(n: usize) -> CandleSeries {
+pub(super) fn series(n: usize) -> CandleSeries {
     let mut s = CandleSeries::new();
     for i in 0..n {
         s.upsert(tt_core::Candle {
@@ -97,7 +99,7 @@ fn place_select_drag_and_delete() {
     assert_eq!(ds.items.len(), 1);
     assert_eq!(ds.tool, None, "tool released without keep drawing");
     let id = ds.items[0].id;
-    assert_eq!(ds.selected, Some(id));
+    assert_eq!(ds.selection(), &[id]);
     ds.layout(&m, pane, pane);
     assert!(ds.take_dirty());
 
@@ -123,8 +125,8 @@ fn place_select_drag_and_delete() {
     assert!((d.points[0].price - 90.0).abs() < 1e-3, "{:?}", d.points);
 
     // Magnet snaps to the bar's high.
-    ds.magnet = true;
-    let a = m.snapped(pos2(505.0, m.vp.y_of(61.0)), true, &s);
+    ds.magnet = MagnetMode::Weak;
+    let a = m.snapped(pos2(505.0, m.vp.y_of(61.0)), MagnetMode::Weak, &s);
     assert_eq!(a.price, 60.0);
 
     // Empty space deselects; Delete removes the selection.
@@ -132,12 +134,12 @@ fn place_select_drag_and_delete() {
         ds.press(pos2(900.0, 480.0), NO_MODS, false, &m, &s),
         DrawingPress::Handled
     );
-    assert_eq!(ds.selected, None);
+    assert_eq!(ds.selection(), &[] as &[u64]);
     assert_eq!(
         ds.press(pos2(900.0, 480.0), NO_MODS, false, &m, &s),
         DrawingPress::Ignored
     );
-    ds.selected = Some(id);
+    ds.select_only(id);
     assert!(ds.delete_selected());
     assert_eq!(ds.items.len(), 1);
 

@@ -29,7 +29,7 @@ const ACTIVE: ecolor::Color32 = ecolor::Color32::from_rgb(0x29, 0x62, 0xff);
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DrawMode {
     pub tool: Option<DrawingTool>,
-    pub magnet: bool,
+    pub magnet: tt_chart::MagnetMode,
     pub keep_drawing: bool,
     pub locked: bool,
     pub hidden: bool,
@@ -42,7 +42,7 @@ impl Default for DrawMode {
     fn default() -> Self {
         Self {
             tool: None,
-            magnet: false,
+            magnet: tt_chart::MagnetMode::Off,
             keep_drawing: false,
             locked: false,
             hidden: false,
@@ -109,7 +109,7 @@ impl TradeTerm {
                 d.locked = m.locked;
                 d.hidden = m.hidden;
                 if m.hidden || m.locked {
-                    d.selected = None;
+                    d.clear_selection();
                 }
             });
             cx.notify();
@@ -247,10 +247,19 @@ impl TradeTerm {
         let magnet = tool_button(
             "dt-magnet",
             Icon::Magnet,
-            m.magnet,
-            "Magnet: snap to bar open / high / low / close".into(),
+            m.magnet.is_on(),
+            // A click cycles off → weak → strong (a flyout comes with the
+            // toolbar polish).
+            format!(
+                "{}: snap to bar open / high / low / close (click: {})",
+                m.magnet.label(),
+                m.magnet.next().label().to_lowercase()
+            )
+            .into(),
         )
-        .on_click(cx.listener(|this, _, _, cx| this.set_draw_mode(|m| m.magnet = !m.magnet, cx)));
+        .on_click(
+            cx.listener(|this, _, _, cx| this.set_draw_mode(|m| m.magnet = m.magnet.next(), cx)),
+        );
         let keep = tool_button(
             "dt-keep",
             Icon::PencilLine,
