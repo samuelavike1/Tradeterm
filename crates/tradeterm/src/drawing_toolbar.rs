@@ -89,7 +89,7 @@ fn group_tools(g: ToolGroup) -> Vec<DrawingTool> {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DrawMode {
     pub tool: Option<DrawingTool>,
-    pub magnet: bool,
+    pub magnet: tt_chart::MagnetMode,
     pub keep_drawing: bool,
     pub locked: bool,
     pub hidden: bool,
@@ -117,7 +117,7 @@ impl Default for DrawMode {
     fn default() -> Self {
         Self {
             tool: None,
-            magnet: false,
+            magnet: tt_chart::MagnetMode::Off,
             keep_drawing: false,
             locked: false,
             hidden: false,
@@ -240,7 +240,7 @@ impl TradeTerm {
                 d.locked = m.locked;
                 d.hidden = m.hidden;
                 if m.hidden || m.locked {
-                    d.selected = None;
+                    d.clear_selection();
                 }
             });
             cx.notify();
@@ -332,10 +332,19 @@ impl TradeTerm {
 
         bar.child(separator())
             .child(
-                tool_button("dt-magnet", Glyph::MAGNET, m.magnet)
-                    .tooltip("Magnet: snap to bar open, high, low, close")
+                // A click cycles off → weak → strong.
+                tool_button("dt-magnet", Glyph::MAGNET, m.magnet.is_on())
+                    .tooltip(match m.magnet {
+                        tt_chart::MagnetMode::Off => {
+                            "Magnet: snap to bar O / H / L / C (click: weak)"
+                        }
+                        tt_chart::MagnetMode::Weak => {
+                            "Weak magnet: snaps when near (click: strong)"
+                        }
+                        tt_chart::MagnetMode::Strong => "Strong magnet: always snaps (click: off)",
+                    })
                     .on_click(cx.listener(|this, _, _, cx| {
-                        this.set_draw_mode(|m| m.magnet = !m.magnet, cx)
+                        this.set_draw_mode(|m| m.magnet = m.magnet.next(), cx)
                     })),
             )
             .child(

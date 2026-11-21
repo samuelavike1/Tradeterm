@@ -14,13 +14,14 @@ impl Drawings {
         if self.hidden || !self.pane.contains(p) {
             return None;
         }
-        // Handles of the selected drawing win.
-        if let Some(id) = self.selected
-            && let Some(d) = self.items.iter().find(|d| d.id == id)
-            && let Some(pts) = self.screen_of(id)
-            && let Some(k) = handle_at(d.tool, pts, p, HANDLE_RADIUS + 2.0)
-        {
-            return Some((id, DrawingPart::Handle(k)));
+        // Handles of the selected drawings win.
+        for &id in &self.selection {
+            if let Some(d) = self.items.iter().find(|d| d.id == id)
+                && let Some(pts) = self.screen_of(id)
+                && let Some(k) = handle_at(d.tool, pts, p, HANDLE_RADIUS + 2.0)
+            {
+                return Some((id, DrawingPart::Handle(k)));
+            }
         }
         for d in self.items.iter().rev() {
             if d.hidden {

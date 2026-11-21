@@ -255,6 +255,8 @@ impl TradeTerm {
                 ChartEvent::StyleChanged(style) => app.set_chart_style((**style).clone(), true, cx),
                 ChartEvent::OpenSettings => app.open_chart_settings(window, cx),
                 ChartEvent::DrawingsChanged => app.drawings_changed(chart, cx),
+                // The drawing settings dialog is slice A.
+                ChartEvent::OpenDrawingSettings(_) => {}
             },
         );
         self._subscriptions.push(sub);
@@ -657,15 +659,29 @@ impl Render for TradeTerm {
                 if window.has_active_dialog(cx) || !this.focus.is_focused(window) {
                     return;
                 }
-                // Drawing keys: Escape, Enter, Delete / Backspace. (The Alt
-                // tool shortcuts are actions, see `drawing_toolbar::key_bindings`.)
+                // Drawing keys: Escape, Enter, Delete / Backspace, undo /
+                // redo, copy / paste, arrow nudges. (The Alt tool shortcuts
+                // are actions, see `drawing_toolbar::key_bindings`.)
                 if let Some(chart) = this.tab_chart().cloned() {
+                    let ctrl = (m.control || m.platform) && !m.alt;
+                    let plain = !m.control && !m.platform && !m.alt;
+                    // Arrows: one bar / one tick; Shift: ten.
+                    let step = if m.shift { 10 } else { 1 };
                     let handled = match k.key.as_str() {
                         "escape" if !m.modified() => chart.update(cx, |c, cx| c.cancel_drawing(cx)),
                         "enter" if !m.modified() => chart.update(cx, |c, cx| c.finish_drawing(cx)),
                         "delete" | "backspace" if !m.modified() => {
                             chart.update(cx, |c, cx| c.delete_selected_drawing(cx))
                         }
+                        "z" if ctrl && !m.shift => chart.update(cx, |c, cx| c.undo_drawing(cx)),
+                        "y" if ctrl && !m.shift => chart.update(cx, |c, cx| c.redo_drawing(cx)),
+                        "z" if ctrl && m.shift => chart.update(cx, |c, cx| c.redo_drawing(cx)),
+                        "c" if ctrl && !m.shift => chart.update(cx, |c, cx| c.copy_drawings(cx)),
+                        "v" if ctrl && !m.shift => chart.update(cx, |c, cx| c.paste_drawings(cx)),
+                        "left" if plain => chart.update(cx, |c, cx| c.nudge_drawings(-step, 0, cx)),
+                        "right" if plain => chart.update(cx, |c, cx| c.nudge_drawings(step, 0, cx)),
+                        "up" if plain => chart.update(cx, |c, cx| c.nudge_drawings(0, step, cx)),
+                        "down" if plain => chart.update(cx, |c, cx| c.nudge_drawings(0, -step, cx)),
                         _ => false,
                     };
                     if handled {

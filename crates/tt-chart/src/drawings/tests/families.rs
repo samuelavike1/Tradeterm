@@ -421,7 +421,7 @@ fn every_line_fib_and_range_tool_renders() {
         ds.items.push(d);
     }
     ds.layout(&m, pane, pane);
-    ds.selected = Some(ds.items[0].id);
+    ds.select_only(ds.items[0].id);
     let (theme, style) = (Theme::dark(), ChartStyle::default());
     let scene = Scene {
         vp: m.vp,
