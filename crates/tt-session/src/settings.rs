@@ -86,6 +86,27 @@ impl IndicatorConfig {
     }
 }
 
+/// Deserializes a list element by element, skipping (with a warning) the
+/// entries that fail, so one unknown entry, such as a study kind written by
+/// a newer version, does not reject the whole settings file.
+fn tolerant_vec<'de, D, T>(d: D) -> Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    let raw = Vec::<serde_json::Value>::deserialize(d)?;
+    Ok(raw
+        .into_iter()
+        .filter_map(|v| match serde_json::from_value(v) {
+            Ok(t) => Some(t),
+            Err(e) => {
+                warn!("skipping unreadable settings entry: {e}");
+                None
+            }
+        })
+        .collect())
+}
+
 /// One chart tab.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -95,7 +116,9 @@ pub struct TabSettings {
     pub chart_type: ChartType,
     pub scale_mode: ScaleMode,
     /// Indicators in draw order. New charts start with Volume, like
-    /// TradingView's default layout.
+    /// TradingView's default layout. Entries that fail to load (e.g. a study
+    /// kind from a newer version) are skipped, not the whole file.
+    #[serde(deserialize_with = "tolerant_vec")]
     pub indicators: Vec<IndicatorConfig>,
     /// Price-pane legend collapsed.
     pub legend_collapsed: bool,
@@ -146,7 +169,8 @@ pub struct AppSettings {
     pub collapsed_timeframe_sections: Vec<String>,
     /// Chart types pinned to the toolbar as quick buttons.
     pub favorite_chart_types: Vec<ChartType>,
-    /// Starred entries of the indicators dialog.
+    /// Starred entries of the indicators dialog (unknown kinds are skipped).
+    #[serde(deserialize_with = "tolerant_vec")]
     pub favorite_indicators: Vec<StudyKind>,
     /// Chart settings (TradingView's Settings dialog), shared by all charts.
     pub chart_style: tt_chart::ChartStyle,
@@ -425,6 +449,102 @@ mod tests {
         // An explicitly empty list stays empty.
         let empty: AppSettings = serde_json::from_str(r#"{"tabs":[{"indicators":[]}]}"#).unwrap();
         assert!(empty.normalized().tabs[0].indicators.is_empty());
+    }
+
+    /// A tab's indicator list as written by the current version.
+    const CURRENT_INDICATORS: &str = r#"[
+        {"study":{"type":"Volume","ma_length":20,"color_by_prev_close":false,"show_ma":true},
+         "visible":true,"colors":[[8,153,129,255],[33,150,243,255]],
+         "pane_weight":1.0,"pane_collapsed":false},
+        {"study":{"type":"Rsi","length":21,"source":"Hlc3"},"visible":false,
+         "colors":[[126,87,194,255]],"pane_weight":2.5,"pane_collapsed":true},
+        {"study":{"type":"Vwap"},"visible":true,"colors":[],"pane_weight":1.0,
+         "pane_collapsed":false}
+    ]"#;
+
+    #[test]
+    fn current_indicator_format_loads_unchanged() {
+        let json = format!(r#"{{"tabs":[{{"symbol":"A","indicators":{CURRENT_INDICATORS}}}]}}"#);
+        let s: AppSettings = serde_json::from_str(&json).unwrap();
+        let ind = &s.tabs[0].indicators;
+        assert_eq!(
+            ind,
+            &[
+                IndicatorConfig {
+                    study: Study::Volume {
+                        ma_length: 20,
+                        color_by_prev_close: false,
+                        show_ma: true,
+                    },
+                    visible: true,
+                    colors: vec![[8, 153, 129, 255], [33, 150, 243, 255]],
+                    pane_weight: 1.0,
+                    pane_collapsed: false,
+                },
+                IndicatorConfig {
+                    study: Study::Rsi {
+                        length: 21,
+                        source: tt_core::Source::Hlc3,
+                    },
+                    visible: false,
+                    colors: vec![[126, 87, 194, 255]],
+                    pane_weight: 2.5,
+                    pane_collapsed: true,
+                },
+                IndicatorConfig {
+                    study: Study::Vwap,
+                    visible: true,
+                    colors: vec![],
+                    pane_weight: 1.0,
+                    pane_collapsed: false,
+                },
+            ]
+        );
+        let rsi = ind[1].to_indicator();
+        assert_eq!(rsi.colors[0], Color32::from_rgb(126, 87, 194));
+        assert_eq!(rsi.pane_weight, 2.5);
+        // Writing it back gives the same file content.
+        let back: Vec<IndicatorConfig> =
+            serde_json::from_str(&serde_json::to_string(ind).unwrap()).unwrap();
+        assert_eq!(&back, ind);
+    }
+
+    #[test]
+    fn unknown_indicator_is_skipped_not_the_file() {
+        // A study kind from a newer version, a known kind with a broken
+        // field and an unknown source: only those entries are dropped.
+        let json = r#"{
+            "theme_mode":"Light",
+            "favorite_indicators":["Rsi","Supertrend","Macd"],
+            "tabs":[{"symbol":"ETHUSDT","indicators":[
+                {"study":{"type":"Rsi","length":14,"source":"Close"},"visible":true},
+                {"study":{"type":"Supertrend","atr_length":10,"factor":3.0},"visible":true},
+                {"study":{"type":"Sma","length":"nine","source":"Close"}},
+                {"study":{"type":"Ema","length":9,"source":"Hlcc5"}},
+                {"study":{"type":"Macd","fast":12,"slow":26,"signal":9,"source":"Close"}}
+            ]}]
+        }"#;
+        let s: AppSettings = serde_json::from_str(json).unwrap();
+        assert_eq!(s.theme_mode, ThemeMode::Light);
+        assert_eq!(s.tabs[0].symbol, "ETHUSDT");
+        let kinds: Vec<_> = s.tabs[0]
+            .indicators
+            .iter()
+            .map(|i| i.study.kind())
+            .collect();
+        assert_eq!(kinds, [StudyKind::Rsi, StudyKind::Macd]);
+        assert_eq!(s.favorite_indicators, [StudyKind::Rsi, StudyKind::Macd]);
+
+        // Through the store as well (the path users hit at startup).
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, json).unwrap();
+        let (loaded, _) = SettingsStore::load(Some(path));
+        assert_eq!(loaded.tabs[0].indicators.len(), 2);
+        assert_eq!(loaded.theme_mode, ThemeMode::Light);
+
+        // A non-list value is still an error (handled as an invalid file).
+        assert!(serde_json::from_str::<TabSettings>(r#"{"indicators":5}"#).is_err());
     }
 
     #[test]

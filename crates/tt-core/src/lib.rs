@@ -18,7 +18,12 @@ pub use event::{ConnectionStatus, EventSink, MarketEvent};
 pub use heikin_ashi::{HeikinAshi, heikin_ashi, heikin_ashi_bar};
 pub use resample::{ResampleError, Resampler, bucket_start, can_resample, resample};
 pub use series::{CandleSeries, UpsertOutcome};
-pub use studies::{Placement, Plot, Source, Study, StudyKind};
+pub use studies::ma::{MaType, Smoothing, SmoothingType};
+pub use studies::meta::{
+    FillDef, FillEdge, HLineDef, InputDef, InputKind, InputValue, LineStyle, PlotDef, PlotDefault,
+    PlotKind, PlotType, Rgba, StudyMeta, ValueFormat,
+};
+pub use studies::{Placement, Plot, Source, Study, StudyKind, ma, meta};
 pub use symbol_info::{SymbolInfo, precision_from_tick_size};
 pub use timeframe::{TimeUnit, Timeframe, civil_from_days, days_from_civil};
 pub use types::{Candle, PriceTicks, Symbol};

@@ -251,4 +251,39 @@ mod tests {
         assert!(!vol.output_enabled(1));
         assert_eq!(format_value(&vol.study, 1500.0, 2), "1.50K");
     }
+
+    /// The study metadata describes what this module and the renderer do
+    /// today (colors, enabled outputs, value format).
+    #[test]
+    fn study_meta_matches_current_defaults() {
+        use tt_core::ValueFormat;
+        for kind in StudyKind::ALL {
+            let study = kind.default_study();
+            let meta = study.meta();
+            let colors = default_colors(&study);
+            assert_eq!(colors.len(), meta.plots.len(), "{kind:?}");
+            for (k, (plot, color)) in meta.plots.iter().zip(&colors).enumerate() {
+                if kind == StudyKind::Volume && k == 0 {
+                    continue; // columns follow the theme's volume colors
+                }
+                assert_eq!(
+                    plot.default.color,
+                    color.to_srgba_unmultiplied(),
+                    "{kind:?} {}",
+                    plot.id
+                );
+            }
+            let ind = Indicator::new(study.clone());
+            for (k, plot) in meta.plots.iter().enumerate() {
+                let enabled = plot.enabled_if.is_none_or(|f| f(&study));
+                assert_eq!(enabled, ind.output_enabled(k), "{kind:?} {}", plot.id);
+            }
+            let want = match meta.format {
+                ValueFormat::Volume => format_volume(1234.0),
+                ValueFormat::Fixed(d) => format!("{:.*}", d as usize, 1234.0),
+                ValueFormat::Price => format_price(1234.0, 3),
+            };
+            assert_eq!(format_value(&study, 1234.0, 3), want, "{kind:?}");
+        }
+    }
 }
