@@ -134,3 +134,16 @@ Add to this list whenever something is skipped; remove an entry when it lands.
   size and the chart canvas to go through one scale (gpui's display-scale
   override is test-only and the kit uses absolute px). "Open link from
   clipboard": nothing to open in tradeterm yet (no shareable chart links).
+
+## Faster history when scrolling back
+- Older bars take noticeable time to appear when panning left. Ideas:
+  - Prefetch ahead: start the next backfill page when the viewport is a
+    screen or two from the oldest loaded bar, not at the edge.
+  - Bigger / parallel pages: fetch several 1000-bar pages concurrently
+    (Binance allows it), merge in order.
+  - Disk cache of downloaded history per symbol + interval, so revisiting
+    old ranges (and restarts) are instant; only fetch the gap.
+  - Derive higher intervals locally from cached lower-interval bars where
+    possible instead of refetching.
+  - Measure: time from reaching the edge to bars on screen, before/after.
+
