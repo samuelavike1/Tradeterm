@@ -462,8 +462,18 @@ impl<S: ChartSource> Chart<S> {
         let view = self.state.read(cx).source.view();
         let ds = &view.drawings;
         let hit = view.hit_test(p);
+        let resize = (ds.hovered.is_some() || ds.busy())
+            .then(|| ds.resize_cursor(p))
+            .flatten();
         let cursor = if (ds.tool.is_some() && hit == ChartHit::Plot) || ds.banding() {
             CursorStyle::Crosshair
+        } else if let Some(r) = resize {
+            match r {
+                tt_chart::ResizeCursor::Nwse => CursorStyle::ResizeUpLeftDownRight,
+                tt_chart::ResizeCursor::Nesw => CursorStyle::ResizeUpRightDownLeft,
+                tt_chart::ResizeCursor::Ew => CursorStyle::ResizeLeftRight,
+                tt_chart::ResizeCursor::Ns => CursorStyle::ResizeUpDown,
+            }
         } else if ds.busy() {
             CursorStyle::ClosedHand
         } else if ds.hovered.is_some() {

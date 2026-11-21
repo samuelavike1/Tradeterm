@@ -3,9 +3,9 @@
 //! in its own file; this only routes.
 
 use super::props::Props;
-use super::stats::{Buf, write_full_time};
-use super::{Drawing, DrawingTool, HANDLE_RADIUS, channel, fib, hit, lines, measure, shapes};
-use crate::draw::{Scene, Tag, draw_tag, price_axis_tag};
+use super::stats::{Buf, write_full_time, write_price};
+use super::{Drawing, DrawingTool, channel, fib, hit, lines, measure, shapes};
+use crate::draw::{Scene, Tag, contrast_text, draw_price_tag, price_axis_tag};
 use crate::render::Canvas;
 use crate::scale::format_price;
 use ecolor::Color32;
@@ -59,12 +59,11 @@ pub(crate) fn axis_tags(s: &Scene<'_>) -> Vec<Tag> {
         for a in d.points.iter().take(n) {
             let y = s.vp.y_of(a.price);
             if pane.y_range().contains(y) {
-                tags.push(price_axis_tag(
-                    s,
-                    y,
-                    vec![format_price(a.price, s.precision)],
-                    d.color(),
-                ));
+                let bg = d.solid_color();
+                tags.push(
+                    price_axis_tag(s, y, vec![format_price(a.price, s.precision)], bg)
+                        .with_fg(contrast_text(bg)),
+                );
             }
         }
     }
@@ -81,7 +80,7 @@ pub(crate) fn draw_overlay(c: &mut dyn Canvas, s: &Scene<'_>) {
     if let Some(pl) = &ds.placing {
         draw_one(c, s, &pl.drawing, &pl.screen);
         lines::overlay_stats(c, s, &pl.drawing, &pl.screen);
-        handles(c, s, pl.drawing.tool, &pl.screen, pl.drawing.color());
+        handles(c, s, pl.drawing.tool, &pl.screen, pl.drawing.solid_color());
     }
     if ds.hidden {
         c.set_clip(s.full);
@@ -94,7 +93,7 @@ pub(crate) fn draw_overlay(c: &mut dyn Canvas, s: &Scene<'_>) {
             && ds.is_shown(d)
         {
             lines::overlay_stats(c, s, d, pts);
-            handles(c, s, d.tool, pts, d.color());
+            handles(c, s, d.tool, pts, d.solid_color());
         }
     }
     // The Ctrl + drag rubber band.
@@ -112,35 +111,47 @@ pub(crate) fn draw_overlay(c: &mut dyn Canvas, s: &Scene<'_>) {
             _ => false,
         };
         if on && let Some(pts) = ds.screen_of(d.id) {
-            time_tag(c, s, pts[0].x, d.points[0].time_ms, d.color());
+            let bg = d.solid_color();
+            time_tag(c, s, pts[0].x, d.points[0].time_ms, bg, contrast_text(bg));
         }
     }
-    // A selected line or rectangle (alone) also shows its prices on the axis.
+    // A selected line or rectangle (alone) also shows its prices on the
+    // axis; a rectangle also its times, with bands between (TradingView).
     if let [_] = ds.selection()
         && let Some(d) = ds.selected_drawing()
     {
         let pts = ds.screen_of(d.id).unwrap_or(&[]);
-        if lines::is_line_family(d.tool) || d.tool == DrawingTool::Rectangle {
+        let rect = d.tool == DrawingTool::Rectangle && pts.len() >= 2;
+        if rect || lines::is_line_family(d.tool) {
+            let bg = d.solid_color();
+            let fg = contrast_text(bg);
+            if rect {
+                let (price, time) = shapes::axis_bands(pts, s.price_axis, s.time_axis, s.vp_rect());
+                let band = tt_theme::with_alpha(bg, BAND_ALPHA);
+                for r in [price, time].into_iter().flatten() {
+                    c.fill_rect(r, band);
+                }
+                for (a, pt) in d.points.iter().zip(pts) {
+                    time_tag(c, s, pt.x, a.time_ms, bg, fg);
+                }
+            }
+            let mut b = Buf::new();
             for (a, pt) in d.points.iter().zip(pts) {
                 if s.vp_rect().y_range().contains(pt.y) {
-                    draw_tag(
-                        c,
-                        s,
-                        &price_axis_tag(
-                            s,
-                            pt.y,
-                            vec![format_price(a.price, s.precision)],
-                            d.color(),
-                        ),
-                    );
+                    b.clear();
+                    let _ = write_price(&mut b, a.price, s.precision);
+                    draw_price_tag(c, s, pt.y, b.as_str(), bg, fg);
                 }
             }
         }
     }
 }
 
+/// Opacity of the axis bands of a selected rectangle (TradingView: 25 %).
+const BAND_ALPHA: f32 = 0.25;
+
 /// A tag on the time axis at `x` with the bar's date and time.
-fn time_tag(c: &mut dyn Canvas, s: &Scene<'_>, x: f32, time_ms: i64, bg: Color32) {
+fn time_tag(c: &mut dyn Canvas, s: &Scene<'_>, x: f32, time_ms: i64, bg: Color32, fg: Color32) {
     if !s.plot.x_range().contains(x) {
         return;
     }
@@ -157,14 +168,27 @@ fn time_tag(c: &mut dyn Canvas, s: &Scene<'_>, x: f32, time_ms: i64, bg: Color32
         Align2::CENTER_CENTER,
         b.as_str(),
         size,
-        s.theme.text_on_accent,
+        fg,
     );
 }
 
+/// Drawn handle size (TradingView): circles of radius 6 and squares of 11
+/// (edge handles), filled with the background inside a ring in the
+/// drawing's (opaque) color.
+const HANDLE_DRAW_RADIUS: f32 = 6.0;
+const HANDLE_SQUARE_HALF: f32 = 5.5;
+const HANDLE_RING: f32 = 1.5;
+
 fn handles(c: &mut dyn Canvas, s: &Scene<'_>, tool: DrawingTool, pts: &[Pos2], color: Color32) {
-    hit::for_each_handle(tool, pts, |p| {
-        c.fill_circle(p, HANDLE_RADIUS, color);
-        c.fill_circle(p, HANDLE_RADIUS - 1.5, s.theme.bg);
+    hit::for_each_handle(tool, pts, |p, square| {
+        if square {
+            let r = emath::Rect::from_center_size(p, vec2(2.0, 2.0) * HANDLE_SQUARE_HALF);
+            c.fill_rounded_rect(r, 1.5, color);
+            c.fill_rect(r.shrink(HANDLE_RING), s.theme.bg);
+        } else {
+            c.fill_circle(p, HANDLE_DRAW_RADIUS, color);
+            c.fill_circle(p, HANDLE_DRAW_RADIUS - HANDLE_RING, s.theme.bg);
+        }
     });
 }
 

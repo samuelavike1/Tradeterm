@@ -705,6 +705,8 @@ pub(crate) struct Tag {
     /// Value lines; empty for a name-only label.
     lines: Vec<String>,
     bg: Color32,
+    /// Text color (`None`: the theme's text on accent).
+    fg: Option<Color32>,
     /// Text aligned with the price labels (price axis) vs. centered (time axis).
     on_price_axis: bool,
     /// Name label ("BTCUSDT", "RSI") drawn in a box beside the price axis,
@@ -712,6 +714,14 @@ pub(crate) struct Tag {
     name: Option<&'static str>,
     /// `name` is the symbol's ticker (owned by the scene's labels).
     ticker: bool,
+}
+
+impl Tag {
+    /// The same tag with `fg` text.
+    pub(crate) fn with_fg(mut self, fg: Color32) -> Self {
+        self.fg = Some(fg);
+        self
+    }
 }
 
 pub(crate) fn draw_tag(c: &mut dyn Canvas, s: &Scene<'_>, tag: &Tag) {
@@ -736,7 +746,7 @@ pub(crate) fn draw_tag(c: &mut dyn Canvas, s: &Scene<'_>, tag: &Tag) {
             Align2::CENTER_CENTER,
             name,
             size,
-            s.theme.text_on_accent,
+            tag.fg.unwrap_or(s.theme.text_on_accent),
         );
     }
     if tag.lines.is_empty() {
@@ -758,9 +768,51 @@ pub(crate) fn draw_tag(c: &mut dyn Canvas, s: &Scene<'_>, tag: &Tag) {
             align,
             text,
             s.style.scales.text_size,
-            s.theme.text_on_accent,
+            tag.fg.unwrap_or(s.theme.text_on_accent),
         );
     }
+}
+
+/// Readable text on a solid tag of color `bg`: white on dark and saturated
+/// colors, near-black on light ones.
+pub(crate) fn contrast_text(bg: Color32) -> Color32 {
+    let [r, g, b, _] = bg.to_array();
+    let luma = 0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32;
+    if luma > 160.0 {
+        Color32::from_rgb(0x13, 0x17, 0x22)
+    } else {
+        Color32::WHITE
+    }
+}
+
+/// The rect of a one-line price-axis tag centered on `y`.
+pub(crate) fn price_tag_rect(s: &Scene<'_>, y: f32) -> Rect {
+    let h = s.style.scales.text_size + 3.0 + 6.0;
+    Rect::from_min_max(
+        pos2(s.price_axis.left() + 1.0, y - h / 2.0),
+        pos2(s.price_axis.right() - 1.0, y + h / 2.0),
+    )
+}
+
+/// A one-line price-axis tag (what [`price_axis_tag`] + [`draw_tag`] draw,
+/// without allocating): a `bg` box with `fg` text.
+pub(crate) fn draw_price_tag(
+    c: &mut dyn Canvas,
+    s: &Scene<'_>,
+    y: f32,
+    text: &str,
+    bg: Color32,
+    fg: Color32,
+) {
+    let rect = price_tag_rect(s, y);
+    c.fill_rounded_rect(rect, tt_theme::metrics::R_XS, bg);
+    c.text(
+        pos2(s.price_axis.left() + 8.0, rect.center().y),
+        Align2::LEFT_CENTER,
+        text,
+        s.style.scales.text_size,
+        fg,
+    );
 }
 
 /// A tag spanning the price axis, centered on `y`.
@@ -775,6 +827,7 @@ pub(crate) fn price_axis_tag(s: &Scene<'_>, y: f32, lines: Vec<String>, bg: Colo
         rect,
         lines,
         bg,
+        fg: None,
         on_price_axis: true,
         name: None,
         ticker: false,
@@ -958,6 +1011,7 @@ fn crosshair(c: &mut dyn Canvas, s: &Scene<'_>, p: Pos2, slot: Option<i64>) -> (
             rect,
             lines: vec![text],
             bg: s.theme.crosshair_label_bg,
+            fg: None,
             on_price_axis: false,
             name: None,
             ticker: false,
@@ -1206,6 +1260,7 @@ mod tests {
             rect: Rect::from_center_size(pos2(840.0, y), vec2(78.0, 20.0)),
             lines: vec![],
             bg: Color32::RED,
+            fg: None,
             on_price_axis: true,
             name: None,
             ticker: false,

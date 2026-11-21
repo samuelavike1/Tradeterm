@@ -579,6 +579,14 @@ impl Drawing {
         self.props.line_color().to_color32()
     }
 
+    /// The main line color without its opacity: what solid axis tags and
+    /// handle rings use (TradingView), so a translucent border still gives
+    /// a readable tag.
+    pub fn solid_color(&self) -> Color32 {
+        let c = self.props.line_color();
+        Color32::from_rgb(c.r(), c.g(), c.b())
+    }
+
     pub fn set_color(&mut self, c: Color32) {
         self.props.set_line_color(Rgba::from_color32(c));
     }

@@ -468,6 +468,26 @@ impl ShapeProps {
     }
 }
 
+impl ShapeProps {
+    /// TradingView's rectangle (measured on tradingview.com, Nov 2026): a
+    /// 1 px blue border at 48 %, the background at 20 %, the dashed middle
+    /// line on, white 14 px text inside on the right.
+    pub(crate) fn rectangle() -> Self {
+        Self {
+            border: Stroke {
+                color: Rgba::opaque(BLUE).with_opacity(0.48),
+                width: 1,
+                style: LineStyle::Solid,
+            },
+            background: Fill::new(true, BLUE, 0.2),
+            middle_line_on: true,
+            middle_line: Stroke::new(BLUE, 1, LineStyle::Dashed),
+            text_style: TextStyle::new(Color32::WHITE, 14),
+            ..Self::colored(BLUE)
+        }
+    }
+}
+
 impl Default for ShapeProps {
     fn default() -> Self {
         Self::colored(PURPLE)
@@ -743,7 +763,7 @@ impl Props {
             CrossLine => Props::Cross(CrossProps::default()),
             ParallelChannel => Props::Channel(ChannelProps::default()),
             FibRetracement | FibExtension => Props::Fib(FibProps::default()),
-            Rectangle => Props::Shape(ShapeProps::colored(PURPLE)),
+            Rectangle => Props::Shape(ShapeProps::rectangle()),
             Ellipse => Props::Shape(ShapeProps::colored(PINK)),
             Circle => Props::Shape(ShapeProps::colored(ORANGE)),
             Polyline => Props::Shape(ShapeProps::colored(Color32::from_rgb(0x7e, 0x57, 0xc2))),
@@ -868,6 +888,13 @@ impl Props {
         }
         if let Some(s) = style {
             self.set_line_style(s);
+        }
+        // Rectangles had no middle line and colored text then; keep them
+        // looking the same under today's (TradingView) defaults.
+        if let Props::Shape(p) = self {
+            p.middle_line_on = false;
+            p.middle_line.color = p.border.color;
+            p.text_style.color = p.border.color;
         }
     }
 
