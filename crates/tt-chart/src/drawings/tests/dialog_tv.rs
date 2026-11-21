@@ -203,7 +203,7 @@ fn check_menus_summarize_like_tradingview() {
     assert_eq!(summary(DrawingTool::TrendLine, "Stats"), "Hidden");
     assert_eq!(
         summary(DrawingTool::DateRange, "Stats"),
-        "Bars range, date/time range"
+        "Bars range, date/time range, volume"
     );
 }
 

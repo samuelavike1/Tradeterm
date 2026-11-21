@@ -627,6 +627,7 @@ impl Default for RangeProps {
                 pips: true,
                 bars: true,
                 date_time: true,
+                volume: true,
                 ..Stats::default()
             },
             label: TextStyle::new(Color32::WHITE, 12),
@@ -790,6 +791,7 @@ impl Props {
                 stats: Stats {
                     bars: true,
                     date_time: true,
+                    volume: true,
                     ..Stats::default()
                 },
                 ..RangeProps::default()
