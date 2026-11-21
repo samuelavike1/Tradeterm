@@ -348,6 +348,25 @@ impl ChartView {
         SlotTimes::new(display.open_times(), fr.bar_interval_ms).time_at_frac(slot)
     }
 
+    /// The slots of the last frame's x axis (`None` before one).
+    fn frame_slots<'a>(&'a self, series: &'a CandleSeries) -> Option<SlotTimes<'a>> {
+        let fr = self.frame.as_ref()?;
+        let display = self.derived.series(self.chart_type).unwrap_or(series);
+        Some(SlotTimes::new(display.open_times(), fr.bar_interval_ms))
+    }
+
+    /// TradingView's bar number of a drawing anchor's time (the settings
+    /// dialog's Coordinates tab); see [`crate::drawings::form::bar_of_time`].
+    pub fn bar_of_time(&self, series: &CandleSeries, time_ms: i64) -> Option<i64> {
+        crate::drawings::form::bar_of_time(&self.frame_slots(series)?, time_ms)
+    }
+
+    /// The anchor time of bar number `bar` (inverse of
+    /// [`Self::bar_of_time`]).
+    pub fn time_of_bar(&self, series: &CandleSeries, bar: i64) -> Option<i64> {
+        crate::drawings::form::time_of_bar(&self.frame_slots(series)?, bar)
+    }
+
     /// Puts `time` at the left edge when the next bars arrive, keeping the
     /// zoom. Call after [`Self::reset_view`] on an interval change when
     /// `scales.keep_left_edge` is on.

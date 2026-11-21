@@ -8,6 +8,9 @@
 //! one undo step and remembers the style as the tool's default; Cancel, Esc
 //! or × restores the drawings as they were.
 
+#[path = "drawing_settings_tv.rs"]
+mod tv;
+
 use crate::app::{TabChart, TradeTerm};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::color_picker::{ColorPickerEvent, ColorPickerState};
@@ -18,7 +21,7 @@ use gpui_kit::*;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::rc::Rc;
-use tt_chart::drawings::form::{self, FONT_SIZES, Field, FieldKind};
+use tt_chart::drawings::form::{self, DialogLayout, FONT_SIZES, Field, FieldKind};
 use tt_chart::{Drawing, DrawingTool, Drawings, LineStyle, Props, Rgba, Visibility};
 use tt_chart_gpui::{ChartEvent, DrawingPrefs, TemplateTarget, template_menu};
 use tt_core::TimeUnit;
@@ -29,6 +32,9 @@ use tt_ui::{DialogOpts, TemplateMenu, hsla, open_dialog};
 const W_SMALL_SELECT: f32 = 92.0;
 const W_COEFF: f32 = 72.0;
 const W_TIME: f32 = 150.0;
+/// The comfortable dialog's width: TradingView's Visibility tab (the
+/// widest) measured 453 px.
+const W_DIALOG_TV: f32 = 454.0;
 
 /// The dialog's tabs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -125,6 +131,8 @@ enum NumberTarget {
     LevelCoeff(usize),
     PointTime(usize),
     PointPrice(usize),
+    /// TradingView's bar number of point `k` (comfortable layout).
+    PointBar(usize),
     VisMin(TimeUnit),
     VisMax(TimeUnit),
 }
@@ -134,6 +142,7 @@ pub struct DrawingSettingsPanel {
     /// The drawings edited (same tool; the first is shown).
     ids: Vec<u64>,
     tool: DrawingTool,
+    layout: DialogLayout,
     /// Their state at open (Cancel restores it, Ok records the change).
     original: Vec<Drawing>,
     tab: Tab,
@@ -165,6 +174,7 @@ impl DrawingSettingsPanel {
             .collect();
         let first = original.first()?.clone();
         let tool = first.tool;
+        let layout = form::dialog_layout(tool);
         let style = form::style_fields(tool, &first.props);
         let text_fields = form::text_fields(tool, &first.props);
         let tab = cx
@@ -175,6 +185,7 @@ impl DrawingSettingsPanel {
             chart,
             ids: original.iter().map(|d| d.id).collect(),
             tool,
+            layout,
             original,
             tab,
             style,
@@ -206,9 +217,20 @@ impl DrawingSettingsPanel {
         }
     }
 
+    fn comfortable(&self) -> bool {
+        self.layout == DialogLayout::Comfortable
+    }
+
+    /// Renames the edited drawing (the dialog title's pencil); empty: back
+    /// to the tool's label. Live like the other edits (Cancel restores).
+    fn rename(&mut self, name: &str, cx: &mut Context<Self>) {
+        let name = name.trim().to_owned();
+        self.edit(cx, move |d| d.name = name.clone());
+    }
+
     fn tabs(&self) -> Vec<Tab> {
         let mut t = vec![Tab::Style];
-        if !self.text_fields.is_empty() {
+        if !self.text_fields.is_empty() || self.text.is_some() {
             t.push(Tab::Text);
         }
         // A multi-selection hides Coordinates (spec 6.4).
@@ -231,8 +253,18 @@ impl DrawingSettingsPanel {
             .cloned()
             .collect();
         for f in &fields {
+            let comfortable = self.comfortable();
             match &f.kind {
                 FieldKind::Color => colors.push(ColorTarget::Path(f.path.clone())),
+                // The comfortable layout edits these through its line
+                // picker and text bar (no gpui color picker needed).
+                FieldKind::Line | FieldKind::TextStyle
+                    if comfortable
+                        && DrawingSettingsPanel::tv_skips_color(&ColorTarget::Path(format!(
+                            "{}/color",
+                            f.path
+                        )))
+                        && f.check.is_none() => {}
                 FieldKind::Line | FieldKind::TextStyle => {
                     colors.push(ColorTarget::Path(format!("{}/color", f.path)))
                 }
@@ -252,11 +284,14 @@ impl DrawingSettingsPanel {
         }
         for k in 0..d.points.len() {
             let (time, price) = form::coordinate_parts(d.tool, k);
-            if time {
+            if time && !self.comfortable() {
                 numbers.push(NumberTarget::PointTime(k));
             }
             if price {
                 numbers.push(NumberTarget::PointPrice(k));
+            }
+            if time && self.comfortable() {
+                numbers.push(NumberTarget::PointBar(k));
             }
         }
         for u in Visibility::UNITS {
@@ -265,6 +300,7 @@ impl DrawingSettingsPanel {
         }
         for target in colors {
             let value = color_value(&target, &d.props, &v);
+            let _ = &value;
             let picker =
                 cx.new(|cx| ColorPickerState::new(window, cx).default_value(to_hsla(value)));
             let t = target.clone();
@@ -290,7 +326,7 @@ impl DrawingSettingsPanel {
             self.colors.push((target, picker));
         }
         for target in numbers {
-            let text = number_text(&target, d, &v);
+            let text = self.number_text(&target, d, &v, cx);
             let input = cx.new(|cx| {
                 let s = InputState::new(window, cx).default_value(text);
                 match &target {
@@ -312,10 +348,11 @@ impl DrawingSettingsPanel {
         }
         if form::has_text_content(d.tool, &d.props) {
             let text = d.text.clone();
+            let comfortable = self.comfortable();
             let area = cx.new(|cx| {
-                TextareaState::new(window, cx)
-                    .auto_grow(3, 8)
-                    .default_value(text)
+                let s = TextareaState::new(window, cx);
+                let s = if comfortable { s } else { s.auto_grow(3, 8) };
+                s.default_value(text)
             });
             self._subs
                 .push(cx.subscribe(&area, |this, area, ev: &InputEvent, cx| {
@@ -323,9 +360,13 @@ impl DrawingSettingsPanel {
                         return;
                     }
                     let s = area.read(cx).value().to_string();
-                    // Typing text turns it on (TradingView).
+                    let comfortable = this.comfortable();
+                    // Typing text turns it on (TradingView); the comfortable
+                    // layout has no "Show text": text shows when non-empty.
                     this.edit(cx, move |d| {
-                        if !s.is_empty() && d.text.is_empty() {
+                        if comfortable {
+                            d.props.set_text_on(!s.is_empty());
+                        } else if !s.is_empty() && d.text.is_empty() {
                             d.props.set_text_on(true);
                         }
                         d.text = s.clone();
@@ -383,6 +424,21 @@ impl DrawingSettingsPanel {
                     let k = *k;
                     self.edit(cx, move |d| {
                         form::set_point(&mut d.points, k, None, Some(v));
+                    });
+                }
+            }
+            NumberTarget::PointBar(k) => {
+                let Ok(bar) = s.parse::<i64>() else {
+                    return;
+                };
+                let time = {
+                    let tab = &self.chart.read(cx).state.read(cx).source.tab;
+                    tab.chart.time_of_bar(&tab.series, bar)
+                };
+                if let Some(ms) = time {
+                    let k = *k;
+                    self.edit(cx, move |d| {
+                        form::set_point(&mut d.points, k, Some(ms), None);
                     });
                 }
             }
@@ -444,8 +500,9 @@ impl DrawingSettingsPanel {
             let c = to_hsla(color_value(t, &d.props, &v));
             picker.update(cx, |p, cx| p.set_value(c, window, cx));
         }
-        for (t, input) in &self.numbers {
-            let s = number_text(t, &d, &v);
+        let numbers = self.numbers.clone();
+        for (t, input) in &numbers {
+            let s = self.number_text(t, &d, &v, cx);
             if input.read(cx).value().trim() != s {
                 input.update(cx, |i, cx| i.set_value(s, window, cx));
             }
@@ -739,6 +796,34 @@ impl DrawingSettingsPanel {
         out.into_any_element()
     }
 
+    /// The text an input shows (bar numbers need the chart's slots).
+    fn number_text(&self, t: &NumberTarget, d: &Drawing, v: &Value, cx: &App) -> String {
+        match t {
+            NumberTarget::PointBar(k) => {
+                let tab = &self.chart.read(cx).state.read(cx).source.tab;
+                d.points
+                    .get(*k)
+                    .and_then(|a| tab.chart.bar_of_time(&tab.series, a.time_ms))
+                    .map_or_else(String::new, |b| b.to_string())
+            }
+            // TradingView shows the price at the symbol's precision.
+            NumberTarget::PointPrice(k) if self.comfortable() => {
+                let prec = self
+                    .chart
+                    .read(cx)
+                    .state
+                    .read(cx)
+                    .source
+                    .tab
+                    .price_precision();
+                d.points
+                    .get(*k)
+                    .map_or_else(String::new, |a| format!("{:.prec$}", a.price))
+            }
+            _ => number_text(t, d, v),
+        }
+    }
+
     fn coordinates(&self, d: &Drawing, cx: &App) -> AnyElement {
         let mut body = v_flex();
         for k in 0..d.points.len() {
@@ -824,6 +909,8 @@ fn number_text(t: &NumberTarget, d: &Drawing, v: &Value) -> String {
             .points
             .get(*k)
             .map_or_else(String::new, |a| trim_number(a.price)),
+        // Needs the chart: `DrawingSettingsPanel::number_text`.
+        NumberTarget::PointBar(_) => String::new(),
         NumberTarget::VisMin(u) => d.visibility.span(*u).min.to_string(),
         NumberTarget::VisMax(u) => d.visibility.span(*u).max.to_string(),
     }
@@ -851,6 +938,21 @@ impl Render for DrawingSettingsPanel {
             });
         for t in &tabs {
             nav = nav.item(t.id(), t.label(), None);
+        }
+        if self.comfortable() {
+            let body: AnyElement = match self.tab {
+                Tab::Style => self.style_tv(&d, &v, cx),
+                Tab::Text => self.text_tv(&v, cx),
+                Tab::Coordinates => self.coordinates_tv(&d),
+                Tab::Visibility => self.visibility_tv(&d, cx),
+            };
+            return DialogFrame::new(DialogSize::Sm)
+                .id("drawing-settings")
+                .comfortable()
+                .min_body(2.0 * C_ROW)
+                .nav(nav)
+                .body(body)
+                .into_any_element();
         }
         let body: AnyElement = match self.tab {
             Tab::Style => {
@@ -918,6 +1020,13 @@ impl TradeTerm {
         });
         let title = panel.read(cx).title();
         let tool = panel.read(cx).tool;
+        let comfortable = panel.read(cx).comfortable();
+        let single = panel.read(cx).ids.len() == 1;
+        let name = panel
+            .read(cx)
+            .current(cx)
+            .map(|d| d.name)
+            .unwrap_or_default();
         let (cur, apply, ok) = (panel.downgrade(), panel.downgrade(), panel.downgrade());
         let target = TemplateTarget {
             tool,
@@ -928,7 +1037,13 @@ impl TradeTerm {
                     .ok();
             }),
         };
-        let footer = DialogFooter::new()
+        let footer = DialogFooter::new();
+        let footer = if comfortable {
+            footer.comfortable()
+        } else {
+            footer
+        };
+        let footer = footer
             .template(TemplateMenu::build(move |menu, _, cx| {
                 template_menu(menu, target.clone(), cx)
             }))
@@ -938,12 +1053,18 @@ impl TradeTerm {
                 ok.update(cx, |p, cx| p.commit(cx)).ok();
                 true
             });
-        open_dialog(
-            window,
-            cx,
-            DialogOpts::new(title, DialogSize::Sm).footer(footer),
-            panel,
-        );
+        let mut opts = DialogOpts::new(title, DialogSize::Sm).footer(footer);
+        if comfortable {
+            // TradingView's widest tab (Visibility) is 453 px wide.
+            opts = opts.comfortable().width(W_DIALOG_TV);
+            if single {
+                let rn = panel.downgrade();
+                opts = opts.rename(name, move |s, _, cx| {
+                    rn.update(cx, |p, cx| p.rename(&s, cx)).ok();
+                });
+            }
+        }
+        open_dialog(window, cx, opts, panel);
     }
 
     /// Saves drawing preferences when they change (templates, last-used

@@ -312,13 +312,10 @@ mod tests {
     #[::core::prelude::v1::test]
     fn list_nav_moves_and_clamps() {
         let mut n = ListNav::new().page(3);
-        assert_eq!(
-            n.key("home", 10),
-            ListKey::Moved {
-                from: None,
-                to: None
-            }
-        );
+        // With nothing highlighted, Home / End stay with the text field
+        // (they move its caret).
+        assert_eq!(n.key("home", 10), ListKey::Ignored);
+        assert_eq!(n.key("end", 10), ListKey::Ignored);
         assert_eq!(
             n.key("down", 10),
             ListKey::Moved {

@@ -7,6 +7,7 @@ use ecolor::Color32;
 use emath::vec2;
 use serde::{Deserialize, Serialize};
 
+mod dialog_tv;
 mod families;
 mod interaction;
 mod settings;

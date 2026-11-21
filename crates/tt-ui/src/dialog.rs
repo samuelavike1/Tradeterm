@@ -13,6 +13,7 @@ use crate::theme::{ActiveUiTheme, hsla};
 use crate::tokens::*;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::dialog::DialogEntrance;
+use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::{Disableable as _, Sizable as _, Size, WindowExt as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -60,12 +61,17 @@ impl DialogSize {
     }
 }
 
+type RenameHandler = Rc<dyn Fn(SharedString, &mut Window, &mut App)>;
+
 /// What [`open_dialog`] needs besides the panel.
 pub struct DialogOpts {
     title: SharedString,
     size: DialogSize,
     footer: Option<DialogFooter>,
     on_open: Option<OnceHandler>,
+    comfortable: bool,
+    width: Option<f32>,
+    rename: Option<(SharedString, RenameHandler)>,
 }
 
 impl DialogOpts {
@@ -75,7 +81,39 @@ impl DialogOpts {
             size,
             footer: None,
             on_open: None,
+            comfortable: false,
+            width: None,
+            rename: None,
         }
+    }
+
+    /// TradingView-measured density (section 2.10): 20 px semibold title
+    /// with its own close button, radius `C_R_DIALOG`, no outer padding
+    /// (the [`DialogFrame::comfortable`] body and the comfortable footer pad
+    /// themselves), height fits the content. Width `C_W_DIALOG` unless
+    /// [`DialogOpts::width`] says otherwise.
+    pub fn comfortable(mut self) -> Self {
+        self.comfortable = true;
+        self
+    }
+
+    /// Fixed width (overrides the size's).
+    pub fn width(mut self, w: f32) -> Self {
+        self.width = Some(w);
+        self
+    }
+
+    /// A pencil after the title renames: it turns the title into an input
+    /// (Enter or leaving it commits, Escape cancels) and calls `on_rename`
+    /// with the new name (empty: back to the default `title`). `current` is
+    /// the name shown now (empty: the default title).
+    pub fn rename(
+        mut self,
+        current: impl Into<SharedString>,
+        on_rename: impl Fn(SharedString, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.rename = Some((current.into(), Rc::new(on_rename)));
+        self
     }
 
     pub fn footer(mut self, f: DialogFooter) -> Self {
@@ -103,15 +141,38 @@ pub fn open_dialog<P: Render>(
         size,
         footer,
         on_open,
+        comfortable,
+        width,
+        rename,
     } = opts;
     let on_open = RefCell::new(on_open);
+    let header = comfortable.then(|| {
+        let (shown, on_rename) = match rename {
+            Some((cur, f)) => (Some(cur), Some(f)),
+            None => (None, None),
+        };
+        let default = title.clone();
+        cx.new(|cx| DialogHeader::new(default, shown, on_rename, window, cx))
+    });
+    let width = width.unwrap_or(if comfortable {
+        C_W_DIALOG
+    } else {
+        size.width()
+    });
     window.open_dialog(cx, move |dialog, window, cx| {
         if let Some(f) = on_open.borrow_mut().take() {
             f(window, cx);
         }
+        let dialog = match &header {
+            Some(h) => dialog
+                .title(h.clone())
+                .close_button(false)
+                .p(px(0.))
+                .rounded(px(C_R_DIALOG)),
+            None => dialog.title(title.clone()),
+        };
         let dialog = dialog
-            .title(title.clone())
-            .w(px(size.width()))
+            .w(px(width))
             .entrance(DialogEntrance::FadeSlide)
             .child(panel.clone());
         match footer.clone() {
@@ -136,6 +197,8 @@ pub struct DialogFrame {
     size: DialogSize,
     nav: Option<NavTabs>,
     body: Option<AnyElement>,
+    comfortable: bool,
+    min_body: f32,
 }
 
 impl DialogFrame {
@@ -145,7 +208,25 @@ impl DialogFrame {
             size,
             nav: None,
             body: None,
+            comfortable: false,
+            min_body: 0.0,
         }
+    }
+
+    /// Section 2.10: top tabs (16 px semibold, 4 px underline) and a body
+    /// padded `C_PAD_Y` / `C_PAD_X` whose height fits its content (at
+    /// least `min_body`), like TradingView: the dialog grows or shrinks
+    /// with the tab.
+    pub fn comfortable(mut self) -> Self {
+        self.comfortable = true;
+        self
+    }
+
+    /// Smallest body height (comfortable frames), so short tabs keep a
+    /// steady footer.
+    pub fn min_body(mut self, h: f32) -> Self {
+        self.min_body = h;
+        self
     }
 
     pub fn id(mut self, id: impl Into<ElementId>) -> Self {
@@ -167,6 +248,20 @@ impl DialogFrame {
 
 impl RenderOnce for DialogFrame {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
+        if self.comfortable {
+            return v_flex()
+                .id(self.id)
+                .w_full()
+                .when_some(self.nav, |d, nav| d.child(nav.comfortable()))
+                .child(
+                    v_flex()
+                        .px(px(C_PAD_X))
+                        .py(px(C_PAD_Y))
+                        .min_h(px(self.min_body))
+                        .children(self.body),
+                )
+                .into_any_element();
+        }
         let h = self.size.body_height();
         let body = v_flex()
             .id(child_id(&self.id, "body"))
@@ -199,6 +294,7 @@ impl RenderOnce for DialogFrame {
 #[derive(IntoElement)]
 pub struct NavTabs {
     vertical: bool,
+    comfortable: bool,
     items: Vec<(&'static str, SharedString, Option<Glyph>)>,
     selected: Option<&'static str>,
     on_change: Option<NavHandler>,
@@ -208,6 +304,7 @@ impl NavTabs {
     pub fn vertical() -> Self {
         Self {
             vertical: true,
+            comfortable: false,
             items: Vec::new(),
             selected: None,
             on_change: None,
@@ -236,6 +333,15 @@ impl NavTabs {
         self
     }
 
+    /// Section 2.10 top tabs: 16 px semibold labels `C_TAB_GAP` apart, a
+    /// `C_TAB_UNDERLINE` underline under the current one over a faint track
+    /// (set by [`DialogFrame::comfortable`]).
+    pub fn comfortable(mut self) -> Self {
+        self.comfortable = true;
+        self.vertical = false;
+        self
+    }
+
     pub fn on_change(mut self, f: impl Fn(&'static str, &mut Window, &mut App) + 'static) -> Self {
         self.on_change = Some(Rc::new(f));
         self
@@ -245,6 +351,67 @@ impl NavTabs {
 impl RenderOnce for NavTabs {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let t = cx.ui();
+        if self.comfortable {
+            let track = if t.dark {
+                tt_theme::mix(t.bg, t.text, 0.1)
+            } else {
+                tt_theme::mix(t.bg, t.text, 0.05)
+            };
+            let mut row = h_flex().gap(px(C_TAB_GAP)).items_end().h_full();
+            for (id, label, _) in self.items {
+                let selected = self.selected == Some(id);
+                let f = self.on_change.clone();
+                row = row.child(
+                    div()
+                        .id(SharedString::from(format!("tab-{id}")))
+                        .relative()
+                        .h_full()
+                        .pb(px(S2))
+                        .flex()
+                        .items_end()
+                        .cursor_pointer()
+                        .text_size(px(C_TEXT_TAB))
+                        .line_height(px(C_H_TABS - S2))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(hsla(t.text))
+                        .when(!selected, |d| d.hover(|s| s.text_color(hsla(t.text_muted))))
+                        .child(label)
+                        .when(selected, |d| {
+                            d.child(
+                                div()
+                                    .absolute()
+                                    .left_0()
+                                    .right_0()
+                                    .bottom_0()
+                                    .h(px(C_TAB_UNDERLINE))
+                                    .rounded(px(2.0))
+                                    .bg(hsla(t.text)),
+                            )
+                        })
+                        .on_click(move |_, w, cx| {
+                            if let Some(f) = &f {
+                                f(id, w, cx)
+                            }
+                        }),
+                );
+            }
+            return div()
+                .relative()
+                .mx(px(C_PAD_X))
+                .h(px(C_H_TABS))
+                .child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .right_0()
+                        .bottom_0()
+                        .h(px(C_TAB_UNDERLINE))
+                        .rounded(px(2.0))
+                        .bg(hsla(track)),
+                )
+                .child(row)
+                .into_any_element();
+        }
         if !self.vertical {
             let ids: Vec<&'static str> = self.items.iter().map(|i| i.0).collect();
             let ix = self
@@ -350,6 +517,7 @@ impl TemplateMenu {
 /// (32 px, min width 72, Ok rightmost and primary).
 #[derive(IntoElement, Clone)]
 pub struct DialogFooter {
+    comfortable: bool,
     template: Option<TemplateMenu>,
     actions: Vec<(SharedString, Handler)>,
     cancel: Option<SharedString>,
@@ -368,6 +536,7 @@ impl Default for DialogFooter {
 impl DialogFooter {
     pub fn new() -> Self {
         Self {
+            comfortable: false,
             template: None,
             actions: Vec::new(),
             cancel: None,
@@ -376,6 +545,13 @@ impl DialogFooter {
             on_ok: None,
             on_cancel: None,
         }
+    }
+
+    /// Section 2.10: 34 px buttons, 16 px labels, radius `C_R_CONTROL`,
+    /// padded `C_PAD_X` (with a [`DialogOpts::comfortable`] dialog).
+    pub fn comfortable(mut self) -> Self {
+        self.comfortable = true;
+        self
     }
 
     pub fn template(mut self, menu: TemplateMenu) -> Self {
@@ -424,19 +600,32 @@ impl DialogFooter {
 }
 
 impl RenderOnce for DialogFooter {
-    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        let footer_button = |b: Button| {
-            b.with_size(Size::Size(px(CONTROL_MD)))
-                .h(px(CONTROL_MD))
-                .min_w(px(W_DIALOG_BUTTON))
-                .px(px(S4))
-                .py_0()
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        let comfortable = self.comfortable;
+        // TradingView's Cancel: a 1 px `text` outline.
+        let cancel_border = hsla(cx.ui().text);
+        let footer_button = move |b: Button| {
+            if comfortable {
+                b.with_size(Size::Size(px(C_CONTROL)))
+                    .h(px(C_CONTROL))
+                    .px(px(11.0))
+                    .py_0()
+                    .rounded(px(C_R_CONTROL))
+                    .text_size(px(C_TEXT_BUTTON))
+            } else {
+                b.with_size(Size::Size(px(CONTROL_MD)))
+                    .h(px(CONTROL_MD))
+                    .min_w(px(W_DIALOG_BUTTON))
+                    .px(px(S4))
+                    .py_0()
+            }
         };
         let left = self.template.map(|tm| {
             let (rows, build) = (tm.rows, tm.build);
             let label = tm.label.unwrap_or_else(|| "Template".into());
             ToolbarButton::text("dialog-template", label)
                 .caret()
+                .outlined(comfortable)
                 .menu(move |menu, w, cx| {
                     let mut menu = menu;
                     for (i, (label, f)) in rows.iter().enumerate() {
@@ -458,14 +647,14 @@ impl RenderOnce for DialogFooter {
         });
         let cancel = self.cancel.map(|label| {
             let f = self.on_cancel.clone();
-            footer_button(Button::new("dialog-cancel").outline().label(label)).on_click(
-                move |_, window, cx| {
+            footer_button(Button::new("dialog-cancel").outline().label(label))
+                .when(comfortable, |b| b.border_color(cancel_border))
+                .on_click(move |_, window, cx| {
                     if let Some(f) = &f {
                         f(window, cx);
                     }
                     window.close_dialog(cx);
-                },
-            )
+                })
         });
         let ok = self.ok.map(|label| {
             let f = self.on_ok.clone();
@@ -478,11 +667,185 @@ impl RenderOnce for DialogFooter {
                     }
                 })
         });
+        let gap = if comfortable { S3 } else { S2 };
         h_flex()
             .w_full()
             .items_center()
             .justify_between()
+            .when(comfortable, |d| {
+                d.px(px(C_PAD_X)).pt(px(C_PAD_Y - S2)).pb(px(C_PAD_Y))
+            })
             .child(h_flex().gap(px(S2)).children(left).children(actions))
-            .child(h_flex().gap(px(S2)).children(cancel).children(ok))
+            .child(h_flex().gap(px(gap)).children(cancel).children(ok))
+    }
+}
+
+/// The comfortable dialog's title row: 20 px semibold title, an optional
+/// rename pencil (the title becomes an input), and the close button.
+pub struct DialogHeader {
+    default: SharedString,
+    /// The custom name (`None`: not renamable).
+    name: Option<SharedString>,
+    editing: bool,
+    input: Entity<InputState>,
+    on_rename: Option<RenameHandler>,
+    _subs: Vec<Subscription>,
+}
+
+impl DialogHeader {
+    fn new(
+        default: SharedString,
+        name: Option<SharedString>,
+        on_rename: Option<RenameHandler>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let input = cx.new(|cx| InputState::new(window, cx));
+        let sub = cx.subscribe_in(&input, window, |this, _, ev: &InputEvent, w, cx| match ev {
+            InputEvent::PressEnter { .. } | InputEvent::Blur => this.finish(true, w, cx),
+            _ => {}
+        });
+        Self {
+            default,
+            name,
+            editing: false,
+            input,
+            on_rename,
+            _subs: vec![sub],
+        }
+    }
+
+    /// The title shown: the custom name, else the default.
+    pub fn shown(&self) -> SharedString {
+        match &self.name {
+            Some(n) if !n.trim().is_empty() => n.clone(),
+            _ => self.default.clone(),
+        }
+    }
+
+    fn start(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.editing = true;
+        let s = self.shown();
+        self.input.update(cx, |i, cx| {
+            i.set_value(s, window, cx);
+            i.focus(window, cx);
+        });
+        cx.notify();
+    }
+
+    fn finish(&mut self, commit: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.editing {
+            return;
+        }
+        self.editing = false;
+        if commit {
+            let v: SharedString = self.input.read(cx).value().trim().to_owned().into();
+            // The default title typed back means "no custom name".
+            let v: SharedString = if v == self.default { "".into() } else { v };
+            if Some(&v) != self.name.as_ref() {
+                self.name = Some(v.clone());
+                if let Some(f) = self.on_rename.clone() {
+                    f(v, window, cx);
+                }
+            }
+        }
+        cx.notify();
+    }
+}
+
+impl Render for DialogHeader {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = cx.ui().clone();
+        let this = cx.entity().downgrade();
+        let title: AnyElement = if self.editing {
+            let esc = this.clone();
+            div()
+                .flex_1()
+                .min_w_0()
+                // Enter / Escape end the rename only: captured before the
+                // input and the dialog (whose Enter is Ok, Escape Cancel).
+                .capture_key_down(move |e: &KeyDownEvent, w, cx| {
+                    let commit = match e.keystroke.key.as_str() {
+                        "enter" => true,
+                        "escape" => false,
+                        _ => return,
+                    };
+                    cx.stop_propagation();
+                    w.prevent_default();
+                    esc.update(cx, |h, cx| h.finish(commit, w, cx)).ok();
+                })
+                .child(
+                    Input::new(&self.input)
+                        .map(|i| Styled::h(i, px(C_HEADER_BUTTON)))
+                        .rounded(px(C_R_CONTROL))
+                        .text_size(px(C_TEXT_TITLE))
+                        .font_weight(FontWeight::SEMIBOLD),
+                )
+                .into_any_element()
+        } else {
+            h_flex()
+                .flex_1()
+                .min_w_0()
+                .gap(px(5.0))
+                .items_center()
+                .child(
+                    div()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .text_size(px(C_TEXT_TITLE))
+                        .line_height(px(C_TITLE_LINE))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(hsla(t.text))
+                        .child(self.shown()),
+                )
+                .when(self.on_rename.is_some(), |d| {
+                    let start = this.clone();
+                    d.child(
+                        Button::new("dialog-rename")
+                            .custom(crate::button::variant(&t, hsla(t.text), cx))
+                            .with_size(Size::Size(px(C_HEADER_BUTTON)))
+                            .rounded(px(R_XS))
+                            .w(px(C_HEADER_BUTTON))
+                            .h(px(C_HEADER_BUTTON))
+                            .px_0()
+                            .py_0()
+                            .child(glyph(Glyph::PENCIL, ICON_MD + 2.0))
+                            .tooltip("Rename")
+                            .on_click(move |_, w, cx| {
+                                start.update(cx, |h, cx| h.start(w, cx)).ok();
+                            }),
+                    )
+                })
+                .into_any_element()
+        };
+        h_flex()
+            .w_full()
+            .h(px(C_H_HEADER - S2))
+            .pt(px((C_H_HEADER - C_HEADER_BUTTON) / 2.0))
+            .px(px(C_PAD_X))
+            .gap(px(S2))
+            .items_start()
+            .child(
+                h_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .h(px(C_HEADER_BUTTON))
+                    .child(title),
+            )
+            .child(
+                Button::new("dialog-close")
+                    .custom(crate::button::variant(&t, hsla(t.text), cx))
+                    .with_size(Size::Size(px(C_HEADER_BUTTON)))
+                    .rounded(px(C_R_CONTROL))
+                    .w(px(C_HEADER_BUTTON))
+                    .h(px(C_HEADER_BUTTON))
+                    .px_0()
+                    .py_0()
+                    .child(glyph(Glyph::X, ICON_MD))
+                    .tooltip("Close")
+                    .on_click(|_, w, cx| w.close_dialog(cx)),
+            )
     }
 }

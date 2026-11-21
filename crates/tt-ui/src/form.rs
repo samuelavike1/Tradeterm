@@ -12,7 +12,7 @@ use crate::tokens::*;
 use gpui_kit::component::button::Button;
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::color_picker::{ColorPicker, ColorPickerState};
-use gpui_kit::component::input::{InputState, NumberInput};
+use gpui_kit::component::input::{Input, InputState, NumberInput};
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::{Sizable as _, Size, h_flex};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -56,6 +56,8 @@ pub struct FormRow {
     controls: Vec<AnyElement>,
     unit: Option<SharedString>,
     indent: bool,
+    comfortable: bool,
+    label_auto: bool,
 }
 
 impl FormRow {
@@ -67,7 +69,23 @@ impl FormRow {
             controls: Vec::new(),
             unit: None,
             indent: false,
+            comfortable: false,
+            label_auto: false,
         }
+    }
+
+    /// TradingView-measured density (section 2.10): rows `C_ROW` (50) tall,
+    /// controls `C_GAP` apart, the 18 px [`CheckBox`].
+    pub fn comfortable(mut self) -> Self {
+        self.comfortable = true;
+        self
+    }
+
+    /// The label column hugs the label, `C_LABEL_GAP` before the controls
+    /// (like TradingView's table cells).
+    pub fn label_auto(mut self) -> Self {
+        self.label_auto = true;
+        self
     }
 
     /// Checkbox + label in the label column; extra controls align to the
@@ -114,6 +132,41 @@ impl RenderOnce for FormRow {
         let t = cx.ui();
         let indent = if self.indent { S6 } else { 0.0 };
         let label_w = (self.label_width - indent).max(0.0);
+        if self.comfortable {
+            let label: AnyElement = match self.check {
+                Some((id, checked, on)) => CheckBox::new(id, self.label, checked)
+                    .on_change(move |v, w, cx| on(v, w, cx))
+                    .into_any_element(),
+                None => div()
+                    .whitespace_nowrap()
+                    .child(self.label)
+                    .into_any_element(),
+            };
+            let lone = self.controls.is_empty() && self.unit.is_none();
+            return h_flex()
+                .min_h(px(C_ROW))
+                .pl(px(indent))
+                .items_center()
+                .text_size(px(TEXT_BODY))
+                .text_color(hsla(t.text))
+                .child(if lone {
+                    div().flex_1().whitespace_nowrap().child(label)
+                } else if self.label_auto {
+                    div().flex_none().pr(px(C_LABEL_GAP)).child(label)
+                } else {
+                    div().flex_none().w(px(label_w)).child(label)
+                })
+                .child(
+                    h_flex()
+                        .gap(px(C_GAP))
+                        .items_center()
+                        .children(self.controls)
+                        .when_some(self.unit, |d, u| {
+                            d.child(div().text_color(hsla(t.text_muted)).child(u))
+                        }),
+                )
+                .into_any_element();
+        }
         let label: AnyElement = match self.check {
             Some((id, checked, on)) => Checkbox::new(id)
                 .checked(checked)
@@ -149,6 +202,106 @@ impl RenderOnce for FormRow {
             .when_some(self.unit, |d, u| {
                 d.child(div().text_color(hsla(t.text_muted)).child(u))
             })
+            .into_any_element()
+    }
+}
+
+/// TradingView's checkbox (section 2.10): an 18 px box (radius 3; checked:
+/// `text` fill with a check in `bg`), 8 px to its 14 px label; the whole
+/// row clicks.
+#[derive(IntoElement)]
+pub struct CheckBox {
+    id: ElementId,
+    label: SharedString,
+    checked: bool,
+    on_change: Option<CheckHandler>,
+}
+
+impl CheckBox {
+    pub fn new(id: impl Into<ElementId>, label: impl Into<SharedString>, checked: bool) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+            checked,
+            on_change: None,
+        }
+    }
+
+    /// The new state after a click.
+    pub fn on_change(mut self, f: impl Fn(bool, &mut Window, &mut App) + 'static) -> Self {
+        self.on_change = Some(Rc::new(f));
+        self
+    }
+}
+
+impl RenderOnce for CheckBox {
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        let t = cx.ui();
+        let on = self.checked;
+        let f = self.on_change;
+        h_flex()
+            .id(self.id)
+            .gap(px(C_GAP))
+            .items_center()
+            .cursor_pointer()
+            .text_size(px(TEXT_BODY))
+            .text_color(hsla(t.text))
+            .child(
+                div()
+                    .flex_none()
+                    .size(px(C_CHECKBOX))
+                    .rounded(px(3.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .when(on, |d| {
+                        d.bg(hsla(t.text))
+                            .child(glyph(Glyph::CHECK, ICON_XS).color(hsla(t.bg)))
+                    })
+                    .when(!on, |d| {
+                        d.border_1()
+                            .border_color(crate::picker::toggle_border(t))
+                            .bg(hsla(t.bg))
+                    }),
+            )
+            .when(!self.label.is_empty(), |d| {
+                d.child(div().whitespace_nowrap().child(self.label))
+            })
+            .when_some(f, |d, f| d.on_click(move |_, w, cx| f(!on, w, cx)))
+    }
+}
+
+/// A plain input on the comfortable density: `C_W_FIELD` x `C_CONTROL`,
+/// radius `C_R_CONTROL`, text 14 (numbers in dialogs, Visibility min / max).
+#[derive(IntoElement)]
+pub struct Field {
+    input: Entity<InputState>,
+    width: f32,
+}
+
+impl Field {
+    pub fn new(input: &Entity<InputState>) -> Self {
+        Self {
+            input: input.clone(),
+            width: C_W_FIELD,
+        }
+    }
+
+    pub fn width(mut self, w: f32) -> Self {
+        self.width = w;
+        self
+    }
+}
+
+impl RenderOnce for Field {
+    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
+        div().flex_none().w(px(self.width)).child(
+            Input::new(&self.input)
+                // `Input::h` sizes multi-line inputs only; the style height
+                // wins over the size class (it is refined last).
+                .map(|i| Styled::h(i, px(C_CONTROL)))
+                .rounded(px(C_R_CONTROL)),
+        )
     }
 }
 
@@ -190,6 +343,7 @@ pub struct Select<T: PartialEq + Clone + 'static> {
     options: Vec<(T, SharedString)>,
     current: T,
     width: f32,
+    comfortable: bool,
     on_change: Option<ChangeHandler<T>>,
 }
 
@@ -204,8 +358,17 @@ impl<T: PartialEq + Clone + 'static> Select<T> {
             options: options.into_iter().map(|(v, l)| (v, l.into())).collect(),
             current,
             width: W_FIELD_SELECT,
+            comfortable: false,
             on_change: None,
         }
+    }
+
+    /// Section 2.10: `C_W_FIELD` x `C_CONTROL`, radius `C_R_CONTROL`,
+    /// chevron 18.
+    pub fn comfortable(mut self) -> Self {
+        self.comfortable = true;
+        self.width = C_W_FIELD;
+        self
     }
 
     pub fn width(mut self, w: f32) -> Self {
@@ -231,13 +394,19 @@ impl<T: PartialEq + Clone + 'static> RenderOnce for Select<T> {
             .find(|(v, _)| *v == self.current)
             .map(|(_, l)| l.clone())
             .unwrap_or_default();
+        let (h, chevron) = if self.comfortable {
+            (C_CONTROL, ICON_MD)
+        } else {
+            (H_FIELD, ICON_XS)
+        };
         let trigger = Button::new(child_id(&id, "select-trigger"))
             .outline()
-            .with_size(Size::Size(px(H_FIELD)))
-            .h(px(H_FIELD))
+            .with_size(Size::Size(px(h)))
+            .h(px(h))
             .w(px(self.width))
             .px(px(S2))
             .py_0()
+            .when(self.comfortable, |b| b.rounded(px(C_R_CONTROL)).pl(px(S3)))
             .child(
                 h_flex()
                     .w_full()
@@ -253,7 +422,7 @@ impl<T: PartialEq + Clone + 'static> RenderOnce for Select<T> {
                             .text_ellipsis()
                             .child(label),
                     )
-                    .child(glyph(Glyph::CHEVRON_DOWN, ICON_XS).color(hsla(t.text_muted))),
+                    .child(glyph(Glyph::CHEVRON_DOWN, chevron).color(hsla(t.text_muted))),
             );
         let options = Rc::new(self.options);
         let current = self.current;

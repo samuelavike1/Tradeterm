@@ -10,6 +10,7 @@ use crate::draw::Scene;
 use crate::render::{Canvas, TextOpts};
 use emath::{Align, Align2, Pos2, Rect, Vec2, pos2, vec2};
 use std::f32::consts::{FRAC_PI_2, PI};
+use tt_theme::metrics::TEXT_LINE_GAP;
 
 /// Tools drawn from `LineProps`.
 pub(super) fn is_line_family(tool: DrawingTool) -> bool {
@@ -48,10 +49,17 @@ pub(super) fn draw(c: &mut dyn Canvas, s: &Scene<'_>, d: &Drawing, pts: &[Pos2])
             } else {
                 pane.left()
             };
-            styled_line(c, pos2(x0, y), pos2(pane.right(), y), w, col, style);
-            if hp.text.on && !d.text.is_empty() {
+            // TradingView shows the text whenever there is some (the dialog
+            // has no "Show text" box for these tools).
+            if d.text.is_empty() {
+                styled_line(c, pos2(x0, y), pos2(pane.right(), y), w, col, style);
+            } else {
+                // The visible part: the text centers on what is on screen.
                 let (a, b) = (pos2(x0.max(pane.left()), y), pos2(pane.right(), y));
-                text_along(c, a, b, &d.text, &hp.text_style, &hp.text);
+                if x0 < a.x {
+                    styled_line(c, pos2(x0, y), a, w, col, style);
+                }
+                line_with_text(c, a, b, &hp.line, &d.text, &hp.text_style, &hp.text);
             }
         }
         (Props::VLine(vp), VerticalLine) => {
@@ -101,7 +109,25 @@ fn line(c: &mut dyn Canvas, s: &Scene<'_>, d: &Drawing, lp: &LineProps, pts: &[P
     let (w, col, style) = parts(&lp.line);
     let (p0, p1) = (pts[0], pts[1]);
     let (a, b) = segment(lp, p0, p1, pane);
-    styled_line(c, a, b, w, col, style);
+    let with_text = lp.text.on && !d.text.is_empty();
+    if with_text {
+        // Text centered on the segment between the points (not the
+        // extensions); a Middle text breaks the line behind it.
+        let (ea, eb) = if (a - p0).length_sq() <= (a - p1).length_sq() {
+            (a, b)
+        } else {
+            (b, a)
+        };
+        if (ea - p0).length_sq() > 0.25 {
+            styled_line(c, ea, p0, w, col, style);
+        }
+        if (eb - p1).length_sq() > 0.25 {
+            styled_line(c, p1, eb, w, col, style);
+        }
+        line_with_text(c, p0, p1, &lp.line, &d.text, &lp.text_style, &lp.text);
+    } else {
+        styled_line(c, a, b, w, col, style);
+    }
     let dir = p1 - p0;
     if dir.length_sq() > 1.0 {
         let u = dir.normalized();
@@ -119,9 +145,6 @@ fn line(c: &mut dyn Canvas, s: &Scene<'_>, d: &Drawing, lp: &LineProps, pts: &[P
         let m = p0 + dir * 0.5;
         c.fill_circle(m, 3.0 + w / 2.0, col);
         c.fill_circle(m, 1.5 + w / 2.0, s.theme.bg);
-    }
-    if lp.text.on && !d.text.is_empty() {
-        text_along(c, p0, p1, &d.text, &lp.text_style, &lp.text);
     }
     if lp.stats.always {
         line_stats(c, s, d, lp, pts);
@@ -164,6 +187,56 @@ fn trend_angle(c: &mut dyn Canvas, lp: &LineProps, p0: Pos2, p1: Pos2) {
             rotation: 0.0,
         },
     );
+}
+
+/// The segment `a → b` in `st` with `text` along it (TradingView): a
+/// `Middle` text sits on the line, which breaks behind it with
+/// [`TEXT_LINE_GAP`] on each side; `Top` / `Bottom` text sits above / below
+/// the unbroken line. Any angle (horizontal lines, trend lines); no
+/// allocation (one text measure).
+pub(super) fn line_with_text(
+    c: &mut dyn Canvas,
+    a: Pos2,
+    b: Pos2,
+    st: &Stroke,
+    text: &str,
+    ts: &TextStyle,
+    lay: &TextLayout,
+) {
+    let (w, col, style) = parts(st);
+    let (a, b) = if b.x < a.x { (b, a) } else { (a, b) };
+    let d = b - a;
+    let len = d.length();
+    if lay.v != VAlign::Middle || text.is_empty() || len < 1.0 {
+        styled_line(c, a, b, w, col, style);
+        text_along(c, a, b, text, ts, lay);
+        return;
+    }
+    let u = d / len;
+    let tw = c.text_size_styled(text, ts.size as f32, ts.bold).x;
+    // Where the text's center falls along the segment (as in `text_along`).
+    let center = match lay.h {
+        HAlign::Left => 4.0 + tw / 2.0,
+        HAlign::Center => len / 2.0,
+        HAlign::Right => len - 4.0 - tw / 2.0,
+    };
+    let (g0, g1) = gap_span(center, tw / 2.0 + TEXT_LINE_GAP, len);
+    if g0 > 0.0 {
+        styled_line(c, a, a + u * g0, w, col, style);
+    }
+    if g1 < len {
+        styled_line(c, a + u * g1, b, w, col, style);
+    }
+    text_along(c, a, b, text, ts, lay);
+}
+
+/// The broken part `(start, end)` of a segment `len` long around `center`
+/// (`half` each side), clamped to the segment.
+pub(super) fn gap_span(center: f32, half: f32, len: f32) -> (f32, f32) {
+    (
+        (center - half).clamp(0.0, len),
+        (center + half).clamp(0.0, len),
+    )
 }
 
 /// Text along the line `a → b`, kept upright, placed by `layout`

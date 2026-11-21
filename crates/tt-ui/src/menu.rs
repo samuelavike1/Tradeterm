@@ -75,6 +75,7 @@ pub struct MenuRow {
     id: ElementId,
     label: SharedString,
     glyph: Option<Glyph>,
+    leading: Option<Rc<dyn Fn() -> AnyElement>>,
     description: Option<SharedString>,
     shortcut: Option<SharedString>,
     checked: Option<bool>,
@@ -94,6 +95,7 @@ impl MenuRow {
             id: id.into(),
             label: label.into(),
             glyph: None,
+            leading: None,
             description: None,
             shortcut: None,
             checked: None,
@@ -117,6 +119,13 @@ impl MenuRow {
     /// Leading icon (16, muted unless highlighted).
     pub fn icon(mut self, g: impl Into<Glyph>) -> Self {
         self.glyph = Some(g.into());
+        self
+    }
+
+    /// A leading element before the label (line previews in the floating
+    /// toolbar's width / style menus).
+    pub fn leading_element(mut self, f: impl Fn() -> AnyElement + 'static) -> Self {
+        self.leading = Some(Rc::new(f));
         self
     }
 
@@ -260,6 +269,7 @@ impl MenuRow {
                     g.color(hsla(if self.danger { t.danger } else { t.text_muted }))
                 }))
             })
+            .when_some(self.leading, |d, f| d.child(div().flex_none().child(f())))
             .child(
                 div()
                     .flex_1()

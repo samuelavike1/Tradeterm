@@ -358,6 +358,54 @@ All motion is UI chrome, never data. Everything is interruptible (`transition()`
 
 Banned: animating prices, candles, crosshair, axis labels, legend values, or the tab change %.
 
+### 2.10 Dialog & floating toolbar density (TradingView-measured)
+
+Measured 2026-11-21 on tradingview.com/chart (dark theme, CSS px, read with `getComputedStyle` / `getBoundingClientRect` on a temporary horizontal ray's settings dialog, line popover and floating toolbar; light colors sampled from `docs/specs/img/tv-ref/`). The drawing settings dialog and the floating drawing toolbar use this **comfortable** density; the app chrome (top toolbar, menus, lists, status bar) keeps the compact tokens of §2.1–2.4: TradingView's own top bar is 38 px with 38 px buttons, close to our 40 / 32, so it was left alone.
+
+Tokens: `tt_theme::metrics::C_*` (dialog) and `FT_*` (floating toolbar).
+
+**Dialog** (`DialogOpts::comfortable`, `DialogFrame::comfortable`, `DialogFooter::comfortable`)
+
+| Part | TradingView | Token |
+|---|---|---|
+| Surface | radius 20, translucent bg + blur, shadow `0 0 2px`, `0 3px 9px` | `C_R_DIALOG` 20 |
+| Width | 380 min; grows with the widest tab (Visibility 453) | `C_W_DIALOG` 380; the ray dialog is fixed at 454 |
+| Height | fits the tab (Style 311, Text 413, Visibility 598); short tabs keep 2 rows | `DialogFrame::min_body(2 × C_ROW)` |
+| Header | 68 tall, padding 0 20; title 20 px / 600 / line 28 at y 20 | `C_H_HEADER`, `C_TEXT_TITLE`, `C_TITLE_LINE` |
+| Rename ✎ | 34 square right after the title (gap 5), 28 px icon; turns the title into an input | `C_HEADER_BUTTON`, `DialogOpts::rename` |
+| Close × | 34 square, icon 18, radius 8 | `C_HEADER_BUTTON` |
+| Tabs | 16 px / 600, gap 24, 8 px under the label, strip 32 tall | `C_TEXT_TAB`, `C_TAB_GAP`, `C_H_TABS` |
+| Tab underline | 4 px, radius 2, `text` color; a faint full-width 4 px track under all tabs | `C_TAB_UNDERLINE` |
+| Body padding | 16 top / bottom, 20 left / right | `C_PAD_Y`, `C_PAD_X` |
+| Row | 50 tall (8 + 34 + 8) | `C_ROW` |
+| Label column | label width + 20 (table cells); Visibility labels 96 | `FormRow::label_auto`, `C_LABEL_GAP` |
+| Inputs / selects | 100 × 34, radius 8, 1 px border (`#303030` dark), text 14, chevron 18 | `C_W_FIELD`, `C_CONTROL`, `C_R_CONTROL` |
+| Gap between controls | 8 | `C_GAP` |
+| Checkbox | 18 box, radius 3, checked = `text` fill with a ✓ in `bg`; label 14 at +8 | `C_CHECKBOX`, `CheckBox` |
+| Square toggles (B, I, color) | 34 × 34, radius 6, 1 px border (`#555` dark) | `C_R_TOGGLE`, `ToggleSquare` |
+| Swatch inside | 24 × 24, radius 3, 4 px inset | `C_SWATCH` |
+| Line control | ONE button 74.6 × 34: swatch + 30 px line preview (its real width / dash) | `LinePicker`, `W_LINE_PICKER` |
+| Text area | full width × 100, radius 8 | `C_H_TEXTAREA` |
+| Range slider | track 100 × 10, radius 5 (`#303030` / light `#f2f2f2`); selected part `#dbdbdb` / light `#464646`; handles 12 round, 2 px ring; 9 + 8 px to the fields | `C_W_SLIDER`, `C_SLIDER_TRACK`, `C_SLIDER_HANDLE` |
+| Footer | 66 tall, padding 16 20; Template 100 × 34 outline; Cancel / Ok 34 tall, 16 px labels, padding 0 11, radius 8, gap 12; Ok = `text` fill | `C_H_FOOTER`, `C_TEXT_BUTTON` |
+
+**Popover (line / color)**: 248 wide, radius 6, padding 6 / 12; palette 10 columns × 8 rows of 16.6 px swatches (radius 2) on a 22.6 pitch (`TV_PALETTE`); separator; "Opacity" 12 px muted, slider 169 × 10 with a transparent→color gradient + a 47 × 26 percent box; "Thickness" four 57 × 32 segments with 1–4 px bars; "Line style" three segments (solid / dashed 5-on-3-off / dotted 2-on-3-off). The selected segment is inverted (`text` fill).
+
+**Floating drawing toolbar** (`Overlay::floating`, `ControlSize::Xl`, `ColorBarButton`, `LineWidthButton`, `LineStyleButton`)
+
+| Part | TradingView | Token |
+|---|---|---|
+| Bar | 38 tall, radius 6, no padding, no gaps, no border (shadow `0 0 2px`, `0 3px 9px`) | `FT_HEIGHT`, `FT_RADIUS` |
+| Grip | 24 wide, six dots | `FT_GRIP` |
+| Buttons | 38 × 38 squares, icons drawn in a 28 box (~18–20 px glyphs), color `#b8b8b8` dark | `FT_BUTTON`, `FT_ICON` 20 |
+| Color buttons | icon 16 at y 7 + color bar 22 × 4 (radius 2) at y 27: pencil = line, "T" = text, bucket = fill | `FT_BAR_ICON`, `FT_BAR_W`, `FT_BAR_H` |
+| Line width | 68 wide: an 18 px line preview at x 10, then "1px" (14 px) | `FT_W_WIDTH_BUTTON` |
+| Order | grip, template (grid +), line color, text color, width, style, settings, *alert*, lock, remove, … | alert is in BACKLOG.md |
+
+**Text on lines**: TradingView centers the text on the line (horizontal line / ray default: 12 px, Center / Middle, 1 px line) and breaks the line behind it, about 6 px each side (`TEXT_LINE_GAP`; `lines::line_with_text` does any angle). Top / Bottom text sits above / below an unbroken line. The text shows whenever it is not empty (the comfortable Text tab has no "Show text").
+
+**Colors** (dark → light): text `#b8b8b8` / `#131722`-ish (we keep our `text`); control border `#303030` / `#e0e3eb`; toggle border `#555`; primary (Ok, checkbox, tab underline) `#f2f2f2` on dark, `#222` on light (our `text`); muted labels `#8c8c8c`.
+
 ---
 
 ## 3. Shared component kit: `crates/tt-ui`
