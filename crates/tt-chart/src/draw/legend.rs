@@ -1,13 +1,14 @@
 //! The status line: the OHLC readout and the indicator legends.
 
-use super::{LegendButton, LegendHit, Scene, volume_rising_at};
-use crate::indicators::{Indicator, format_value, histogram_down};
+use super::study::value_color;
+use super::{LegendButton, LegendHit, Scene};
+use crate::indicators::Indicator;
 use crate::render::Canvas;
 use crate::scale::{self, format_price, format_signed_price};
 use ecolor::Color32;
 use emath::{Align2, Pos2, Rect, pos2, vec2};
 use lucide_icons::Icon;
-use tt_core::{Placement, Plot};
+use tt_core::Placement;
 use tt_theme::with_alpha;
 
 const LEGEND_ICON: f32 = 15.0;
@@ -87,6 +88,18 @@ pub(super) fn legends(c: &mut dyn Canvas, s: &Scene<'_>, bar: Option<usize>) -> 
     hits
 }
 
+/// Backing behind legend text, so plots and levels (RSI 30/50/70) don't run
+/// through it: the theme background when the status line's "Background" is
+/// on. Its transparency (0–100 %) maps to 0–30 % see-through, so the text
+/// always stays legible.
+fn backing(s: &Scene<'_>) -> Option<Color32> {
+    let st = &s.style.status_line;
+    st.indicator_background.then(|| {
+        let see_through = st.indicator_background_transparency.min(100) as f32 / 100.0 * 0.3;
+        with_alpha(s.theme.bg, 1.0 - see_through)
+    })
+}
+
 /// One legend row: title, hover buttons (eye / settings / remove), values.
 fn legend_row(
     c: &mut dyn Canvas,
@@ -97,15 +110,14 @@ fn legend_row(
 ) -> LegendHit {
     let t = s.theme;
     let size = s.style.scales.text_size;
+    let st = &s.style.status_line;
     let hovered = s.legend_hover == Some(ind.id);
-    let full = ind.study.legend_title();
-    let title = match (
-        s.style.status_line.indicator_titles,
-        s.style.status_line.indicator_inputs,
-    ) {
-        (false, _) => String::new(),
-        (true, true) => full,
-        (true, false) => full.split_whitespace().next().unwrap_or("").to_owned(),
+    let title = if !st.indicator_titles {
+        String::new()
+    } else if st.indicator_inputs && ind.style.inputs_in_status_line {
+        ind.study.legend_title()
+    } else {
+        ind.study.meta().short.to_owned()
     };
     let name = Rect::from_min_size(pos, c.text_size(&title, size));
     let name_color = if ind.visible {
@@ -113,6 +125,25 @@ fn legend_row(
     } else {
         with_alpha(t.text_muted, 0.6)
     };
+    // The backing grows left to right as items are drawn (one strip, no
+    // overlaps, no allocation).
+    let bg = backing(s);
+    let (top, bottom) = (pos.y - 3.0, name.bottom() + 3.0);
+    let mut covered = pos.x - 5.0;
+    let mut cover = |c: &mut dyn Canvas, right: f32| {
+        if let Some(bg) = bg
+            && right > covered
+        {
+            c.fill_rect(
+                Rect::from_min_max(pos2(covered, top), pos2(right, bottom)),
+                bg,
+            );
+            covered = right;
+        }
+    };
+    if !title.is_empty() {
+        cover(c, name.right() + 5.0);
+    }
     if hovered {
         let r = name.expand2(vec2(5.0, 3.0));
         c.fill_rounded_rect(r, 3.0, with_alpha(t.bg, 0.85));
@@ -138,6 +169,7 @@ fn legend_row(
             pos2(x, name.center().y - LEGEND_BUTTON / 2.0),
             vec2(LEGEND_BUTTON, LEGEND_BUTTON),
         );
+        cover(c, r.right() + 2.0);
         c.fill_rounded_rect(r, 3.0, with_alpha(t.bg, 0.85));
         c.icon(r.center(), char::from(*icon), LEGEND_ICON, name_color);
         buttons.push((*button, r));
@@ -147,30 +179,25 @@ fn legend_row(
         x += 6.0;
     }
     if ind.visible
-        && s.style.status_line.indicator_values
+        && st.indicator_values
+        && ind.style.values_in_status_line
         && let Some(i) = bar
     {
-        let outs = ind.outputs();
-        for (k, (_, plot)) in ind.study.outputs().iter().enumerate() {
+        let off = ind.offset();
+        for k in 0..ind.outputs().len() {
             if !ind.output_enabled(k) {
                 continue;
             }
-            let Some(v) = outs.get(k).and_then(|o| o.get(i)).copied() else {
+            let Some(v) = ind.value_at(k, i) else {
                 continue;
             };
-            let color = match plot {
-                Plot::VolumeColumns if volume_rising_at(s, ind, i) => t.up,
-                Plot::VolumeColumns => t.down,
-                Plot::Histogram if v < 0.0 => histogram_down(),
-                _ => ind.color(k),
-            };
-            let r = c.text(
-                pos2(x, pos.y),
-                Align2::LEFT_TOP,
-                &format_value(&ind.study, v, s.precision),
-                size,
-                color,
-            );
+            let color = value_color(s, ind, k, (i as i64 - off) as usize);
+            let text = ind.format(v, s.precision);
+            if bg.is_some() {
+                let w = c.text_size(&text, size).x;
+                cover(c, x + w + 4.0);
+            }
+            let r = c.text(pos2(x, pos.y), Align2::LEFT_TOP, &text, size, color);
             x = r.right() + 8.0;
         }
     }

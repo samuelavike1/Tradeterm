@@ -18,6 +18,7 @@ pub mod bars;
 mod derived;
 mod draw;
 pub mod drawings;
+pub mod indicator_style;
 pub mod indicators;
 mod kind;
 pub mod lod;
@@ -33,6 +34,7 @@ pub use drawings::{
     Anchor, Drawing, DrawingList, DrawingMap, DrawingPart, DrawingPress, DrawingTool, Drawings,
     LineStyle, Mods, Placement, Props, Repaint, ToolGroup, Visibility,
 };
+pub use indicator_style::IndicatorStyle;
 pub use indicators::Indicator;
 pub use kind::{ChartType, ScaleMode};
 pub use style::{ChartStyle, ColorSlot, Rgba, ScaleButtons};
