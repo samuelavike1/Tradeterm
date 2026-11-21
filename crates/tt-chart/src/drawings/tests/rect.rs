@@ -118,11 +118,17 @@ fn edge_handles_move_one_side_corners_two() {
     // Top edge (point 0's price) down by 10.
     let [a, b] = drag(6, vec2(70.0, 50.0), NO_MODS);
     assert_eq!((a.time_ms, b.time_ms), (p0.time_ms, p1.time_ms));
-    assert!((a.price - 70.0).abs() < 1e-4 && b.price == p1.price, "{a:?}");
+    assert!(
+        (a.price - 70.0).abs() < 1e-4 && b.price == p1.price,
+        "{a:?}"
+    );
     // Bottom edge.
     let [a, b] = drag(7, vec2(-70.0, -50.0), NO_MODS);
     assert_eq!((a.time_ms, b.time_ms), (p0.time_ms, p1.time_ms));
-    assert!(a.price == p0.price && (b.price - 50.0).abs() < 1e-4, "{b:?}");
+    assert!(
+        a.price == p0.price && (b.price - 50.0).abs() < 1e-4,
+        "{b:?}"
+    );
     // Corner 2 (point 0's time, point 1's price): both.
     let [a, b] = drag(2, vec2(-50.0, 50.0), NO_MODS);
     assert_eq!((a.time_ms, b.time_ms), (15 * MIN, p1.time_ms));
@@ -237,10 +243,20 @@ fn tags_use_the_opaque_line_color_with_readable_text() {
     assert_eq!(d.solid_color(), Color32::from_rgb(0x29, 0x62, 0xff));
     assert_eq!(contrast_text(d.solid_color()), Color32::WHITE);
     d.set_color(Color32::from_rgb(0xff, 0xeb, 0x3b));
-    assert_ne!(contrast_text(d.solid_color()), Color32::WHITE, "dark on yellow");
+    assert_ne!(
+        contrast_text(d.solid_color()),
+        Color32::WHITE,
+        "dark on yellow"
+    );
     assert_ne!(contrast_text(Color32::WHITE), Color32::WHITE);
-    assert_eq!(contrast_text(Color32::from_rgb(0xf2, 0x36, 0x45)), Color32::WHITE);
-    assert_eq!(contrast_text(Color32::from_rgb(0x9c, 0x27, 0xb0)), Color32::WHITE);
+    assert_eq!(
+        contrast_text(Color32::from_rgb(0xf2, 0x36, 0x45)),
+        Color32::WHITE
+    );
+    assert_eq!(
+        contrast_text(Color32::from_rgb(0x9c, 0x27, 0xb0)),
+        Color32::WHITE
+    );
 }
 
 #[test]
@@ -293,7 +309,9 @@ fn defaults_match_tradingview_and_old_rectangles_keep_their_look() {
     // A pre-props rectangle: its color, no middle line, colored text.
     let mut old = Props::defaults(DrawingTool::Rectangle);
     old.apply_legacy(Some(Color32::from_rgb(242, 54, 69)), Some(2.0), None);
-    let Props::Shape(o) = old else { panic!("shape") };
+    let Props::Shape(o) = old else {
+        panic!("shape")
+    };
     assert_eq!(o.border.color, Rgba::rgb(242, 54, 69));
     assert_eq!(o.border.width, 2);
     assert!(!o.middle_line_on);

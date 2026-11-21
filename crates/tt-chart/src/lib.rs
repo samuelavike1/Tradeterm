@@ -34,8 +34,7 @@ pub use draw::LegendButton;
 pub use drawings::{
     Anchor, Caps, Drawing, DrawingList, DrawingMap, DrawingMenuTarget, DrawingPart, DrawingPress,
     DrawingTool, Drawings, LineStyle, MagnetMode, Mods, Placement, Props, Repaint, ResizeCursor,
-    ToolGroup,
-    Visibility, VisibilityPreset, VisualOrder,
+    ToolGroup, Visibility, VisibilityPreset, VisualOrder,
 };
 pub use indicator_style::{IndicatorStyle, IntervalVisibility};
 pub use indicators::Indicator;

@@ -253,13 +253,21 @@ pub(super) fn axis_bands(
     let (Some(a), Some(b)) = (pts.first(), pts.get(1)) else {
         return (None, None);
     };
-    let (top, bottom) = (a.y.min(b.y).max(pane.top()), a.y.max(b.y).min(pane.bottom()));
-    let (left, right) = (a.x.min(b.x).max(pane.left()), a.x.max(b.x).min(pane.right()));
+    let (top, bottom) = (
+        a.y.min(b.y).max(pane.top()),
+        a.y.max(b.y).min(pane.bottom()),
+    );
+    let (left, right) = (
+        a.x.min(b.x).max(pane.left()),
+        a.x.max(b.x).min(pane.right()),
+    );
     let price = (top < bottom).then(|| {
-        Rect::from_min_max(pos2(price_axis.left(), top), pos2(price_axis.right(), bottom))
+        Rect::from_min_max(
+            pos2(price_axis.left(), top),
+            pos2(price_axis.right(), bottom),
+        )
     });
-    let time = (left < right).then(|| {
-        Rect::from_min_max(pos2(left, time_axis.top()), pos2(right, time_axis.bottom()))
-    });
+    let time = (left < right)
+        .then(|| Rect::from_min_max(pos2(left, time_axis.top()), pos2(right, time_axis.bottom())));
     (price, time)
 }

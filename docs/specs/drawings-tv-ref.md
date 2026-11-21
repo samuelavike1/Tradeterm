@@ -151,6 +151,23 @@ Level order (row by row): 0, 0.236 / 0.382, 0.5 / 0.618, 0.786 / 1, 1.618 /
 | Coordinates | | `#1 (price, bar)`, `#2 (price, bar)` |
 | Toolbar | | template, line color, background, text color, width, style, settings, (alert), lock, remove, more |
 
+On the chart (`tv-rect-selected.png`, measured Nov 2026; ours:
+`img/rect-{light,dark}-*.png`):
+
+- New rectangle: border `#2962FF` at 48 %, 1 px; background `#2962FF` at
+  20 %; middle line on (`#2962FF`, 1 px, dashed); text white 14, Inside /
+  Right.
+- Handles (hover or selected): circles (radius ~6, background fill, ring
+  in the line color) at the corners, ~11 px squares at the edge midpoints.
+  Pointer: `nwse` / `nesw` at the corners, `ew` left / right, `ns` top /
+  bottom; `pointer` on the outline (the inside does not hover).
+- Selected only (not on hover): solid price tags (top, bottom) and time
+  tags (left, right) in the opaque line color with white text, and a band
+  in the line color at 25 % between them on each axis.
+- Text: Inside = on the middle line, its edge ~8 px from the border; Top /
+  Bottom = above / below the box. The middle line stops ~8 px before text
+  on it. With no text, a selected rectangle shows a "+ Add text" hint there.
+
 ## Price range, Date range, Date and price range
 
 `tv-prange-style.png`, `tv-prange-text.png`, `tv-drange-style.png`,

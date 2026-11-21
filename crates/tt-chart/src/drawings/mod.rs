@@ -45,8 +45,8 @@ pub use model::{
     Placement, Rgba, Span, ToolGroup, Visibility, VisibilityPreset, deserialize_drawing_map,
 };
 pub use props::{Caps, Props, Stroke};
-pub use shapes::ResizeCursor;
 pub(crate) use render::{axis_tags, draw_base, draw_overlay};
+pub use shapes::ResizeCursor;
 pub use templates::{DrawingTemplates, NamedTemplate, ToolTemplates};
 
 use crate::time_axis::SlotTimes;
