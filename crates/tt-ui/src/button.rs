@@ -45,6 +45,9 @@ pub enum ControlSize {
     /// 34 px: the left drawing toolbar (TradingView-measured). SVG icons
     /// 28, Lucide glyphs 20.
     Drawing,
+    /// 44 px: the right sidebar strip (TradingView-measured). SVG icons
+    /// 28.
+    Sidebar,
 }
 
 impl ControlSize {
@@ -57,6 +60,7 @@ impl ControlSize {
             ControlSize::Lg => CONTROL_LG,
             ControlSize::Xl => FT_BUTTON,
             ControlSize::Drawing => CONTROL_DRAWING,
+            ControlSize::Sidebar => SIDEBAR_BUTTON,
         }
     }
 
@@ -67,7 +71,9 @@ impl ControlSize {
             ControlSize::Xs => ICON_XS,
             ControlSize::Sm => ICON_SM,
             ControlSize::Md => ICON_MD,
-            ControlSize::Lg | ControlSize::Xl | ControlSize::Drawing => FT_ICON,
+            ControlSize::Lg | ControlSize::Xl | ControlSize::Drawing | ControlSize::Sidebar => {
+                FT_ICON
+            }
         }
     }
 

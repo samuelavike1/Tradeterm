@@ -70,6 +70,10 @@ icons!(
     "draw-eye",
     "draw-eye-off",
     "draw-trash",
+    "panel-watchlist",
+    "panel-alerts",
+    "panel-object-tree",
+    "tree-indicator",
 );
 
 /// Our icons plus gpui-kit's default asset bundle.

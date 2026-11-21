@@ -1,8 +1,10 @@
 //! tradeterm — native desktop charting on gpui.
 
+mod alerts_panel;
 mod app;
 mod chart_settings;
 mod custom_interval;
+mod data_window;
 mod dialogs;
 mod drawing_settings;
 mod drawing_toolbar;
@@ -12,7 +14,9 @@ mod indicators;
 mod layouts_ui;
 mod menus;
 mod name_prompt;
+mod object_tree;
 mod quick_search;
+mod right_sidebar;
 mod search;
 mod snapshot;
 mod snapshot_menu;
@@ -22,6 +26,7 @@ mod title_bar;
 mod top_toolbar;
 mod ui;
 mod visibility_tv;
+mod watchlist_panel;
 
 use app::TradeTerm;
 use gpui_kit::*;

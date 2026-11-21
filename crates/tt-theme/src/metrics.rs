@@ -259,6 +259,44 @@ pub const PICKER_R_DIALOG: f32 = 12.0;
 /// line (the line breaks behind it).
 pub const TEXT_LINE_GAP: f32 = 6.0;
 
+// ---- right sidebar and its panels (docs/specs/right-panel.md) --------------
+//
+// Measured on TradingView (2026-11, CSS px): the right toolbar, the
+// watchlist and the object tree / data window panels.
+
+/// The icon strip at the far right: 44 px buttons and a 1 px left border.
+pub const W_SIDEBAR: f32 = 45.0;
+pub const SIDEBAR_BUTTON: f32 = 44.0;
+/// Panel width (left of the strip): default, and the drag limits.
+pub const W_PANEL: f32 = 300.0;
+pub const W_PANEL_MIN: f32 = 240.0;
+pub const W_PANEL_MAX: f32 = 640.0;
+/// Panel header (list name, add, menu): 48 tall with 38 px buttons.
+pub const H_PANEL_HEADER: f32 = 48.0;
+/// Watchlist column header row and rows.
+pub const H_WL_COLUMNS: f32 = 27.0;
+pub const H_WL_ROW: f32 = 30.0;
+/// Watchlist section caption row.
+pub const H_WL_SECTION: f32 = 28.0;
+/// Round symbol logo in a watchlist row; logo to ticker 6.
+pub const LOGO_SM: f32 = 18.0;
+/// Watchlist columns at the default width (Symbol takes the rest).
+pub const W_WL_LAST: f32 = 73.0;
+pub const W_WL_CHG: f32 = 68.0;
+pub const W_WL_CHG_PCT: f32 = 60.0;
+pub const W_WL_VOL: f32 = 64.0;
+/// Details price (the big last price under the list).
+pub const TEXT_PRICE_LG: f32 = 24.0;
+/// Segmented tabs (Object tree / Data window): 28 tall.
+pub const H_SEGMENT: f32 = 28.0;
+/// Object tree rows; row action buttons (lock, eye, trash) 22 square.
+pub const H_TREE_ROW: f32 = 38.0;
+pub const TREE_ACTION: f32 = 22.0;
+/// Data window value rows.
+pub const H_DW_ROW: f32 = 26.0;
+/// The panel's resize handle (hit width on its left edge).
+pub const PANEL_GRIP: f32 = 6.0;
+
 // ---- motion (§2.9), milliseconds --------------------------------------------
 
 /// Hover, pressed, selection changes.

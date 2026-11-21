@@ -131,6 +131,54 @@ impl Drawings {
         self.paste(&src, m)
     }
 
+    /// Edits one drawing (object tree: lock, hide, rename) as one undo
+    /// step. Returns whether it changed.
+    pub fn edit_drawing(&mut self, id: u64, f: impl FnOnce(&mut Drawing)) -> bool {
+        let Some(i) = self.items.iter().position(|d| d.id == id) else {
+            return false;
+        };
+        let mut d = self.items[i].clone();
+        f(&mut d);
+        if d == self.items[i] {
+            return false;
+        }
+        if d.hidden || d.locked {
+            self.selection.retain(|s| *s != id);
+        }
+        self.replace_drawing(d)
+    }
+
+    /// Removes one drawing (object tree trash), undoable.
+    pub fn remove_drawing(&mut self, id: u64) -> bool {
+        self.selection.retain(|s| *s != id);
+        self.remove_where(|d| d.id == id)
+    }
+
+    /// Moves drawing `id` to `index` in the visual order (object tree
+    /// drag), as one undo step.
+    pub fn move_drawing(&mut self, id: u64, index: usize) -> bool {
+        if self.busy() {
+            return false;
+        }
+        let Some(from) = self.items.iter().position(|d| d.id == id) else {
+            return false;
+        };
+        let to = index.min(self.items.len() - 1);
+        if to == from {
+            return false;
+        }
+        let before: Vec<u64> = self.items.iter().map(|d| d.id).collect();
+        let d = self.items.remove(from);
+        self.items.insert(to, d);
+        let after: Vec<u64> = self.items.iter().map(|d| d.id).collect();
+        self.record(Edit {
+            kind: EditKind::Other,
+            changes: Vec::new(),
+            order: Some((before, after)),
+        });
+        true
+    }
+
     /// Changes the selection's place in the visual order (the selected
     /// drawings keep their relative order).
     pub fn reorder_selected(&mut self, op: VisualOrder) -> bool {

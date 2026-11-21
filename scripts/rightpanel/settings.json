@@ -1,0 +1,31 @@
+{
+  "theme_mode": "Dark",
+  "tabs": [
+    { "symbol": "BTCUSDT", "timeframe": "1h", "chart_type": "Candles",
+      "indicators": [
+        {"study": {"type": "Volume", "ma_length": 20, "color_by_prev_close": false, "show_ma": false}, "visible": true},
+        {"study": {"type": "Ema", "length": 9, "source": "Close"}, "visible": true},
+        {"study": {"type": "Rsi", "length": 14, "source": "Close"}, "visible": false}
+      ] },
+    { "symbol": "ETHUSDT", "timeframe": "1h", "chart_type": "Candles" }
+  ],
+  "active_tab": 0,
+  "watchlists": {
+    "lists": [
+      { "name": "Crypto majors", "items": [
+        { "symbol": "BTCUSDT", "base": "BTC", "quote": "USDT" },
+        { "symbol": "ETHUSDT", "base": "ETH", "quote": "USDT" },
+        { "symbol": "SOLUSDT", "base": "SOL", "quote": "USDT" },
+        { "section": "Alts" },
+        { "symbol": "BNBUSDT", "base": "BNB", "quote": "USDT" },
+        { "symbol": "XRPUSDT", "base": "XRP", "quote": "USDT" },
+        { "symbol": "DOGEUSDT", "base": "DOGE", "quote": "USDT" },
+        { "symbol": "ADAUSDT", "base": "ADA", "quote": "USDT" },
+        { "section": "Collapsed", "collapsed": true },
+        { "symbol": "LINKUSDT", "base": "LINK", "quote": "USDT" }
+      ] },
+      { "name": "Second list", "items": [ { "symbol": "ETHBTC", "base": "ETH", "quote": "BTC" } ] }
+    ]
+  },
+  "right_panel": { "open": "watchlist", "width": 320 }
+}

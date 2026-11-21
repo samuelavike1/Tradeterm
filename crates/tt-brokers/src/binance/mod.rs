@@ -2,6 +2,7 @@
 
 mod assets;
 mod parse;
+mod ticker;
 
 pub use assets::{ASSETS_URL, AssetInfo, MAX_LOGO_BYTES, is_image, parse_assets};
 
@@ -9,6 +10,8 @@ pub use parse::{
     KlineUpdate, base_timeframe, interval, parse_exchange_info, parse_rest_klines, parse_ws_kline,
     rank_symbols,
 };
+
+pub use ticker::{Ticker24h, mini_ticker_url, parse_ticker_24h, parse_ws_mini_ticker};
 
 use crate::MarketDataSource;
 use anyhow::{Context, Result, bail};
