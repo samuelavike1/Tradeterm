@@ -6,6 +6,7 @@
 
 mod canvas;
 mod chart;
+mod drawing_toolbar;
 pub mod motion;
 
 pub use canvas::{CanvasFonts, GpuiCanvas, hsla};

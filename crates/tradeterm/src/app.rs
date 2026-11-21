@@ -1048,10 +1048,11 @@ impl Render for TradeTerm {
                 if window.has_active_dialog(cx) || !this.focus.is_focused(window) {
                     return;
                 }
-                // Drawing keys: Escape, Delete / Backspace, Alt shortcuts.
+                // Drawing keys: Escape, Enter, Delete / Backspace, Alt shortcuts.
                 if let Some(chart) = this.tab_chart().cloned() {
                     let handled = match k.key.as_str() {
                         "escape" if !m.modified() => chart.update(cx, |c, cx| c.cancel_drawing(cx)),
+                        "enter" if !m.modified() => chart.update(cx, |c, cx| c.finish_drawing(cx)),
                         "delete" | "backspace" if !m.modified() => {
                             chart.update(cx, |c, cx| c.delete_selected_drawing(cx))
                         }

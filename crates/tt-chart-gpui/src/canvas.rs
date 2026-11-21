@@ -12,11 +12,11 @@
 use ecolor::Color32;
 use emath::{Align2, Pos2, Rect, Vec2};
 use gpui_kit::{
-    App, Background, BorderStyle, Bounds, ContentMask, Corners, Edges, Font, FontWeight, Hsla,
-    PaintQuad, Path, Pixels, Rgba, ShapedLine, SharedString, TextAlign, TextRun, Window, point, px,
-    size,
+    App, Background, BorderStyle, Bounds, ContentMask, Corners, Edges, Font, FontStyle, FontWeight,
+    Hsla, PaintQuad, Path, Pixels, Rgba, ShapedLine, SharedString, TextAlign, TextRun, Window,
+    point, px, size,
 };
-use tt_chart::render::Canvas;
+use tt_chart::render::{Canvas, TextOpts};
 
 /// Line height as a multiple of the font size (the text height the chart's
 /// label anchoring was tuned with).
@@ -61,6 +61,8 @@ pub struct GpuiCanvas<'a> {
     full: Rect,
     clip: Rect,
     batches: Vec<(Rect, Vec<Item>)>,
+    /// Vertex indices for polygon triangulation (allocated on first use).
+    scratch: Vec<usize>,
     /// Primitives recorded (for performance overlays).
     pub primitives: usize,
 }
@@ -104,6 +106,7 @@ impl<'a> GpuiCanvas<'a> {
             full: clip,
             clip,
             batches: vec![(clip, Vec::new())],
+            scratch: Vec::new(),
             primitives: 0,
         }
     }
@@ -142,6 +145,7 @@ impl<'a> GpuiCanvas<'a> {
         color: Color32,
         family: SharedString,
         bold: bool,
+        italic: bool,
     ) -> ShapedLine {
         let font = Font {
             family,
@@ -149,6 +153,11 @@ impl<'a> GpuiCanvas<'a> {
                 FontWeight::SEMIBOLD
             } else {
                 FontWeight::NORMAL
+            },
+            style: if italic {
+                FontStyle::Italic
+            } else {
+                FontStyle::Normal
             },
             ..gpui_kit::font(self.fonts.ui.clone())
         };
@@ -421,15 +430,61 @@ impl Canvas for GpuiCanvas<'_> {
         color: Color32,
         bold: bool,
     ) -> Rect {
-        let line = self.shape(text, size, color, self.fonts.ui.clone(), bold);
+        let line = self.shape(text, size, color, self.fonts.ui.clone(), bold, false);
         let rect = anchor.anchor_size(pos, Vec2::new(f32::from(line.width), size * LINE_HEIGHT));
         self.push(Item::Text(Box::new((line, rect.min, size))));
         rect
     }
 
     fn text_size_styled(&mut self, text: &str, size: f32, bold: bool) -> Vec2 {
-        let line = self.shape(text, size, Color32::WHITE, self.fonts.ui.clone(), bold);
+        let line = self.shape(
+            text,
+            size,
+            Color32::WHITE,
+            self.fonts.ui.clone(),
+            bold,
+            false,
+        );
         Vec2::new(f32::from(line.width), size * LINE_HEIGHT)
+    }
+
+    fn text_rich(
+        &mut self,
+        pos: Pos2,
+        anchor: Align2,
+        text: &str,
+        size: f32,
+        color: Color32,
+        opts: TextOpts,
+    ) -> Rect {
+        if opts.rotation != 0.0 {
+            // gpui has no rotated text: upright glyphs along the baseline.
+            return tt_chart::render::text_along(self, pos, anchor, text, size, color, opts);
+        }
+        let line = self.shape(
+            text,
+            size,
+            color,
+            self.fonts.ui.clone(),
+            opts.bold,
+            opts.italic,
+        );
+        let rect = anchor.anchor_size(pos, Vec2::new(f32::from(line.width), size * LINE_HEIGHT));
+        self.push(Item::Text(Box::new((line, rect.min, size))));
+        rect
+    }
+
+    fn fill_polygon(&mut self, points: &[Pos2], color: Color32) {
+        if points.len() < 3 || color.a() == 0 {
+            return;
+        }
+        let mut scratch = std::mem::take(&mut self.scratch);
+        let st = (point(0., 1.), point(0., 1.), point(0., 1.));
+        let mesh = self.mesh(color, points[0]);
+        tt_chart::render::triangulate(points, &mut scratch, |a, b, c| {
+            mesh.push_triangle((pt(a), pt(b), pt(c)), st);
+        });
+        self.scratch = scratch;
     }
 
     fn icon(&mut self, center: Pos2, glyph: char, size: f32, color: Color32) -> Rect {
@@ -438,6 +493,7 @@ impl Canvas for GpuiCanvas<'_> {
             size,
             color,
             self.fonts.icons.clone(),
+            false,
             false,
         );
         let rect = Align2::CENTER_CENTER

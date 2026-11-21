@@ -6934,6 +6934,7 @@ dependencies = [
  "lucide-icons",
  "serde",
  "serde_json",
+ "tracing",
  "tt-core",
  "tt-theme",
 ]

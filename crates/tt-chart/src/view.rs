@@ -1,7 +1,7 @@
 use crate::bars::{collect_bars, price_extent};
 use crate::derived::Derived;
 use crate::draw::{self, LegendButton, LegendHit, Pane, Scene};
-use crate::drawings::{DrawingPress, Drawings, Mapper, Repaint};
+use crate::drawings::{DrawingPress, Drawings, Mapper, Mods, Repaint};
 use crate::indicators::Indicator;
 use crate::lod::Lod;
 use crate::render::Canvas;
@@ -459,30 +459,37 @@ impl ChartView {
     }
 
     /// A press on the plot: places a point of the active drawing tool, or
-    /// selects / starts dragging the drawing under the pointer.
-    pub fn drawing_press(&mut self, p: Pos2, data: ChartData<'_>) -> DrawingPress {
+    /// selects / starts dragging the drawing under the pointer. `double`:
+    /// the second press of a double-click (finishes open-ended drawings).
+    pub fn drawing_press(
+        &mut self,
+        p: Pos2,
+        mods: Mods,
+        double: bool,
+        data: ChartData<'_>,
+    ) -> DrawingPress {
         if !self.in_drawing_area(p) {
             return DrawingPress::Ignored;
         }
-        self.with_mapper(data, |d, m, s| d.press(p, m, s))
+        self.with_mapper(data, |d, m, s| d.press(p, mods, double, m, s))
             .unwrap_or(DrawingPress::Ignored)
     }
 
     /// Pointer motion for drawings (placing, dragging, hover).
-    pub fn drawing_motion(&mut self, p: Pos2, data: ChartData<'_>) -> Repaint {
+    pub fn drawing_motion(&mut self, p: Pos2, mods: Mods, data: ChartData<'_>) -> Repaint {
         if !self.drawings.busy() && !self.in_drawing_area(p) {
             return match self.drawings.hovered.take() {
                 Some(_) => Repaint::Overlay,
                 None => Repaint::None,
             };
         }
-        self.with_mapper(data, |d, m, s| d.motion(p, m, s))
+        self.with_mapper(data, |d, m, s| d.motion(p, mods, m, s))
             .unwrap_or(Repaint::None)
     }
 
     /// Pointer released; returns whether drawings changed.
-    pub fn drawing_release(&mut self, p: Pos2) -> bool {
-        self.drawings.release(p)
+    pub fn drawing_release(&mut self, p: Pos2, mods: Mods) -> bool {
+        self.drawings.release(p, mods)
     }
 
     /// Clicks a legend button; returns the indicator whose settings should
