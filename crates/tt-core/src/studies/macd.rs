@@ -1,7 +1,7 @@
 //! MACD: fast EMA − slow EMA, its EMA signal line and the histogram.
 
 use super::meta::*;
-use super::{Placement, Source, Study, StudyKind, as_u32, ma};
+use super::{Placement, Source, Study, StudyKind, StudyState, as_u32, ma};
 use crate::CandleSeries;
 
 const GROW_ABOVE: Rgba = rgb(0x26a69a);
@@ -50,26 +50,40 @@ pub(super) static META: StudyMeta = StudyMeta {
     bounds: None,
 };
 
+/// The fast and slow EMAs are not outputs (only their difference is): their
+/// values at the bar before the checkpoint are the state. The signal line
+/// reads its previous output.
+#[derive(Debug, Clone, Copy, Default)]
+pub(super) struct State {
+    fast: f64,
+    slow: f64,
+}
+
 pub(super) fn compute(
     src: &CandleSeries,
     out: &mut [Vec<f64>],
     from: usize,
-    fast: u32,
-    slow: u32,
-    signal: u32,
+    [fast, slow, signal]: [u32; 3],
     source: Source,
+    st: &mut StudyState,
 ) {
     let n = src.len();
-    let mut f = vec![f64::NAN; n];
-    let mut s = vec![f64::NAN; n];
-    ma::ema(|i| source.value(src, i), fast as usize, &mut f, 0, n);
-    ma::ema(|i| source.value(src, i), slow as usize, &mut s, 0, n);
+    let (from, mut s) = st.resume::<State>(from);
     let (hist, rest) = out.split_at_mut(1);
     let (macd, sig) = rest.split_at_mut(1);
+    let x = |i| source.value(src, i);
+    let mut ck = s;
     for i in from..n {
-        macd[0][i] = f[i] - s[i];
+        if i + 1 == n {
+            ck = s;
+        }
+        s.fast = ma::ema_next(x, fast as usize, i, s.fast);
+        s.slow = ma::ema_next(x, slow as usize, i, s.slow);
+        macd[0][i] = s.fast - s.slow;
     }
+    st.save(n - 1, ck);
     let m = &macd[0];
+    // Defined from the longer EMA's first bar (scans at most that many).
     let first = m.iter().position(|x| x.is_finite()).unwrap_or(n);
     ma::ema_skip_nan(m, signal as usize, &mut sig[0], first, from, n);
     for i in from..n {

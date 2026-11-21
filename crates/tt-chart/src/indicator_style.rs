@@ -15,7 +15,7 @@
 use crate::style::Rgba;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use tt_core::{FillDef, HLineDef, LineStyle, PlotDef, PlotType, StudyMeta};
+use tt_core::{FillDef, HLineDef, LineStyle, PlotDef, PlotType, StudyMeta, TimeUnit, Timeframe};
 
 /// Most colors a plot has (MACD histogram: 4; Volume: 2; others 1).
 pub const MAX_PALETTE: usize = 4;
@@ -119,6 +119,9 @@ pub struct IndicatorStyle {
     pub values_in_status_line: bool,
     /// Inputs after the title in the legend (ANDed with the chart setting).
     pub inputs_in_status_line: bool,
+    /// Intervals the indicator is shown on (the Visibility tab).
+    #[serde(skip_serializing_if = "IntervalVisibility::is_all")]
+    pub visibility: IntervalVisibility,
 }
 
 impl Default for IndicatorStyle {
@@ -131,7 +134,105 @@ impl Default for IndicatorStyle {
             labels_on_price_scale: true,
             values_in_status_line: true,
             inputs_in_status_line: true,
+            visibility: IntervalVisibility::default(),
         }
+    }
+}
+
+/// On which intervals an indicator is shown: per unit a `(from, to)` count
+/// range, or `None` when the unit is unchecked. The default is every unit
+/// over its full range ([`IntervalVisibility::full_range`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct IntervalVisibility {
+    pub seconds: Option<(u16, u16)>,
+    pub minutes: Option<(u16, u16)>,
+    pub hours: Option<(u16, u16)>,
+    pub days: Option<(u16, u16)>,
+    pub weeks: Option<(u16, u16)>,
+    pub months: Option<(u16, u16)>,
+}
+
+impl Default for IntervalVisibility {
+    fn default() -> Self {
+        let f = |u| Some(Self::full_range(u));
+        Self {
+            seconds: f(TimeUnit::Second),
+            minutes: f(TimeUnit::Minute),
+            hours: f(TimeUnit::Hour),
+            days: f(TimeUnit::Day),
+            weeks: f(TimeUnit::Week),
+            months: f(TimeUnit::Month),
+        }
+    }
+}
+
+impl IntervalVisibility {
+    /// Units in Visibility-tab order.
+    pub const UNITS: [TimeUnit; 6] = TimeUnit::ALL;
+
+    /// The selectable count range of a unit (TradingView's: seconds and
+    /// minutes 1-59, hours 1-24, days 1-366, weeks 1-52, months 1-12).
+    pub const fn full_range(unit: TimeUnit) -> (u16, u16) {
+        match unit {
+            TimeUnit::Second | TimeUnit::Minute => (1, 59),
+            TimeUnit::Hour => (1, 24),
+            TimeUnit::Day => (1, 366),
+            TimeUnit::Week => (1, 52),
+            TimeUnit::Month => (1, 12),
+        }
+    }
+
+    /// Shown on every interval (the default).
+    pub fn is_all(&self) -> bool {
+        *self == Self::default()
+    }
+
+    pub fn get(&self, unit: TimeUnit) -> Option<(u16, u16)> {
+        match unit {
+            TimeUnit::Second => self.seconds,
+            TimeUnit::Minute => self.minutes,
+            TimeUnit::Hour => self.hours,
+            TimeUnit::Day => self.days,
+            TimeUnit::Week => self.weeks,
+            TimeUnit::Month => self.months,
+        }
+    }
+
+    /// Sets a unit's range, clamped to [`Self::full_range`] and ordered
+    /// (`None` unchecks the unit).
+    pub fn set(&mut self, unit: TimeUnit, range: Option<(u16, u16)>) {
+        let (lo, hi) = Self::full_range(unit);
+        let range = range.map(|(a, b)| {
+            let (a, b) = (a.clamp(lo, hi), b.clamp(lo, hi));
+            (a.min(b), a.max(b))
+        });
+        let slot = match unit {
+            TimeUnit::Second => &mut self.seconds,
+            TimeUnit::Minute => &mut self.minutes,
+            TimeUnit::Hour => &mut self.hours,
+            TimeUnit::Day => &mut self.days,
+            TimeUnit::Week => &mut self.weeks,
+            TimeUnit::Month => &mut self.months,
+        };
+        *slot = range;
+    }
+
+    /// Whether the indicator is shown on `tf`. Whole-hour minute intervals
+    /// count as hours (120 minutes = 2 hours, as in TradingView); a count
+    /// past the unit's range (a 90-minute custom interval) is inside when
+    /// the range reaches the unit's maximum.
+    pub fn shows(&self, tf: Timeframe) -> bool {
+        let (mut unit, mut count) = (tf.unit(), tf.count());
+        if unit == TimeUnit::Minute && count >= 60 && count % 60 == 0 {
+            (unit, count) = (TimeUnit::Hour, count / 60);
+        }
+        let Some((from, to)) = self.get(unit) else {
+            return false;
+        };
+        let max = Self::full_range(unit).1;
+        let c = count.min(u16::MAX as u32) as u16;
+        c >= from && (c <= to || to >= max)
     }
 }
 
@@ -373,6 +474,41 @@ fn prune_eq<T: PartialEq>(v: &mut Option<T>, default: T) {
 mod tests {
     use super::*;
     use tt_core::StudyKind;
+
+    #[test]
+    fn interval_visibility_gates_by_unit_and_range() {
+        let mut v = IntervalVisibility::default();
+        assert!(v.is_all());
+        for tf in Timeframe::ALL {
+            assert!(v.shows(tf), "{tf:?}");
+        }
+        // Minutes 5..15 only; hours off.
+        v.set(TimeUnit::Minute, Some((15, 5)));
+        assert_eq!(v.minutes, Some((5, 15)), "ordered");
+        v.set(TimeUnit::Hour, None);
+        assert!(!v.shows(Timeframe::M1));
+        assert!(v.shows(Timeframe::M5) && v.shows(Timeframe::M15));
+        assert!(!v.shows(Timeframe::M30));
+        assert!(!v.shows(Timeframe::H1));
+        assert!(!v.shows(Timeframe::new(TimeUnit::Minute, 120)), "2 hours");
+        assert!(v.shows(Timeframe::D1) && !v.is_all());
+        // Clamped to the unit's range; a range up to the max takes larger
+        // custom counts.
+        v.set(TimeUnit::Minute, Some((30, 999)));
+        assert_eq!(v.minutes, Some((30, 59)));
+        assert!(v.shows(Timeframe::new(TimeUnit::Minute, 90)));
+        // Serde: default is skipped, a hidden unit is `null`, missing units
+        // take the full range.
+        let mut s = IndicatorStyle::default();
+        assert!(!serde_json::to_string(&s).unwrap().contains("visibility"));
+        s.visibility.set(TimeUnit::Second, None);
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(json.contains(r#""seconds":null"#), "{json}");
+        assert_eq!(serde_json::from_str::<IndicatorStyle>(&json).unwrap(), s);
+        let partial: IntervalVisibility = serde_json::from_str(r#"{"days":[2,5]}"#).unwrap();
+        assert_eq!(partial.days, Some((2, 5)));
+        assert_eq!(partial.minutes, Some((1, 59)));
+    }
 
     #[test]
     fn defaults_come_from_the_metadata() {

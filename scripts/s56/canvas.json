@@ -1,0 +1,32 @@
+{
+  "theme_mode": "Dark",
+  "tabs": [
+    {
+      "symbol": "BTCUSDT",
+      "timeframe": "1h",
+      "chart_type": "Candles",
+      "indicators": [{ "study": { "type": "Rsi", "length": 14, "source": "Close" }, "visible": true }]
+    }
+  ],
+  "chart_style": {
+    "version": 2,
+    "scales": { "placement": "left" },
+    "canvas": {
+      "background_kind": "gradient",
+      "background": "#0b1a33",
+      "background_bottom": "#2a0b2e",
+      "grid_v_color": "#3a4a6a",
+      "grid_v_kind": "solid",
+      "grid_h_color": "#6a4a3a",
+      "grid_h_kind": "dashed",
+      "separators": "#e0a030",
+      "crosshair": "#ff5050",
+      "crosshair_width": 2.0,
+      "crosshair_kind": "solid",
+      "watermark": { "visible": true, "color": "#ffffff22", "ticker_interval": true, "description": true },
+      "scale_text": "#9fd0ff",
+      "scale_lines": "#9fd0ff",
+      "margins": { "top": 20.0, "bottom": 15.0, "right": 15.0 }
+    }
+  }
+}

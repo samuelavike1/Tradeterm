@@ -125,6 +125,7 @@ pub struct IconButton {
     tooltip: Option<TooltipSpec>,
     tooltip_placement: Option<Placement>,
     flyout: Option<MenuBuilder>,
+    menu: Option<(MenuBuilder, Anchor)>,
     on_click: Option<ClickHandler>,
 }
 
@@ -151,6 +152,7 @@ impl IconButton {
             tooltip: None,
             tooltip_placement: None,
             flyout: None,
+            menu: None,
             on_click: None,
         }
     }
@@ -227,12 +229,27 @@ impl IconButton {
         self
     }
 
+    /// A click opens a kit [`Menu`] anchored at `anchor` (the popover's own
+    /// corner, as in gpui-component: `TopLeft` opens below, `BottomRight`
+    /// opens above and right-aligned, for in-chart corner controls), offset
+    /// `S1`. The menu is rebuilt on every render while open; the tooltip is
+    /// hidden while it is open.
+    pub fn menu(
+        mut self,
+        anchor: Anchor,
+        build: impl Fn(Menu, &mut Window, &mut App) -> Menu + 'static,
+    ) -> Self {
+        self.menu = Some((Rc::new(build), anchor));
+        self
+    }
+
     pub fn on_click(mut self, f: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> Self {
         self.on_click = Some(Rc::new(f));
         self
     }
 
     fn button(self, open: bool, cx: &App) -> Button {
+        let open = open || self.open;
         let t = cx.ui();
         let s = self.size.px();
         let toggled = self.toggled.unwrap_or(false);
@@ -256,7 +273,7 @@ impl IconButton {
             .custom(variant(t, hsla(fg), cx))
             .with_size(Size::Size(px(s)))
             .rounded(px(self.size.radius()))
-            .selected(self.selected || toggled || self.open || open)
+            .selected(self.selected || toggled || open)
             .disabled(self.disabled)
             .child(content)
             .w(px(s))
@@ -266,7 +283,9 @@ impl IconButton {
         if let Some(on) = self.toggled {
             b = b.toggled(on);
         }
-        if let Some(tip) = self.tooltip {
+        // No tooltip while its menu / flyout is open: dropping the managed
+        // tooltip hides one that is showing (it would cover the menu).
+        if let Some(tip) = self.tooltip.filter(|_| !open) {
             b = tip.apply(b);
         }
         if let Some(p) = self.tooltip_placement {
@@ -301,6 +320,9 @@ impl Selectable for IconButton {
 
 impl RenderOnce for IconButton {
     fn render(mut self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        if let Some((build, anchor)) = self.menu.take() {
+            return menu_popover(self.id.clone(), anchor, self, build, window, cx);
+        }
         let Some(build) = self.flyout.take() else {
             return self.button(false, cx).into_any_element();
         };
@@ -614,7 +636,8 @@ impl ToolbarButton {
                 }
             })
             .when(self.kind == ToolbarKind::Field, |b| b.bg(hsla(t.panel_alt)));
-        if let Some(tip) = self.tooltip {
+        // No tooltip over its own open menu (see `IconButton::button`).
+        if let Some(tip) = self.tooltip.filter(|_| !self.open) {
             b = tip.apply(b);
         }
         if let Some(f) = self.on_click {
@@ -649,23 +672,36 @@ impl RenderOnce for ToolbarButton {
         let Some(build) = self.menu.take() else {
             return self.button(cx).into_any_element();
         };
-        let id = self.id.clone();
-        let nav = MenuNav::keyed(child_id(&id, "menu-nav"), window, cx);
-        let focus = nav.read(cx).focus.clone();
-        Popover::new(child_id(&id, "menu-pop"))
-            .anchor(self.menu_anchor)
-            .offset(px(S1))
-            .appearance(false)
-            .track_focus(&focus)
-            .trigger(self)
-            .content(move |_, window, cx| {
-                let pop = cx.entity();
-                build(Menu::new(), window, cx)
-                    .nav(nav.clone())
-                    .on_dismiss(move |window, cx| pop.update(cx, |p, cx| p.dismiss(window, cx)))
-            })
-            .into_any_element()
+        let anchor = self.menu_anchor;
+        menu_popover(self.id.clone(), anchor, self, build, window, cx)
     }
+}
+
+/// A kit [`Menu`] in a popover on `trigger`, offset `S1`, with keyboard nav
+/// state kept under the trigger's id.
+fn menu_popover<T: Selectable + IntoElement + 'static>(
+    id: ElementId,
+    anchor: Anchor,
+    trigger: T,
+    build: MenuBuilder,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
+    let nav = MenuNav::keyed(child_id(&id, "menu-nav"), window, cx);
+    let focus = nav.read(cx).focus.clone();
+    Popover::new(child_id(&id, "menu-pop"))
+        .anchor(anchor)
+        .offset(px(S1))
+        .appearance(false)
+        .track_focus(&focus)
+        .trigger(trigger)
+        .content(move |_, window, cx| {
+            let pop = cx.entity();
+            build(Menu::new(), window, cx)
+                .nav(nav.clone())
+                .on_dismiss(move |window, cx| pop.update(cx, |p, cx| p.dismiss(window, cx)))
+        })
+        .into_any_element()
 }
 
 /// Filter chip: h 24, full radius, text 12; selected = `selection` bg +

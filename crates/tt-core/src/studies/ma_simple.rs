@@ -1,7 +1,7 @@
 //! Moving Average Simple (SMA) and Moving Average Exponential (EMA).
 
 use super::meta::*;
-use super::{Placement, Source, Study, StudyKind, as_u32, ma};
+use super::{Placement, Source, Study, StudyKind, StudyState, as_u32, ma};
 use crate::CandleSeries;
 
 const INPUTS: &[InputDef] = &[length("length", "Length", 9), SOURCE];
@@ -34,11 +34,22 @@ pub(super) static EMA_META: StudyMeta = StudyMeta {
     bounds: None,
 };
 
-pub(super) fn sma(src: &CandleSeries, out: &mut [Vec<f64>], from: usize, len: u32, s: Source) {
+/// Checkpoint: the running window sum.
+pub(super) fn sma(
+    src: &CandleSeries,
+    out: &mut [Vec<f64>],
+    from: usize,
+    len: u32,
+    s: Source,
+    st: &mut StudyState,
+) {
     let n = src.len();
-    ma::sma(|i| s.value(src, i), len as usize, &mut out[0], from, n);
+    let (from, ck) = st.resume(from);
+    let ck = ma::sma_from(|i| s.value(src, i), len as usize, &mut out[0], from, n, ck);
+    st.save(n - 1, ck);
 }
 
+/// No checkpoint: the recursion reads the previous output.
 pub(super) fn ema(src: &CandleSeries, out: &mut [Vec<f64>], from: usize, len: u32, s: Source) {
     let n = src.len();
     ma::ema(|i| s.value(src, i), len as usize, &mut out[0], from, n);

@@ -7,21 +7,20 @@
 mod canvas;
 mod chart;
 mod drawing_menu;
+mod drawing_prefs;
 mod drawing_toolbar;
 pub mod motion;
 
 pub use canvas::{CanvasFonts, GpuiCanvas, hsla};
 pub use chart::{Chart, ChartEvent, ChartSource, ChartState, LayerStats, SeriesSource};
 pub use drawing_menu::DrawingClipboard;
+pub use drawing_prefs::{DrawingPrefs, TemplateTarget, prompt_template_name, template_menu};
 
-use std::borrow::Cow;
+/// Font family of the Lucide icon font: the kit's (ui-guidelines G1).
+pub use tt_ui::ICON_FONT;
 
-/// Font family of the Lucide icon font registered by [`init`].
-pub const ICON_FONT: &str = "lucide";
-
-/// Registers the fonts charts use (call once at startup).
+/// Registers the fonts charts use. Delegates to [`tt_ui::init`], which
+/// registers the icon font exactly once, so calling both is harmless.
 pub fn init(cx: &mut gpui_kit::App) {
-    cx.text_system()
-        .add_fonts(vec![Cow::Borrowed(lucide_icons::LUCIDE_FONT_BYTES)])
-        .expect("register the Lucide icon font");
+    tt_ui::init(cx);
 }

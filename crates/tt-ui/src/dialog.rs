@@ -306,6 +306,7 @@ type MenuBuilder = Rc<dyn Fn(Menu, &mut Window, &mut App) -> Menu>;
 pub struct TemplateMenu {
     rows: Vec<(SharedString, Handler)>,
     build: Option<MenuBuilder>,
+    label: Option<SharedString>,
 }
 
 impl TemplateMenu {
@@ -314,6 +315,7 @@ impl TemplateMenu {
         Self {
             rows: vec![("Apply defaults".into(), Rc::new(on_apply))],
             build: None,
+            label: None,
         }
     }
 
@@ -323,7 +325,15 @@ impl TemplateMenu {
         Self {
             rows: Vec::new(),
             build: Some(Rc::new(f)),
+            label: None,
         }
+    }
+
+    /// Trigger label (default "Template"; indicator settings use
+    /// TradingView's "Defaults").
+    pub fn label(mut self, label: impl Into<SharedString>) -> Self {
+        self.label = Some(label.into());
+        self
     }
 
     pub fn item(
@@ -424,7 +434,8 @@ impl RenderOnce for DialogFooter {
         };
         let left = self.template.map(|tm| {
             let (rows, build) = (tm.rows, tm.build);
-            ToolbarButton::text("dialog-template", "Template")
+            let label = tm.label.unwrap_or_else(|| "Template".into());
+            ToolbarButton::text("dialog-template", label)
                 .caret()
                 .menu(move |menu, w, cx| {
                     let mut menu = menu;

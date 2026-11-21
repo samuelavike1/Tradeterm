@@ -78,6 +78,8 @@ pub struct MenuRow {
     description: Option<SharedString>,
     shortcut: Option<SharedString>,
     checked: Option<bool>,
+    /// `checked` is an on/off setting: ✓ only, no `selection` background.
+    toggle: bool,
     favorite: Option<(bool, Handler)>,
     removable: Option<(SharedString, Handler)>,
     danger: bool,
@@ -95,6 +97,7 @@ impl MenuRow {
             description: None,
             shortcut: None,
             checked: None,
+            toggle: false,
             favorite: None,
             removable: None,
             danger: false,
@@ -121,6 +124,15 @@ impl MenuRow {
     /// row is checkable) and `selection` background.
     pub fn checked(mut self, on: bool) -> Self {
         self.checked = Some(on);
+        self
+    }
+
+    /// An on/off setting among others ("Invert scale"): a leading ✓ when
+    /// on, in the same column as [`MenuRow::checked`], but no `selection`
+    /// background (several can be on at once).
+    pub fn toggle(mut self, on: bool) -> Self {
+        self.checked = Some(on);
+        self.toggle = true;
         self
     }
 
@@ -213,6 +225,7 @@ impl MenuRow {
             t.hover
         };
         let current = self.checked == Some(true);
+        let current_bg = current && !self.toggle;
         let group = SharedString::from(format!("menu-row-{index}"));
         let interactive = !self.disabled;
         let keep_open = self.keep_open;
@@ -229,7 +242,7 @@ impl MenuRow {
             .rounded(px(R_MD))
             .text_size(px(TEXT_BODY))
             .text_color(hsla(fg))
-            .when(current, |d| d.bg(hsla(t.selection)))
+            .when(current_bg, |d| d.bg(hsla(t.selection)))
             .when(interactive && highlighted, |d| d.bg(hsla(hover_bg)))
             .when(interactive && nav.is_none(), |d| {
                 d.hover(|s| s.bg(hsla(hover_bg)))

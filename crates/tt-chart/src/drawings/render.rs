@@ -21,7 +21,7 @@ pub(crate) fn draw_base(c: &mut dyn Canvas, s: &Scene<'_>) {
         return;
     }
     for d in &ds.items {
-        if d.hidden {
+        if !ds.is_shown(d) {
             continue;
         }
         if let Some(pts) = ds.screen_of(d.id) {
@@ -50,7 +50,7 @@ pub(crate) fn axis_tags(s: &Scene<'_>) -> Vec<Tag> {
     }
     let pane = s.vp_rect();
     let mut tags = Vec::new();
-    for d in ds.items.iter().filter(|d| !d.hidden && tags_prices(d)) {
+    for d in ds.items.iter().filter(|d| ds.is_shown(d) && tags_prices(d)) {
         let n = if matches!(d.props, Props::Line(_)) {
             2
         } else {
@@ -90,7 +90,9 @@ pub(crate) fn draw_overlay(c: &mut dyn Canvas, s: &Scene<'_>) {
     c.set_clip(s.vp_rect());
     let hovered = ds.hovered.filter(|h| !ds.is_selected(*h));
     for &id in ds.selection().iter().chain(hovered.as_ref()) {
-        if let (Some(d), Some(pts)) = (ds.items.iter().find(|d| d.id == id), ds.screen_of(id)) {
+        if let (Some(d), Some(pts)) = (ds.items.iter().find(|d| d.id == id), ds.screen_of(id))
+            && ds.is_shown(d)
+        {
             lines::overlay_stats(c, s, d, pts);
             handles(c, s, d.tool, pts, d.color());
         }
@@ -103,7 +105,7 @@ pub(crate) fn draw_overlay(c: &mut dyn Canvas, s: &Scene<'_>) {
     }
     c.set_clip(s.full);
     // Time-axis tags of vertical and cross lines.
-    for d in ds.items.iter().filter(|d| !d.hidden) {
+    for d in ds.items.iter().filter(|d| ds.is_shown(d)) {
         let on = match &d.props {
             Props::VLine(p) => p.time_label,
             Props::Cross(p) => p.time_label,
@@ -149,7 +151,7 @@ fn time_tag(c: &mut dyn Canvas, s: &Scene<'_>, x: f32, time_ms: i64, bg: Color32
     let mut r = Align2::CENTER_CENTER.anchor_size(pos2(x, s.time_axis.center().y), sz);
     let dx = (s.plot.left() - r.left()).max(0.0) + (s.plot.right() - r.right()).min(0.0);
     r = r.translate(vec2(dx, 0.0));
-    c.fill_rounded_rect(r, 2.0, bg);
+    c.fill_rounded_rect(r, tt_theme::metrics::R_XS, bg);
     c.text(
         r.center(),
         Align2::CENTER_CENTER,
@@ -176,7 +178,7 @@ fn draw_one(c: &mut dyn Canvas, s: &Scene<'_>, d: &Drawing, pts: &[Pos2]) {
         TrendLine | Ray | ExtendedLine | InfoLine | TrendAngle | Arrow | HorizontalLine
         | HorizontalRay | VerticalLine | CrossLine => lines::draw(c, s, d, pts),
         ParallelChannel if pts.len() >= 3 => channel::draw(c, s, d, pts),
-        Rectangle if pts.len() >= 2 => shapes::rectangle(c, d, pts),
+        Rectangle if pts.len() >= 2 => shapes::rectangle(c, d, pts, s.vp_rect()),
         FibRetracement if pts.len() >= 2 => fib::draw(c, s, d, pts),
         FibExtension if pts.len() >= 3 => fib::draw(c, s, d, pts),
         PriceRange | DateRange | DateAndPriceRange if pts.len() >= 2 => measure::draw(c, s, d, pts),

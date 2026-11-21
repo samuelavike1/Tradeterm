@@ -1,7 +1,7 @@
 //! Volume: columns colored by bar direction, plus an optional MA.
 
 use super::meta::*;
-use super::{Placement, Study, StudyKind, as_u32, ma, split2};
+use super::{Placement, Study, StudyKind, StudyState, as_u32, ma};
 use crate::CandleSeries;
 
 const FALLING: Rgba = rgba(0xf7525f, 128);
@@ -59,12 +59,20 @@ pub(super) static META: StudyMeta = StudyMeta {
     bounds: None,
 };
 
-pub(super) fn compute(src: &CandleSeries, out: &mut [Vec<f64>], from: usize, ma_length: u32) {
+/// Checkpoint: the volume MA's running sum.
+pub(super) fn compute(
+    src: &CandleSeries,
+    out: &mut [Vec<f64>],
+    from: usize,
+    ma_length: u32,
+    st: &mut StudyState,
+) {
     let n = src.len();
     let v = src.volumes();
+    let (from, ck) = st.resume(from);
     out[0][from..n].copy_from_slice(&v[from..n]);
-    let (vol, avg) = split2(out);
-    ma::sma(|i| vol[i], ma_length as usize, avg, from, n);
+    let ck = ma::sma_from(|i| v[i], ma_length as usize, &mut out[1], from, n, ck);
+    st.save(n - 1, ck);
 }
 
 pub(super) fn get(s: &Study, id: &str) -> Option<InputValue> {

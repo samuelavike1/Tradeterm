@@ -7,7 +7,7 @@ use crate::style::Rgba;
 use ecolor::Color32;
 use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
-use tt_core::{CandleSeries, InputValue, Placement, PlotDef, Study, ValueFormat};
+use tt_core::{CandleSeries, InputValue, Placement, PlotDef, Study, StudyState, ValueFormat};
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -19,6 +19,8 @@ struct Cache {
     /// Last bar when computed: unchanged series ⇒ nothing to do.
     last: Option<tt_core::Candle>,
     outputs: Vec<Vec<f64>>,
+    /// Recursive state checkpointed at the last bar, so a tick resumes there.
+    state: StudyState,
 }
 
 #[derive(Debug, Clone)]
@@ -34,6 +36,9 @@ pub struct Indicator {
     pub pane_weight: f32,
     /// Its pane is collapsed to a strip with just the legend.
     pub pane_collapsed: bool,
+    /// Hidden on the chart's current interval by `style.visibility` (set by
+    /// the view each frame; not persisted).
+    interval_hidden: bool,
     cache: Cache,
 }
 
@@ -46,12 +51,37 @@ impl Indicator {
             style: IndicatorStyle::default(),
             pane_weight: 1.0,
             pane_collapsed: false,
+            interval_hidden: false,
             cache: Cache::default(),
         }
     }
 
     pub fn placement(&self) -> Placement {
         self.study.placement()
+    }
+
+    /// Applies the Visibility tab for interval `tf` (`None`: unknown, shown).
+    pub fn set_interval(&mut self, tf: Option<tt_core::Timeframe>) {
+        self.interval_hidden = tf.is_some_and(|tf| !self.style.visibility.shows(tf));
+    }
+
+    /// Hidden on the current interval by its visibility ranges.
+    #[inline]
+    pub fn interval_hidden(&self) -> bool {
+        self.interval_hidden
+    }
+
+    /// Drawn: its eye is on and the current interval is in its ranges.
+    #[inline]
+    pub fn shown(&self) -> bool {
+        self.visible && !self.interval_hidden
+    }
+
+    /// Has its own pane: a pane study that is not hidden on this interval
+    /// (an interval-hidden pane indicator gives its space back).
+    #[inline]
+    pub fn in_pane(&self) -> bool {
+        self.placement() == Placement::Pane && !self.interval_hidden
     }
 
     /// Definition of output `k`.
@@ -131,22 +161,24 @@ impl Indicator {
     }
 
     /// Brings outputs up to date with `src`: a full recompute after inputs
-    /// or history changed, otherwise only the last bar(s).
+    /// or history changed, otherwise only the last bar(s), resumed from the
+    /// checkpointed study state: O(1) or O(window) per tick for every study,
+    /// bit-identical to a full recompute, without allocating.
     pub fn sync(&mut self, src: &CandleSeries) {
         let c = &mut self.cache;
         let same_study = c.study.as_ref() == Some(&self.study);
         if same_study && c.version == src.version() && c.len == src.len() && c.last == src.last() {
             return;
         }
-        let full = !same_study
-            || c.version != src.version()
-            || src.len() < c.len
-            || self.study.recompute_fully();
+        let full = !same_study || c.version != src.version() || src.len() < c.len;
         // Otherwise only the previously last bar (it may have been updated)
         // and newly appended bars need computing.
         let from = if full { 0 } else { c.len.saturating_sub(1) };
-        self.study.compute(src, &mut c.outputs, from);
-        c.study = Some(self.study.clone());
+        self.study
+            .compute_with(src, &mut c.outputs, &mut c.state, from);
+        if !same_study {
+            c.study = Some(self.study.clone());
+        }
         c.version = src.version();
         c.len = src.len();
         c.last = src.last();
@@ -299,6 +331,41 @@ mod tests {
         s2.upsert(last);
         ind.sync(&s2);
         assert_ne!(ind.outputs()[0][49], -1.0, "a tick recomputes");
+    }
+
+    /// A live feed through `sync` (tail updates from the checkpoint) stays
+    /// bit-identical to a fresh indicator's full compute, for every study.
+    #[test]
+    fn live_ticks_match_a_full_recompute() {
+        for kind in StudyKind::ALL {
+            let mut s = series(80);
+            let mut ind = Indicator::new(kind.default_study());
+            ind.sync(&s);
+            for step in 0..60 {
+                let mut c = s.last().unwrap();
+                if step % 5 == 4 {
+                    c.open_time_ms += 60_000;
+                    c.open = c.close;
+                }
+                c.close += ((step * 7 % 11) as f64 - 5.0) * 0.37;
+                c.high = c.high.max(c.close);
+                c.low = c.low.min(c.close);
+                c.volume += 1.5;
+                s.upsert(c);
+                ind.sync(&s);
+                let mut fresh = Indicator::new(kind.default_study());
+                fresh.sync(&s);
+                for (k, (a, b)) in ind.outputs().iter().zip(fresh.outputs()).enumerate() {
+                    assert_eq!(a.len(), b.len());
+                    for (i, (x, y)) in a.iter().zip(b).enumerate() {
+                        assert!(
+                            x.to_bits() == y.to_bits() || (x.is_nan() && y.is_nan()),
+                            "{kind:?} step {step} output {k} bar {i}: {x} vs {y}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     /// Style edits only repaint: they never invalidate the outputs.

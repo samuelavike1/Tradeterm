@@ -1,0 +1,28 @@
+{
+  "theme_mode": "Dark",
+  "tabs": [
+    {
+      "symbol": "BTCUSDT",
+      "timeframe": "15m",
+      "chart_type": "Candles",
+      "indicators": [{ "study": { "type": "Sma", "length": 20, "source": "Close" }, "visible": true }]
+    }
+  ],
+  "chart_style": {
+    "version": 2,
+    "scales": {
+      "currency_label": "always",
+      "symbol_label": "name_value_line",
+      "symbol_value_mode": "price_and_percent",
+      "price_line_width": 2.0,
+      "price_line_color": "#f5a623",
+      "prev_close": { "label": true, "line": true, "color": null, "width": 1.0 },
+      "high_low": { "label": true, "line": true, "color": "#26a69a", "width": 1.0 },
+      "avg_close": { "label": true, "line": true, "color": "#ab47bc", "width": 1.0 },
+      "indicators": "name_value",
+      "day_of_week": false,
+      "date_format": "iso",
+      "hours_format": "h12"
+    }
+  }
+}
