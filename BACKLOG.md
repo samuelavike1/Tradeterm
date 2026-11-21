@@ -55,6 +55,16 @@ Add to this list whenever something is skipped; remove an entry when it lands.
 - Remember magnet / keep drawing / lock / hide across restarts.
 - Flyout menus open centered on their button (TradingView aligns their top).
 - Object tree (list of drawings and indicators).
+- Floating drawing toolbar "Add alert" button (TradingView's clock-plus
+  between settings and lock): needs the alert engine (see the app bar's
+  "Create alert").
+- Ticks and Ranges visibility rows only persist: tradeterm has no tick or
+  range-based charts yet.
+- TradingView-measured settings dialog layout (docs/specs/ui-guidelines.md
+  §2.10): only the horizontal ray and horizontal line use it so far; the
+  other tools opt in through `form::dialog_layout`.
+- Palette popover "+" (custom color) and an editable opacity percent: the
+  palette has swatches and an opacity slider only.
 
 ## Chart types
 - Kagi, Point & figure.

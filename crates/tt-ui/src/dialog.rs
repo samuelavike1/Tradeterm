@@ -600,8 +600,10 @@ impl DialogFooter {
 }
 
 impl RenderOnce for DialogFooter {
-    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let comfortable = self.comfortable;
+        // TradingView's Cancel: a 1 px `text` outline.
+        let cancel_border = hsla(cx.ui().text);
         let footer_button = move |b: Button| {
             if comfortable {
                 b.with_size(Size::Size(px(C_CONTROL)))
@@ -645,14 +647,14 @@ impl RenderOnce for DialogFooter {
         });
         let cancel = self.cancel.map(|label| {
             let f = self.on_cancel.clone();
-            footer_button(Button::new("dialog-cancel").outline().label(label)).on_click(
-                move |_, window, cx| {
+            footer_button(Button::new("dialog-cancel").outline().label(label))
+                .when(comfortable, |b| b.border_color(cancel_border))
+                .on_click(move |_, window, cx| {
                     if let Some(f) = &f {
                         f(window, cx);
                     }
                     window.close_dialog(cx);
-                },
-            )
+                })
         });
         let ok = self.ok.map(|label| {
             let f = self.on_ok.clone();
