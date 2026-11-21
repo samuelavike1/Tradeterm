@@ -209,23 +209,25 @@ impl ChartSettingsPanel {
         rows.push(Self::row("Lines").control(lines).into_any_element());
 
         rows.push(section("Buttons"));
-        let nav = self.select(
-            "cv.nav_buttons",
-            ButtonsVisibility::ALL.iter().map(|v| (*v, v.label())),
-            cv.nav_buttons,
-            |s, v| s.canvas.nav_buttons = v,
-            cx,
-        )
-        .width(W_SELECT_WIDE);
+        let nav = self
+            .select(
+                "cv.nav_buttons",
+                ButtonsVisibility::ALL.iter().map(|v| (*v, v.label())),
+                cv.nav_buttons,
+                |s, v| s.canvas.nav_buttons = v,
+                cx,
+            )
+            .width(W_SELECT_WIDE);
         rows.push(Self::row("Navigation").control(nav).into_any_element());
-        let pane = self.select(
-            "cv.pane_buttons",
-            ButtonsVisibility::ALL.iter().map(|v| (*v, v.label())),
-            cv.pane_buttons,
-            |s, v| s.canvas.pane_buttons = v,
-            cx,
-        )
-        .width(W_SELECT_WIDE);
+        let pane = self
+            .select(
+                "cv.pane_buttons",
+                ButtonsVisibility::ALL.iter().map(|v| (*v, v.label())),
+                cv.pane_buttons,
+                |s, v| s.canvas.pane_buttons = v,
+                cx,
+            )
+            .width(W_SELECT_WIDE);
         rows.push(Self::row("Pane").control(pane).into_any_element());
 
         rows.push(section("Margins"));

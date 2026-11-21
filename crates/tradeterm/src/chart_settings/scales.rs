@@ -77,27 +77,29 @@ impl ChartSettingsPanel {
     pub(super) fn scales_page(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Rows {
         let sc = self.draft.scales;
         let mut rows = vec![section("Price scale")];
-        let sel = self.select(
-            "sc.currency",
-            Visibility3::ALL.map(visibility),
-            sc.currency_label,
-            |s, v| s.scales.currency_label = v,
-            cx,
-        )
-        .width(W_SELECT_WIDE);
+        let sel = self
+            .select(
+                "sc.currency",
+                Visibility3::ALL.map(visibility),
+                sc.currency_label,
+                |s, v| s.scales.currency_label = v,
+                cx,
+            )
+            .width(W_SELECT_WIDE);
         rows.push(
             Self::row("Currency and unit")
                 .control(sel)
                 .into_any_element(),
         );
-        let sel = self.select(
-            "sc.buttons",
-            Visibility3::ALL.map(visibility),
-            sc.scale_buttons,
-            |s, v| s.scales.scale_buttons = v,
-            cx,
-        )
-        .width(W_SELECT_WIDE);
+        let sel = self
+            .select(
+                "sc.buttons",
+                Visibility3::ALL.map(visibility),
+                sc.scale_buttons,
+                |s, v| s.scales.scale_buttons = v,
+                cx,
+            )
+            .width(W_SELECT_WIDE);
         rows.push(
             Self::row("Scale modes (A and L)")
                 .control(sel)

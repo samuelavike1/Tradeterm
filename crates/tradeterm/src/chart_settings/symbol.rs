@@ -596,7 +596,19 @@ impl ChartSettingsPanel {
         type Get = fn(&BrickColors) -> ColorSlot;
         type Set = fn(&mut BrickColors, ColorSlot);
         type Default = fn(Bricks, &ChartStyle, &Theme) -> Color32;
-        let rows_spec: [(&str, &str, Get, Set, Default, &str, Get, Set, Default); 4] = [
+        /// (label, fill id, get, set, default, border id, get, set, default)
+        type Spec = (
+            &'static str,
+            &'static str,
+            Get,
+            Set,
+            Default,
+            &'static str,
+            Get,
+            Set,
+            Default,
+        );
+        let rows_spec: [Spec; 4] = [
             (
                 "Up bars",
                 "up",
