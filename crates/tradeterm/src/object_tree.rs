@@ -301,6 +301,7 @@ impl ObjectTreePanel {
                                 )
                                 .on_click(cx.listener(
                                     move |this, _, _, cx| {
+                                        cx.stop_propagation();
                                         this.edit(false, cx, move |v| {
                                             if let Some(i) = v.indicator_mut(id) {
                                                 i.visible = !i.visible;
@@ -320,6 +321,7 @@ impl ObjectTreePanel {
                                 )
                                 .on_click(cx.listener(
                                     move |this, _, _, cx| {
+                                        cx.stop_propagation();
                                         this.edit(false, cx, move |v| {
                                             v.remove_indicator(id);
                                             true
@@ -392,6 +394,7 @@ impl ObjectTreePanel {
                                     )
                                     .on_click(cx.listener(
                                         move |this, _, _, cx| {
+                                            cx.stop_propagation();
                                             this.edit(true, cx, move |v| {
                                                 v.drawings
                                                     .edit_drawing(id, |d| d.locked = !d.locked)
@@ -413,6 +416,7 @@ impl ObjectTreePanel {
                                     )
                                     .on_click(cx.listener(
                                         move |this, _, _, cx| {
+                                            cx.stop_propagation();
                                             this.edit(true, cx, move |v| {
                                                 v.drawings
                                                     .edit_drawing(id, |d| d.hidden = !d.hidden)
@@ -430,6 +434,7 @@ impl ObjectTreePanel {
                                     )
                                     .on_click(cx.listener(
                                         move |this, _, _, cx| {
+                                            cx.stop_propagation();
                                             this.edit(true, cx, move |v| {
                                                 v.drawings.remove_drawing(id)
                                             })

@@ -50,3 +50,12 @@ Icons (TradingView's shapes, drawn again in our style by `scripts/icons/gen.py`)
 ## 5. Alerts mount point
 
 The alerts panel is built separately (`crates/tradeterm/src/alerts_panel.rs`, `pub struct AlertsPanel` with `pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self` and `impl Render`). The sidebar creates it lazily the first time the Alerts button opens and keeps the entity; it renders it full-size in the panel area. Until the alerts work lands, a stub with the same contract shows an empty state.
+
+## 6. tradeterm implementation
+
+Screenshots (release build, temp settings `scripts/rightpanel/settings.json`, captured by `scripts/rightpanel/shot.ps1`): `img/rightpanel-*-dark.png`, `img/rightpanel-*-light.png`.
+
+- `crates/tradeterm/src/right_sidebar.rs`: the strip and the panel frame (resize grip on the left edge, open panel and width saved as `right_panel` in the settings). Panels render as cached views; the app wakes them through `SidebarViews` (`App::notify` by entity id, no lease): `changed` from `persist()` (any chart / tab / theme edit), `ticked` from the market-data drain.
+- `crates/tradeterm/src/watchlist_panel.rs` + `crates/tt-session/src/watchlist.rs` (model, tolerant loading, sort, sections) + `crates/tt-session/src/quotes.rs` and `crates/tt-brokers/src/binance/ticker.rs` (REST 24 h snapshot, then the combined `<symbol>@miniTicker` stream; one task for the current list, only while the watchlist is open; repaints coalesced to at most one per 150 ms). A tab showing the symbol supplies the last price (its own stream).
+- `crates/tradeterm/src/object_tree.rs`, `crates/tradeterm/src/data_window.rs`: tree rows from `tree_nodes` (series, price-pane indicators, pane indicators, drawings top first), drawing edits through new undoable `Drawings::edit_drawing / remove_drawing / move_drawing`. The data window reads `ChartState::crosshair()` and `ChartView::bar_at_x`; the chart notifies `ChartState::crosshair_listener` only when the crosshair changes bar slot.
+- Differences from TradingView: no flags, notes, compare, share / upload, advanced view, news; no object-tree groups, clone or "move to"; the details block shows the 24 h stats Binance gives (high, low, base and quote volume) instead of TradingView's key facts; Chg / Chg% are 24 h rolling (Binance), like our tab strip.

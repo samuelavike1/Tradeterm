@@ -81,8 +81,9 @@ impl Watchlist {
         self.items.iter().filter_map(WatchItem::symbol_str)
     }
 
-    /// Appends `symbol` (at the end, or at the end of the section holding
-    /// row `after`); `false` if it is already in the list or invalid.
+    /// Inserts `item` after row `after` (at the end without one); `false`
+    /// if it is already in the list or invalid. A collapsed section it
+    /// lands in opens, so the new row shows.
     pub fn add_symbol(&mut self, item: WatchItem, after: Option<usize>) -> bool {
         let Some(sym) = item.symbol_str() else {
             return false;
@@ -95,6 +96,11 @@ impl Watchlist {
             _ => self.items.len(),
         };
         self.items.insert(at, item);
+        if let Some(WatchItem::Section { collapsed, .. }) =
+            self.items[..at].iter_mut().rev().find(|i| i.is_section())
+        {
+            *collapsed = false;
+        }
         true
     }
 
@@ -584,6 +590,11 @@ mod tests {
         assert!(l.items[1].is_section());
         assert!(l.remove(1).unwrap().is_section());
         assert!(l.remove(9).is_none());
+        // Adding into a collapsed section opens it.
+        l.add_section(None, "Closed");
+        l.toggle_section(3);
+        assert!(l.add_symbol(WatchItem::symbol("DDDUSDT", "", ""), None));
+        assert_eq!(l.items[3], WatchItem::section("Closed"));
     }
 
     #[test]
