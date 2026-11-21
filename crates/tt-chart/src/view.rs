@@ -255,6 +255,14 @@ pub struct ChartView {
     /// `canvas.margins.right` the offset was last adjusted for, so a changed
     /// margin moves the view live.
     applied_right_margin: f32,
+    /// Range button / Go to target, re-applied each frame until its bars
+    /// are loaded (see [`Self::show_target`]).
+    target: Option<crate::range::ViewTarget>,
+    /// The range button whose span is on screen (highlighted).
+    active_range: Option<crate::range::DateRange>,
+    /// (spacing, offset) the target left; any other value means the user
+    /// zoomed or scrolled, which drops the target and the highlight.
+    target_view: Option<(f32, f32)>,
     /// Ticker, currency and description for labels and the watermark.
     labels: SymbolLabels,
     /// Alert levels of this symbol (set by the app, not saved), see
@@ -298,6 +306,9 @@ impl ChartView {
             pending_zoom: None,
             pending_left_edge: None,
             applied_right_margin: DEFAULT_RIGHT_OFFSET,
+            target: None,
+            active_range: None,
+            target_view: None,
             labels: SymbolLabels::default(),
             tz: crate::TzOffsets::utc(),
             alert_lines: Vec::new(),
@@ -374,6 +385,16 @@ impl ChartView {
         SlotTimes::new(display.open_times(), fr.bar_interval_ms).time_at_frac(slot)
     }
 
+    /// Times at the left and right edges of the last frame (`None` before
+    /// one): the Go to dialog's Custom range defaults.
+    pub fn visible_time_range(&self, series: &CandleSeries) -> Option<(i64, i64)> {
+        let fr = self.frame.as_ref()?;
+        let display = self.derived.series(self.chart_type).unwrap_or(series);
+        let slots = SlotTimes::new(display.open_times(), fr.bar_interval_ms);
+        let at = |x: f32| slots.time_at_frac(fr.vp.index_at(x) as f64 + 0.5);
+        Some((at(fr.vp.plot.left)?, at(fr.vp.plot.right)?))
+    }
+
     /// The slots of the last frame's x axis (`None` before one).
     fn frame_slots<'a>(&'a self, series: &'a CandleSeries) -> Option<SlotTimes<'a>> {
         let fr = self.frame.as_ref()?;
@@ -419,6 +440,7 @@ impl ChartView {
 
     /// Default zoom, scrolled to the latest bar, auto-fit price axis.
     pub fn reset_view(&mut self) {
+        self.drop_target();
         self.bar_spacing = DEFAULT_SPACING;
         self.right_offset = self.style.canvas.margins.right;
         self.applied_right_margin = self.style.canvas.margins.right;
@@ -970,6 +992,13 @@ impl ChartView {
         let pane_rects = self.pane_rects(plot);
         let price_rect = pane_rects[0];
 
+        // Zoomed or scrolled since the target was applied: it is done.
+        if self
+            .target_view
+            .is_some_and(|v| v != (self.bar_spacing, self.right_offset))
+        {
+            self.drop_target();
+        }
         if let Some(bars) = self.pending_zoom
             && n > 0
         {
@@ -995,7 +1024,11 @@ impl ChartView {
             // Slot `slot` at the left edge (not before the first bar).
             self.right_offset = slot.max(0.0) as f32 + plot.width() / self.bar_spacing - n as f32;
         }
+        let target_loading = n > 0 && self.apply_target(display, interval, plot.width());
         self.clamp_offset(plot, n);
+        if self.target.is_some() || self.active_range.is_some() {
+            self.target_view = Some((self.bar_spacing, self.right_offset));
+        }
 
         // ---- bars to draw ---------------------------------------------------
         let lod_kind = match self.chart_type {
@@ -1172,13 +1205,14 @@ impl ChartView {
             draw_time: started.elapsed(),
         };
         RenderOutput {
-            needs_older_history: n > 0
-                && range.start < BACKFILL_MARGIN_BARS
+            needs_older_history: target_loading
+                || (n > 0
+                    && range.start < BACKFILL_MARGIN_BARS
                 // Brick charts compress many bars into few bricks, so the oldest
                 // brick is usually on screen; only load more once the user has
                 // scrolled back, or every view would page through all history.
                 && (!matches!(self.chart_type, ChartType::Renko | ChartType::LineBreak)
-                    || self.right_offset < 0.0),
+                    || self.right_offset < 0.0)),
         }
     }
 
@@ -1320,6 +1354,93 @@ impl ChartView {
         let dist = plot_right - anchor_x;
         self.right_offset += dist / new_spacing - dist / self.bar_spacing;
         self.bar_spacing = new_spacing;
+    }
+}
+
+/// Range buttons and Go to (docs/specs/bottom-panel.md).
+impl ChartView {
+    /// Scrolls / zooms to `target` on the next frames, re-applied as older
+    /// history arrives (the render asks for it via
+    /// [`RenderOutput::needs_older_history`]) until the target's start is
+    /// loaded or [`Self::settle_target`] is called. `range` is the button
+    /// to highlight until the user zooms, scrolls or changes the interval.
+    pub fn show_target(
+        &mut self,
+        target: crate::range::ViewTarget,
+        range: Option<crate::range::DateRange>,
+    ) {
+        self.target = Some(target);
+        self.active_range = range;
+        self.target_view = None;
+        self.pending_zoom = None;
+        self.pending_left_edge = None;
+        self.manual_range = None;
+    }
+
+    /// The range button whose span is on screen.
+    pub fn active_range(&self) -> Option<crate::range::DateRange> {
+        self.active_range
+    }
+
+    /// A target is still waiting for older bars.
+    pub fn target_pending(&self) -> bool {
+        self.target.is_some()
+    }
+
+    /// No more history will come (the venue has none, or the bar cap is
+    /// reached): keep the view as last applied.
+    pub fn settle_target(&mut self) {
+        self.target = None;
+    }
+
+    fn drop_target(&mut self) {
+        self.target = None;
+        self.active_range = None;
+        self.target_view = None;
+    }
+
+    /// Applies the target to `display`; returns true while its start is
+    /// older than the first loaded bar (more history needed).
+    fn apply_target(&mut self, display: &CandleSeries, interval: i64, plot_w: f32) -> bool {
+        use crate::range::{ViewTarget, center_offset, fit_span};
+        let Some(target) = self.target else {
+            return false;
+        };
+        let times = display.open_times();
+        let (Some(&first), Some(&last)) = (times.first(), times.last()) else {
+            return false;
+        };
+        let slots = SlotTimes::new(times, interval);
+        let n = times.len();
+        let end = last + interval;
+        // (from, to) of a span, or the date to center.
+        let (from, to) = match target {
+            ViewTarget::Range(r) => (r.start(end, &self.tz), end),
+            ViewTarget::Span { from, to } => (Some(from.min(to)), from.max(to)),
+            ViewTarget::Date(t) => {
+                let slot = slots.slot_of(t).unwrap_or(0.0).max(0.0);
+                self.right_offset = center_offset(slot, n, plot_w, self.bar_spacing);
+                self.manual_range = None;
+                return self.target_needs_history(t < first);
+            }
+        };
+        let slot_from = from.and_then(|f| slots.slot_of(f)).unwrap_or(0.0).max(0.0);
+        let slot_to = slots.slot_of(to).unwrap_or(n as f64);
+        let (spacing, offset) = fit_span(slot_from, slot_to, n, plot_w, MIN_SPACING, MAX_SPACING);
+        self.bar_spacing = spacing;
+        self.right_offset = offset;
+        self.manual_range = None;
+        // All: until the venue has nothing older.
+        self.target_needs_history(from.is_none_or(|f| f < first))
+    }
+
+    /// Keeps the target while history is missing, else drops it (the
+    /// highlight stays).
+    fn target_needs_history(&mut self, missing: bool) -> bool {
+        if !missing {
+            self.target = None;
+        }
+        missing
     }
 }
 
@@ -1767,5 +1888,79 @@ mod tests {
         v.timeframe = None;
         v.render_base(&mut Texts::default(), full, 1.0, data, &theme);
         assert!(v.indicators.iter().all(|i| i.shown()));
+    }
+
+    #[test]
+    fn range_target_fits_waits_for_history_and_clears_on_pan() {
+        use crate::range::{DateRange, ViewTarget};
+        const DAY: i64 = 86_400_000;
+        // Daily bars for 2026-01-01 + 300 days.
+        let start = tt_core::days_from_civil(2026, 1, 1) * DAY;
+        let bars = |from: i64, n: i64| {
+            let mut s = CandleSeries::new();
+            for i in 0..n {
+                s.upsert(tt_core::Candle {
+                    open_time_ms: start + (from + i) * DAY,
+                    open: 100.0,
+                    high: 101.0,
+                    low: 99.0,
+                    close: 100.0,
+                    volume: 1.0,
+                });
+            }
+            s
+        };
+        let theme = Theme::dark();
+        let full = Rect::from_min_size(pos2(0.0, 0.0), emath::vec2(900.0, 600.0));
+        let render = |v: &mut ChartView, s: &CandleSeries| {
+            let data = ChartData {
+                series: s,
+                title: "T",
+                tick_size: Some(0.01),
+                now_ms: None,
+                bar_interval_ms: Some(DAY),
+                bar_close_ms: None,
+            };
+            v.render_base(&mut Texts::default(), full, 1.0, data, &theme)
+        };
+        let all = bars(0, 300);
+        let mut v = ChartView::default();
+        render(&mut v, &all);
+
+        // YTD: 1 January to the newest close fills the plot.
+        v.show_target(ViewTarget::Range(DateRange::Ytd), Some(DateRange::Ytd));
+        render(&mut v, &all);
+        let w = v.last_layout().plot.width();
+        assert!((v.bar_spacing - w / 300.0).abs() < 1e-3);
+        assert_eq!(v.right_offset, 0.0);
+        assert!(!v.target_pending(), "all of it is loaded");
+        assert_eq!(v.active_range(), Some(DateRange::Ytd));
+        // Live: a new bar keeps the highlight.
+        render(&mut v, &bars(0, 301));
+        assert_eq!(v.active_range(), Some(DateRange::Ytd));
+
+        // Only the last 100 days loaded: fit what is there, ask for more.
+        let recent = bars(200, 100);
+        v.show_target(ViewTarget::Range(DateRange::Ytd), Some(DateRange::Ytd));
+        let out = render(&mut v, &recent);
+        assert!(out.needs_older_history && v.target_pending());
+        // The older page arrives: re-fitted to the full span.
+        render(&mut v, &all);
+        assert!(!v.target_pending());
+        assert!((v.bar_spacing - w / 300.0).abs() < 1e-3);
+
+        // Scrolling drops the highlight.
+        v.pan(40.0);
+        render(&mut v, &all);
+        assert_eq!(v.active_range(), None);
+
+        // Go to a date: that bar in the middle, zoom kept.
+        let spacing = v.bar_spacing;
+        v.show_target(ViewTarget::Date(start + 150 * DAY + DAY / 2), None);
+        render(&mut v, &all);
+        assert_eq!(v.bar_spacing, spacing);
+        let mid = (v.last_layout().plot.left() + v.last_layout().plot.right()) / 2.0;
+        let frame = v.frame.as_ref().unwrap();
+        assert!((frame.vp.index_at(mid) - 150.0).abs() < 0.6);
     }
 }

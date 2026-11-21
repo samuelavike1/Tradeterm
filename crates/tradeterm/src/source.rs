@@ -85,5 +85,14 @@ impl ChartSource for TabSource {
         if out.needs_older_history {
             self.tab.request_backfill(&self.shared);
         }
+        // A range / Go to target waiting for history that will not come.
+        let tab = &mut self.tab;
+        if tab.chart.target_pending()
+            && (tab.synthetic.is_some()
+                || tab.backfill.exhausted
+                || tab.series.len() >= tt_session::tab::MAX_HISTORY_BARS)
+        {
+            tab.chart.settle_target();
+        }
     }
 }

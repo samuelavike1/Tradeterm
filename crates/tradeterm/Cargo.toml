@@ -6,6 +6,7 @@ license.workspace = true
 description = "tradeterm: native desktop charting (gpui / gpui-component)."
 
 [dependencies]
+chrono = { version = "0.4.45", default-features = false }
 ecolor = "0.37.0"
 emath = "0.37.0"
 futures = "0.3.34"

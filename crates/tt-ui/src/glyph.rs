@@ -127,6 +127,8 @@ impl Glyph {
     pub const CHART_AREA: Glyph = Glyph::Svg("tt-icons/chart-area.svg");
     pub const CHART_HLC_AREA: Glyph = Glyph::Svg("tt-icons/chart-hlc-area.svg");
     pub const CHART_BASELINE: Glyph = Glyph::Svg("tt-icons/chart-baseline.svg");
+    /// The bottom toolbar's Go to (calendar with an arrow).
+    pub const GO_TO_DATE: Glyph = Glyph::Svg("tt-icons/go-to-date.svg");
     pub const CHART_COLUMNS: Glyph = Glyph::Svg("tt-icons/chart-columns.svg");
     pub const CHART_HIGH_LOW: Glyph = Glyph::Svg("tt-icons/chart-high-low.svg");
     pub const CHART_HEIKIN_ASHI: Glyph = Glyph::Svg("tt-icons/chart-heikin-ashi.svg");
@@ -163,7 +165,7 @@ impl Glyph {
     pub const ALARM_PLUS: Glyph = Glyph::Svg("tt-icons/alarm-clock-plus.svg");
 
     /// Every SVG glyph with a name (gallery contact sheet).
-    pub const SVG_SET: [(&'static str, Glyph); 42] = [
+    pub const SVG_SET: [(&'static str, Glyph); 43] = [
         ("Bars", Glyph::CHART_BARS),
         ("Candles", Glyph::CHART_CANDLES),
         ("Hollow candles", Glyph::CHART_HOLLOW_CANDLES),
@@ -206,6 +208,7 @@ impl Glyph {
         ("Remove", Glyph::DRAW_TRASH),
         ("Alert", Glyph::ALARM),
         ("Add alert", Glyph::ALARM_PLUS),
+        ("Go to", Glyph::GO_TO_DATE),
     ];
 
     /// The font character (`None` for [`Glyph::StarFilled`] and SVGs).

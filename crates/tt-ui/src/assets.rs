@@ -72,6 +72,7 @@ icons!(
     "draw-trash",
     "alarm-clock",
     "alarm-clock-plus",
+    "go-to-date",
 );
 
 /// Our icons plus gpui-kit's default asset bundle.

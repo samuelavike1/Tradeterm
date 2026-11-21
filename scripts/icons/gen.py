@@ -234,6 +234,16 @@ ICONS["draw-trash"] = [
     path("M8.5 8.5L9.5 23.5H19.5L20.5 8.5M12.5 12V20M16.5 12V20"),
 ]
 
+# ---- bottom toolbar ----------------------------------------------------------
+
+# Go to: a calendar open at the lower left, an arrow entering it
+# (TradingView's go-to-date icon, drawn in our stroke).
+ICONS["go-to-date"] = [
+    path("M5.5 13.5V8.5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H14.5"),
+    path("M5.5 10.5H22.5M10.5 4.5V8.5M17.5 4.5V8.5"),
+    path("M4.5 18.5H11.5M8.5 15.5L11.5 18.5L8.5 21.5"),
+]
+
 
 def main():
     os.makedirs(OUT, exist_ok=True)
