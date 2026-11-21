@@ -855,8 +855,10 @@ mod tests {
             assert_eq!(t.effective_style(&old.chart_style), &old.chart_style);
         }
         // Tabs following the default write no `style` key.
-        let json = serde_json::to_string(&old).unwrap();
-        assert!(!json.contains(r#""style""#), "{json}");
+        let json = serde_json::to_value(&old).unwrap();
+        for tab in json["tabs"].as_array().unwrap() {
+            assert!(tab.get("style").is_none(), "{tab}");
+        }
 
         // A tab with its own style keeps it through a round trip; the other
         // tab still follows the default.
