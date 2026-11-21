@@ -15,10 +15,13 @@ use gpui_kit::*;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 use tt_chart::{
-    ChartData, ChartHit, ChartView, DrawingPress, Mods, RenderInput, Repaint, ScaleMode,
+    ChartData, ChartHit, ChartView, DrawingPress, LegendButton, Mods, RenderInput, Repaint,
+    ScaleMode,
 };
 use tt_core::CandleSeries;
 use tt_theme::Theme;
+use tt_ui::tokens::*;
+use tt_ui::{ActiveUiTheme as _, ControlSize, Glyph, IconButton, Menu, MenuRow, hsla};
 
 /// Paint counters of one layer (for performance overlays and benches).
 #[derive(Debug, Clone, Copy, Default)]
@@ -86,6 +89,7 @@ pub struct ChartState<S: ChartSource> {
     pub fonts: CanvasFonts,
     pointer: Option<Pos2>,
     legend_hover: Option<u64>,
+    legend_hover_button: Option<(u64, LegendButton)>,
     pub base_stats: LayerStats,
     pub overlay_stats: LayerStats,
 }
@@ -98,6 +102,7 @@ impl<S: ChartSource> ChartState<S> {
             fonts: CanvasFonts::default(),
             pointer: None,
             legend_hover: None,
+            legend_hover_button: None,
             base_stats: LayerStats::default(),
             overlay_stats: LayerStats::default(),
         }
@@ -117,6 +122,7 @@ impl<S: ChartSource> ChartState<S> {
             let input = RenderInput {
                 crosshair: self.pointer,
                 legend_hover: self.legend_hover,
+                legend_hover_button: self.legend_hover_button,
             };
             view.render_overlay(&mut canvas, data, &theme, input);
             None
@@ -216,6 +222,12 @@ pub struct Chart<S: ChartSource> {
     /// Pane under the pointer (index into the layout's panes): shows its
     /// move / delete / collapse / maximize buttons.
     hover_pane: Option<usize>,
+    /// The pane whose buttons were last shown (index, id), kept while they
+    /// fade out (ui-guidelines G12).
+    last_pane: Option<(usize, u64)>,
+    /// Legend button under the pointer and its rect: a tooltip hit area
+    /// over the canvas-drawn button (L3).
+    legend_tip: Option<(u64, LegendButton, Rect)>,
     last_frame: Option<Instant>,
     /// What the last right-click was on (the drawing context menu reads it).
     pub(crate) menu_target: tt_chart::DrawingMenuTarget,
@@ -267,6 +279,8 @@ impl<S: ChartSource> Chart<S> {
             last_frame: None,
             axis_hover: false,
             hover_pane: None,
+            last_pane: None,
+            legend_tip: None,
             menu_target: tt_chart::DrawingMenuTarget::None,
         }
     }
@@ -286,15 +300,17 @@ impl<S: ChartSource> Chart<S> {
 
     /// Moves the crosshair; repaints only the overlay.
     pub fn set_pointer(&self, pointer: Option<Pos2>, cx: &mut App) {
-        let legend_hover =
-            pointer.and_then(|p| match self.state.read(cx).source.view().hit_test(p) {
-                ChartHit::LegendRow(id) | ChartHit::LegendButton(id, _) => Some(id),
-                _ => None,
-            });
+        let hit = pointer.map(|p| self.state.read(cx).source.view().hit_test(p));
+        let (legend_hover, legend_hover_button) = match hit {
+            Some(ChartHit::LegendRow(id)) => (Some(id), None),
+            Some(ChartHit::LegendButton(id, b)) => (Some(id), Some((id, b))),
+            _ => (None, None),
+        };
         self.state.update(cx, |s, _| {
             // No crosshair over the legend, like TradingView.
             s.pointer = pointer.filter(|_| legend_hover.is_none());
             s.legend_hover = legend_hover;
+            s.legend_hover_button = legend_hover_button;
         });
         self.overlay.update(cx, |_, cx| cx.notify());
     }
@@ -395,6 +411,9 @@ impl<S: ChartSource> Chart<S> {
         }
         match hit {
             ChartHit::LegendButton(id, button) => {
+                // The row changes under the pointer: no stale tooltip.
+                self.legend_tip = None;
+                cx.notify();
                 if let Some(id) = self.view_mut(cx, |v| v.press_legend(id, button)) {
                     cx.emit(ChartEvent::OpenIndicatorSettings(id));
                 } else {
@@ -448,14 +467,15 @@ impl<S: ChartSource> Chart<S> {
         self.repaint(r, cx);
         let view = self.state.read(cx).source.view();
         let ds = &view.drawings;
-        let cursor = if (ds.tool.is_some() && view.hit_test(p) == ChartHit::Plot) || ds.banding() {
+        let hit = view.hit_test(p);
+        let cursor = if (ds.tool.is_some() && hit == ChartHit::Plot) || ds.banding() {
             CursorStyle::Crosshair
         } else if ds.busy() {
             CursorStyle::ClosedHand
         } else if ds.hovered.is_some() {
             CursorStyle::PointingHand
         } else {
-            cursor_for(view.hit_test(p))
+            cursor_for(hit)
         };
         let l = view.last_layout();
         let axis_hover = l.price_axis.x_range().contains(p.x)
@@ -464,10 +484,19 @@ impl<S: ChartSource> Chart<S> {
         let hover_pane = (p.x >= l.plot.left() && p.x <= l.price_axis.right())
             .then(|| l.panes.iter().position(|r| r.y_range().contains(p.y)))
             .flatten();
-        if cursor != self.cursor || axis_hover != self.axis_hover || hover_pane != self.hover_pane {
+        let legend_tip = match hit {
+            ChartHit::LegendButton(id, b) => view.legend_button_rect(id, b).map(|r| (id, b, r)),
+            _ => None,
+        };
+        if cursor != self.cursor
+            || axis_hover != self.axis_hover
+            || hover_pane != self.hover_pane
+            || legend_tip != self.legend_tip
+        {
             self.cursor = cursor;
             self.axis_hover = axis_hover;
             self.hover_pane = hover_pane;
+            self.legend_tip = legend_tip;
             cx.notify();
         }
         self.set_pointer(Some(p), cx);
@@ -575,9 +604,10 @@ impl<S: ChartSource> Render for Chart<S> {
             .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
                 if !*hovered && this.drag.is_none() {
                     this.set_pointer(None, cx);
-                    if this.axis_hover || this.hover_pane.is_some() {
+                    if this.axis_hover || this.hover_pane.is_some() || this.legend_tip.is_some() {
                         this.axis_hover = false;
                         this.hover_pane = None;
+                        this.legend_tip = None;
                         cx.notify();
                     }
                 }
@@ -612,6 +642,7 @@ impl<S: ChartSource> Render for Chart<S> {
                     .size_full()
                     .child(self.overlay.clone()),
             )
+            .children(self.legend_tooltip(cx))
             .children(self.corner_controls(window, cx))
             .children(self.pane_controls(window, cx))
             .children(self.drawing_toolbar(cx))
@@ -638,13 +669,48 @@ impl<S: ChartSource> Chart<S> {
         cx.emit(ChartEvent::Changed);
     }
 
+    /// Tooltip hit area over the canvas-drawn legend button under the
+    /// pointer (ui-guidelines L3, §3.5 `tip()` for canvas hit rects). It
+    /// exists only while that button is hovered, so it never goes stale.
+    fn legend_tooltip(&self, cx: &App) -> Option<AnyElement> {
+        let (id, button, r) = self.legend_tip?;
+        let view = self.state.read(cx).source.view();
+        let label = match button {
+            LegendButton::ToggleVisible => {
+                let visible = view
+                    .indicators
+                    .iter()
+                    .find(|i| i.id == id)
+                    .is_none_or(|i| i.visible);
+                if visible { "Hide" } else { "Show" }
+            }
+            LegendButton::Settings => "Settings",
+            LegendButton::Remove => "Remove",
+            LegendButton::Collapse if view.legend_collapsed => "Show indicator legend",
+            LegendButton::Collapse => "Hide indicator legend",
+        };
+        let origin = view.last_layout().plot.min;
+        Some(
+            div()
+                .id(ElementId::Name(
+                    format!("legend-tip-{id}-{button:?}").into(),
+                ))
+                .absolute()
+                .left(px(r.left() - origin.x))
+                .top(px(r.top() - origin.y))
+                .w(px(r.width()))
+                .h(px(r.height()))
+                .cursor_pointer()
+                .tooltip(tt_ui::tip(label, None))
+                .into_any_element(),
+        )
+    }
+
     /// Bottom-right corner, like TradingView: A / L / % at the bottom of the
     /// price axis (on hover by default) and the gear with the price-scale
-    /// menu.
+    /// menu. Kit controls, chrome colors from the UI theme (G2, G8–G11).
     fn corner_controls(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
-        use gpui_kit::component::button::*;
-        use gpui_kit::component::menu::*;
-        use gpui_kit::component::{IconName, Sizable};
+        use gpui_kit::component::Placement;
 
         let state = self.state.read(cx);
         let view = state.source.view();
@@ -652,61 +718,46 @@ impl<S: ChartSource> Chart<S> {
         if l.plot.width() <= 0.0 {
             return None;
         }
-        let theme = view.style.theme(&state.theme);
-        let (mode, auto, inverted) = (view.scale_mode, view.is_auto_scale(), view.invert_scale);
-        let style = view.style.clone();
+        let (mode, auto) = (view.scale_mode, view.is_auto_scale());
+        let scale_buttons = view.style.scales.scale_buttons;
+        let (panel, border) = {
+            let t = cx.ui();
+            (hsla(t.panel), hsla(t.border))
+        };
         let origin = l.plot.min;
         let rel = |x: f32, y: f32| (px(x - origin.x), px(y - origin.y));
 
-        // A / L / %: fade in quickly while the pointer is over the axis.
-        let shown = match style.scales.scale_buttons {
+        // A / L / %: fade in and out quickly while the pointer is over the axis.
+        let shown = match scale_buttons {
             tt_chart::ScaleButtons::Always => true,
             tt_chart::ScaleButtons::OnHover => self.axis_hover,
             tt_chart::ScaleButtons::Hidden => false,
         };
-        let opacity = gpui_kit::base::transition(
-            "scale-buttons",
-            if shown { 1.0f32 } else { 0.0 },
-            gpui_kit::base::Transition::new(Duration::from_millis(90)),
-            window,
-            cx,
-        );
+        let opacity = tt_ui::motion::fade_fast("scale-buttons", shown, window, cx);
         let this = cx.entity().downgrade();
-        let letter = |id: &'static str, text: &'static str, active: bool, tip: &'static str| {
-            let (bg, fg) = if active {
-                (theme.text, theme.bg)
-            } else {
-                (theme.selection, theme.text)
-            };
-            div()
-                .id(id)
-                .size(px(20.))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(4.))
-                .cursor_pointer()
-                .text_size(px(11.5))
-                .bg(crate::hsla(bg))
-                .text_color(crate::hsla(fg))
-                .hover(|d| d.opacity(0.85))
-                .child(text)
-                .tooltip(move |window, cx| {
-                    gpui_kit::component::tooltip::Tooltip::new(tip).build(window, cx)
-                })
+        let letter = |id: &'static str, text: &'static str, on: bool, tip: &'static str| {
+            IconButton::text(id, text)
+                .size(ControlSize::Xs)
+                .toggled(on)
+                .tooltip(tip)
+                .tooltip_placement(Placement::Top)
         };
-        let (x0, y0) = rel(l.price_axis.left(), l.time_axis.top() - 26.0);
+        // Opaque (labels must not show through) chrome strip with a top
+        // hairline (G9).
+        let (x0, y0) = rel(l.price_axis.left(), l.time_axis.top() - CONTROL_SM);
         let buttons = div()
             .absolute()
             .left(x0)
             .top(y0)
             .w(px(l.price_axis.width()))
-            .h(px(22.))
+            .h(px(CONTROL_SM))
             .flex()
             .justify_center()
-            .gap_1()
+            .gap(px(S1))
             .items_center()
-            .bg(crate::hsla(theme.bg))
+            .bg(panel)
+            .border_t_1()
+            .border_color(border)
             .opacity(opacity)
             .when(opacity < 0.01, |d| d.invisible())
             .child(
@@ -757,9 +808,8 @@ impl<S: ChartSource> Chart<S> {
                 })),
             );
 
-        // The gear: TradingView's price-scale menu, opening upwards.
+        // The gear: TradingView's price-scale menu, opening upwards (G10, G11).
         let (gx, gy) = rel(l.price_axis.left(), l.time_axis.top());
-        let menu_this = this.clone();
         let gear = div()
             .absolute()
             .left(gx)
@@ -770,104 +820,12 @@ impl<S: ChartSource> Chart<S> {
             .items_center()
             .justify_center()
             .child(
-                Button::new("scale-settings")
-                    .ghost()
-                    .xsmall()
-                    .icon(IconName::Settings)
+                IconButton::new("scale-settings", Glyph::SETTINGS)
+                    .size(ControlSize::Sm)
                     .tooltip("Price scale settings")
-                    .dropdown_menu_with_anchor(gpui_kit::Anchor::BottomRight, move |menu, _, _| {
-                        let t = menu_this.clone();
-                        let item = |label: &'static str, checked: bool, f: MenuAction<S>| {
-                            let t = t.clone();
-                            PopupMenuItem::new(label)
-                                .checked(checked)
-                                .on_click(move |_, _, cx| {
-                                    let f = f.clone();
-                                    t.update(cx, |c, cx| f(c, cx)).ok();
-                                })
-                        };
-                        let mut menu = menu
-                            .min_w(px(260.))
-                            .item(item(
-                                "Reset price scale",
-                                false,
-                                Rc::new(|c, cx| c.edit_scale(cx, |v| v.auto_scale())),
-                            ))
-                            .separator()
-                            .item(item(
-                                "Auto (fits data to screen)",
-                                auto,
-                                Rc::new(|c, cx| {
-                                    c.edit_scale(cx, |v| {
-                                        if v.is_auto_scale() {
-                                            v.freeze_scale()
-                                        } else {
-                                            v.auto_scale()
-                                        }
-                                    })
-                                }),
-                            ))
-                            .item(item(
-                                "Invert scale",
-                                inverted,
-                                Rc::new(|c, cx| {
-                                    c.edit_scale(cx, |v| v.invert_scale = !v.invert_scale)
-                                }),
-                            ))
-                            .separator();
-                        for m in ScaleMode::ALL {
-                            menu = menu.item(item(
-                                m.menu_label(),
-                                m == mode,
-                                Rc::new(move |c, cx| c.edit_scale(cx, |v| v.scale_mode = m)),
-                            ));
-                        }
-                        type Toggle = fn(&mut tt_chart::ChartStyle, bool);
-                        let sc = &style.scales;
-                        let toggles: [(&'static str, bool, Toggle); 5] = [
-                            (
-                                "Symbol last price label",
-                                sc.symbol_label.shows_value(),
-                                |s, on| {
-                                    s.scales.symbol_label = s.scales.symbol_label.with_value(on)
-                                },
-                            ),
-                            ("Countdown to bar close", sc.countdown, |s, on| {
-                                s.scales.countdown = on
-                            }),
-                            (
-                                "Indicator value labels",
-                                sc.indicators.shows_value(),
-                                |s, on| s.scales.indicators = s.scales.indicators.with_value(on),
-                            ),
-                            (
-                                "No overlapping labels",
-                                sc.no_overlapping_labels,
-                                |s, on| s.scales.no_overlapping_labels = on,
-                            ),
-                            ("Price line", sc.symbol_label.shows_line(), |s, on| {
-                                s.scales.symbol_label = s.scales.symbol_label.with_line(on)
-                            }),
-                        ];
-                        menu = menu.separator().label("Labels and lines");
-                        for (label, on, field) in toggles {
-                            menu = menu.item(item(
-                                label,
-                                on,
-                                Rc::new(move |c, cx| c.edit_style(cx, |s| field(s, !on))),
-                            ));
-                        }
-                        menu.separator().item(
-                            PopupMenuItem::new("More settings…")
-                                .icon(IconName::Settings)
-                                .on_click({
-                                    let t = t.clone();
-                                    move |_, _, cx| {
-                                        t.update(cx, |_, cx| cx.emit(ChartEvent::OpenSettings))
-                                            .ok();
-                                    }
-                                }),
-                        )
+                    .tooltip_placement(Placement::Top)
+                    .menu(Anchor::BottomRight, move |menu, _, cx| {
+                        Self::price_scale_menu(menu, this.clone(), cx)
                     }),
             );
         Some(
@@ -880,6 +838,119 @@ impl<S: ChartSource> Chart<S> {
         )
     }
 
+    /// The price-scale menu, read from the chart each time it is built (it
+    /// is rebuilt every frame while open, so checks stay current).
+    fn price_scale_menu(menu: Menu, this: WeakEntity<Self>, cx: &App) -> Menu {
+        let Some(chart) = this.upgrade() else {
+            return menu;
+        };
+        let view = chart.read(cx).state.read(cx).source.view();
+        let (mode, auto, inverted) = (view.scale_mode, view.is_auto_scale(), view.invert_scale);
+        let sc = view.style.scales;
+        let row = |id: &'static str, label: &'static str, f: MenuAction<S>| {
+            let t = this.clone();
+            MenuRow::new(id, label).on_select(move |_, cx| {
+                let f = f.clone();
+                t.update(cx, |c, cx| f(c, cx)).ok();
+            })
+        };
+        let mut menu = menu
+            .id("price-scale-menu")
+            .row(row(
+                "reset-scale",
+                "Reset price scale",
+                Rc::new(|c, cx| c.edit_scale(cx, |v| v.auto_scale())),
+            ))
+            .separator()
+            .row(
+                row(
+                    "auto-scale",
+                    "Auto (fits data to screen)",
+                    Rc::new(|c, cx| {
+                        c.edit_scale(cx, |v| {
+                            if v.is_auto_scale() {
+                                v.freeze_scale()
+                            } else {
+                                v.auto_scale()
+                            }
+                        })
+                    }),
+                )
+                .toggle(auto),
+            )
+            .row(
+                row(
+                    "invert-scale",
+                    "Invert scale",
+                    Rc::new(|c, cx| c.edit_scale(cx, |v| v.invert_scale = !v.invert_scale)),
+                )
+                .toggle(inverted),
+            )
+            .separator();
+        for (i, m) in ScaleMode::ALL.into_iter().enumerate() {
+            let t = this.clone();
+            menu = menu.row(
+                MenuRow::new(("scale-mode", i), m.menu_label())
+                    .checked(m == mode)
+                    .on_select(move |_, cx| {
+                        t.update(cx, |c, cx| c.edit_scale(cx, |v| v.scale_mode = m))
+                            .ok();
+                    }),
+            );
+        }
+        type Toggle = fn(&mut tt_chart::ChartStyle, bool);
+        let toggles: [(&'static str, &'static str, bool, Toggle); 5] = [
+            (
+                "label-last-price",
+                "Symbol last price label",
+                sc.symbol_label.shows_value(),
+                |s, on| s.scales.symbol_label = s.scales.symbol_label.with_value(on),
+            ),
+            (
+                "label-countdown",
+                "Countdown to bar close",
+                sc.countdown,
+                |s, on| s.scales.countdown = on,
+            ),
+            (
+                "label-indicators",
+                "Indicator value labels",
+                sc.indicators.shows_value(),
+                |s, on| s.scales.indicators = s.scales.indicators.with_value(on),
+            ),
+            (
+                "label-no-overlap",
+                "No overlapping labels",
+                sc.no_overlapping_labels,
+                |s, on| s.scales.no_overlapping_labels = on,
+            ),
+            (
+                "label-price-line",
+                "Price line",
+                sc.symbol_label.shows_line(),
+                |s, on| s.scales.symbol_label = s.scales.symbol_label.with_line(on),
+            ),
+        ];
+        menu = menu.separator().section("Labels and lines");
+        for (id, label, on, field) in toggles {
+            menu = menu.row(
+                row(
+                    id,
+                    label,
+                    Rc::new(move |c, cx| c.edit_style(cx, |s| field(s, !on))),
+                )
+                .toggle(on),
+            );
+        }
+        let t = this.clone();
+        menu.separator()
+            .row(
+                MenuRow::new("more-settings", "More settings…").on_select(move |_, cx| {
+                    t.update(cx, |_, cx| cx.emit(ChartEvent::OpenSettings)).ok();
+                }),
+            )
+    }
+
     /// Changes the pane layout and reports it.
     fn edit_panes(&self, cx: &mut Context<Self>, f: impl FnOnce(&mut ChartView)) {
         self.view_mut(cx, f);
@@ -888,117 +959,98 @@ impl<S: ChartSource> Chart<S> {
     }
 
     /// TradingView's pane buttons at the top right of the hovered pane:
-    /// move up / down, delete, collapse / restore, maximize / restore.
-    fn pane_controls(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+    /// move up / down, delete, collapse / restore, maximize / restore. Kit
+    /// `IconButton::Sm` with managed tooltips (G13) on the overlay surface
+    /// (G14); they fade in and out (G12).
+    fn pane_controls(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         use lucide_icons::Icon;
 
-        let state = self.state.read(cx);
-        let view = state.source.view();
-        let l = view.last_layout().clone();
+        let l = self.state.read(cx).source.view().last_layout().clone();
         let n = l.panes.len();
         let shown = self
             .hover_pane
-            .filter(|&k| n > 1 && k < n && self.drag.is_none());
-        let target = if shown.is_some() { 1.0f32 } else { 0.0 };
-        let pane = shown.and_then(|k| {
-            let id = *l.pane_ids.get(k)?;
-            Some((
-                k,
-                id,
-                view.is_pane_collapsed(id),
-                view.maximized == Some(id),
-            ))
-        });
-        let bg = crate::hsla(tt_theme::with_alpha(state.theme.bg, 0.9));
-        let (theme_text, theme_hover) = (state.theme.text, state.theme.selection);
-        let opacity = gpui_kit::base::transition(
-            "pane-controls",
-            target,
-            gpui_kit::base::Transition::new(Duration::from_millis(90)),
-            window,
-            cx,
-        );
-        let (k, id, collapsed, maximized) = pane?;
+            .filter(|&k| n > 1 && k < n && self.drag.is_none())
+            .and_then(|k| Some((k, *l.pane_ids.get(k)?)));
+        if shown.is_some() {
+            self.last_pane = shown;
+        }
+        let opacity = tt_ui::motion::fade_fast("pane-controls", shown.is_some(), window, cx);
+        // Keep the last pane while fading out, if it still exists.
+        let still = |&(k, id): &(usize, u64)| n > 1 && l.pane_ids.get(k) == Some(&id);
+        let Some((k, id)) = shown.or(self.last_pane.filter(still)) else {
+            self.last_pane = None;
+            return None;
+        };
+        if shown.is_none() && opacity < 0.01 {
+            self.last_pane = None;
+            return None;
+        }
+        let view = self.state.read(cx).source.view();
+        let (collapsed, maximized) = (view.is_pane_collapsed(id), view.maximized == Some(id));
         let rect = l.panes[k];
         let origin = l.plot.min;
+        let bg = hsla(cx.ui().overlay_bg);
 
-        let (fg, hover_bg) = (crate::hsla(theme_text), crate::hsla(theme_hover));
-        // Lucide glyph buttons, like the legend's eye / gear / trash.
-        let button = |name: &'static str, icon: Icon, tip: &'static str| {
-            div()
-                .id(name)
-                .size(px(22.))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(4.))
-                .cursor_pointer()
-                .text_color(fg)
-                .hover(move |d| d.bg(hover_bg))
-                .child(
-                    div()
-                        .font_family(crate::ICON_FONT)
-                        .text_size(px(15.))
-                        .line_height(px(15.))
-                        .child(char::from(icon).to_string()),
-                )
-                .tooltip(move |window, cx| {
-                    gpui_kit::component::tooltip::Tooltip::new(tip).build(window, cx)
-                })
+        let button = |name: &'static str, glyph: Glyph, tip: &'static str| {
+            IconButton::new(name, glyph)
+                .size(ControlSize::Sm)
+                .tooltip(tip)
         };
         let mut row = div()
             .absolute()
-            .top(px(rect.top() - origin.y + 3.0))
-            .right(px(l.price_axis.width() + 6.0))
+            .top(px(rect.top() - origin.y + S1))
+            .right(px(l.price_axis.width() + S1_5))
             .flex()
-            .gap_0p5()
-            .px_0p5()
-            .rounded(px(4.))
+            .gap(px(S0_5))
+            .p(px(S0_5))
+            .rounded(px(R_MD))
             .bg(bg)
             .opacity(opacity)
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
         if k >= 2 {
-            row = row.child(button("pane-up", Icon::ArrowUp, "Move pane up").on_click(
-                cx.listener(move |this, _, _, cx| {
-                    this.edit_panes(cx, |v| {
-                        v.move_pane(id, true);
-                    })
-                }),
-            ));
-        }
-        if k >= 1 && k + 1 < n {
             row = row.child(
-                button("pane-down", Icon::ArrowDown, "Move pane down").on_click(cx.listener(
+                button("pane-up", Icon::ArrowUp.into(), "Move pane up").on_click(cx.listener(
                     move |this, _, _, cx| {
                         this.edit_panes(cx, |v| {
-                            v.move_pane(id, false);
+                            v.move_pane(id, true);
                         })
                     },
                 )),
             );
         }
+        if k >= 1 && k + 1 < n {
+            row = row.child(
+                button("pane-down", Icon::ArrowDown.into(), "Move pane down").on_click(
+                    cx.listener(move |this, _, _, cx| {
+                        this.edit_panes(cx, |v| {
+                            v.move_pane(id, false);
+                        })
+                    }),
+                ),
+            );
+        }
         if k >= 1 {
-            row = row.child(button("pane-delete", Icon::Trash2, "Delete pane").on_click(
+            row = row.child(button("pane-delete", Glyph::TRASH, "Delete pane").on_click(
                 cx.listener(move |this, _, _, cx| {
                     this.hover_pane = None;
                     this.edit_panes(cx, |v| v.remove_indicator(id))
                 }),
             ));
         }
-        let (icon, tip) = if collapsed {
-            (Icon::ChevronsUpDown, "Restore pane")
+        let (glyph, tip): (Glyph, _) = if collapsed {
+            (Icon::ChevronsUpDown.into(), "Restore pane")
         } else {
-            (Icon::ChevronsDownUp, "Collapse pane")
+            (Icon::ChevronsDownUp.into(), "Collapse pane")
         };
-        row = row.child(button("pane-collapse", icon, tip).on_click(
+        row = row.child(button("pane-collapse", glyph, tip).on_click(
             cx.listener(move |this, _, _, cx| this.edit_panes(cx, |v| v.toggle_pane_collapsed(id))),
         ));
-        let (icon, tip) = if maximized {
-            (Icon::Minimize2, "Restore pane")
+        let (glyph, tip) = if maximized {
+            (Glyph::MINIMIZE, "Restore pane")
         } else {
-            (Icon::Maximize2, "Maximize pane")
+            (Glyph::MAXIMIZE, "Maximize pane")
         };
-        row = row.child(button("pane-maximize", icon, tip).on_click(
+        row = row.child(button("pane-maximize", glyph, tip).on_click(
             cx.listener(move |this, _, _, cx| this.edit_panes(cx, |v| v.toggle_pane_maximized(id))),
         ));
         Some(row.into_any_element())

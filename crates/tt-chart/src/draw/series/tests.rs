@@ -143,6 +143,7 @@ fn draw(
         legend_collapsed: false,
         main_collapsed: false,
         legend_hover: None,
+        legend_hover_button: None,
         price_axis: rect,
         time_axis: rect,
         display: series,

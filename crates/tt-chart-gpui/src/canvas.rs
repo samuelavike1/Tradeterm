@@ -286,6 +286,20 @@ impl Canvas for GpuiCanvas<'_> {
         }));
     }
 
+    fn stroke_rounded_rect(&mut self, rect: Rect, radius: f32, width: f32, color: Color32) {
+        if color.a() == 0 {
+            return;
+        }
+        self.push(Item::Quad(PaintQuad {
+            bounds: bounds(rect),
+            corner_radii: Corners::all(px(radius)),
+            background: Background::from(Hsla::transparent_black()),
+            border_widths: Edges::all(px(width)),
+            border_color: hsla(color),
+            border_style: BorderStyle::Solid,
+        }));
+    }
+
     fn line(&mut self, a: Pos2, b: Pos2, width: f32, color: Color32) {
         // Axis-aligned lines are quads (crisp); others are thin meshes.
         if a.x == b.x || a.y == b.y {

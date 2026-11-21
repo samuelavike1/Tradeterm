@@ -92,6 +92,8 @@ pub struct RenderInput {
     pub crosshair: Option<emath::Pos2>,
     /// Legend row under the pointer (indicator id; 0 = collapse button).
     pub legend_hover: Option<u64>,
+    /// Legend button under the pointer (drawn with the `hover` fill).
+    pub legend_hover_button: Option<(u64, LegendButton)>,
 }
 
 /// What [`ChartView::render`] reports to the caller.
@@ -289,6 +291,17 @@ impl ChartView {
     /// backends that handle input themselves).
     pub fn last_layout(&self) -> &ChartLayout {
         &self.last_layout
+    }
+
+    /// Where the last frame drew legend button `button` of row `id` (for
+    /// the chart view's tooltip on canvas hit areas).
+    pub fn legend_button_rect(&self, id: u64, button: LegendButton) -> Option<Rect> {
+        self.legend_hits
+            .iter()
+            .filter(|h| h.id == id)
+            .flat_map(|h| h.buttons.iter())
+            .find(|(b, _)| *b == button)
+            .map(|(_, r)| *r)
     }
 
     /// What is at `p` (screen point) in the last frame's layout.
@@ -687,6 +700,7 @@ impl ChartView {
                 legend_collapsed: self.legend_collapsed,
                 main_collapsed: fr.main_collapsed,
                 legend_hover: input.legend_hover,
+                legend_hover_button: input.legend_hover_button,
                 price_axis: fr.price_axis,
                 time_axis: fr.time_axis,
                 display,
@@ -1200,6 +1214,7 @@ mod tests {
                 RenderInput {
                     crosshair: Some(pos2(x, 200.0)),
                     legend_hover: None,
+                    ..Default::default()
                 },
             );
             assert!(over.0.iter().any(|t| t == "T") && over.0.iter().any(|t| t == "O"));
@@ -1278,6 +1293,7 @@ mod tests {
             RenderInput {
                 crosshair: Some(row),
                 legend_hover: Some(rsi),
+                ..Default::default()
             },
         );
         let buttons: Vec<_> = v

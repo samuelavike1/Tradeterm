@@ -46,6 +46,8 @@ pub(crate) struct Scene<'a> {
     pub main_collapsed: bool,
     /// Legend row under the pointer (indicator id; 0 = collapse button).
     pub legend_hover: Option<u64>,
+    /// Legend button under the pointer.
+    pub legend_hover_button: Option<(u64, LegendButton)>,
     pub price_axis: Rect,
     pub time_axis: Rect,
     /// Series being displayed (raw or Heikin Ashi).
@@ -425,7 +427,7 @@ pub(crate) struct Tag {
 }
 
 pub(crate) fn draw_tag(c: &mut dyn Canvas, s: &Scene<'_>, tag: &Tag) {
-    c.fill_rounded_rect(tag.rect, 2.0, tag.bg);
+    c.fill_rounded_rect(tag.rect, tt_theme::metrics::R_XS, tag.bg);
     let line_h = s.style.scales.text_size + 3.0;
     let top = tag.rect.center().y - line_h * tag.lines.len() as f32 / 2.0;
     for (i, text) in tag.lines.iter().enumerate() {
@@ -720,6 +722,7 @@ mod tests {
             legend_collapsed: false,
             main_collapsed: false,
             legend_hover: None,
+            legend_hover_button: None,
             price_axis: Rect::from_min_max(pos2(800.0, 0.0), pos2(880.0, 500.0)),
             time_axis: Rect::from_min_max(pos2(0.0, 500.0), pos2(800.0, 528.0)),
             display: series,
