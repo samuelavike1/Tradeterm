@@ -21,7 +21,10 @@ use tt_theme::Theme;
 use tt_ui::dialog::{DialogFooter, DialogFrame, DialogOpts, DialogSize, NavTabs, TemplateMenu};
 use tt_ui::prelude::*;
 use tt_ui::tokens as t;
-use tt_ui::{Menu, hsla};
+use tt_ui::{
+    ColorBarButton, LineDash, LinePicker, LineStyleButton, LineValue, LineWidthButton, Menu,
+    TextStyleBar, TextStyleValue, hsla,
+};
 
 actions!(gallery, [PickTrendLine, OpenIndicators]);
 
@@ -41,6 +44,16 @@ struct Gallery {
     number: Entity<InputState>,
     color: Entity<ColorPickerState>,
     measured: Measured,
+    // Comfortable density (section 2.10).
+    line: LineValue,
+    text_style: TextStyleValue,
+    fill: Hsla,
+    range: (f32, f32),
+    range_lo: Entity<InputState>,
+    range_hi: Entity<InputState>,
+    c_tab: &'static str,
+    c_check: bool,
+    c_vertical: &'static str,
 }
 
 impl Gallery {
@@ -49,6 +62,9 @@ impl Gallery {
         let color = cx.new(|cx| {
             ColorPickerState::new(window, cx).default_value(hsla(tt_theme::Theme::dark().active))
         });
+        let range_lo = cx.new(|cx| InputState::new(window, cx).default_value("1"));
+        let range_hi = cx.new(|cx| InputState::new(window, cx).default_value("59"));
+        let blue = hsla(tt_theme::Theme::dark().active);
         Self {
             dark,
             toggled: true,
@@ -63,6 +79,24 @@ impl Gallery {
             number,
             color,
             measured,
+            line: LineValue {
+                color: blue,
+                width: 1,
+                dash: LineDash::Solid,
+            },
+            text_style: TextStyleValue {
+                color: blue,
+                size: 12,
+                bold: false,
+                italic: false,
+            },
+            fill: tt_ui::picker::with_alpha(blue, 0.2),
+            range: (1.0, 59.0),
+            range_lo,
+            range_hi,
+            c_tab: "style",
+            c_check: true,
+            c_vertical: "Middle",
         }
     }
 
@@ -467,6 +501,179 @@ impl Render for Gallery {
                         .tooltip("Remove"),
                 ),
         );
+        // ---- comfortable density (section 2.10) ---------------------------
+        let wc = cx.entity().downgrade();
+        let upd = move |f: Box<dyn FnOnce(&mut Gallery)>, cx: &mut App| {
+            wc.update(cx, |g, cx| {
+                f(g);
+                cx.notify();
+            })
+            .ok();
+        };
+        let (u1, u2, u3, u4, u5, u6, u7, u8, u9) = (
+            upd.clone(),
+            upd.clone(),
+            upd.clone(),
+            upd.clone(),
+            upd.clone(),
+            upd.clone(),
+            upd.clone(),
+            upd.clone(),
+            upd,
+        );
+        let floating_tv = measure(
+            "floating-tv",
+            &m,
+            Overlay::new()
+                .floating()
+                .child(IconButton::new("ftv-template", Glyph::GRID_PLUS).size(ControlSize::Xl))
+                .child(measure(
+                    "ft-color-bar",
+                    &m,
+                    ColorBarButton::new("ftv-line", Glyph::PENCIL, self.line.color)
+                        .tooltip("Line color")
+                        .on_change(move |c, _, cx| u1(Box::new(move |g| g.line.color = c), cx)),
+                ))
+                .child(
+                    ColorBarButton::new("ftv-fill", Glyph::PAINT_BUCKET, self.fill)
+                        .tooltip("Background color")
+                        .on_change(move |c, _, cx| u9(Box::new(move |g| g.fill = c), cx)),
+                )
+                .child(
+                    ColorBarButton::new("ftv-text", Glyph::TYPE, self.text_style.color)
+                        .tooltip("Text color")
+                        .on_change(move |c, _, cx| {
+                            u2(Box::new(move |g| g.text_style.color = c), cx)
+                        }),
+                )
+                .child(
+                    LineWidthButton::new("ftv-width", self.line.width)
+                        .on_change(move |w, _, cx| u3(Box::new(move |g| g.line.width = w), cx)),
+                )
+                .child(
+                    LineStyleButton::new("ftv-style", self.line.dash)
+                        .on_change(move |d, _, cx| u4(Box::new(move |g| g.line.dash = d), cx)),
+                )
+                .child(IconButton::new("ftv-settings", Glyph::SETTINGS).size(ControlSize::Xl))
+                .child(IconButton::new("ftv-lock", Glyph::LOCK_OPEN).size(ControlSize::Xl))
+                .child(IconButton::new("ftv-trash", Glyph::TRASH).size(ControlSize::Xl))
+                .child(IconButton::new("ftv-more", Glyph::ELLIPSIS).size(ControlSize::Xl)),
+        );
+        let c_tab = self.c_tab;
+        let wt = cx.entity().downgrade();
+        let tabs = NavTabs::horizontal()
+            .item("style", "Style", None)
+            .item("text", "Text", None)
+            .item("coords", "Coordinates", None)
+            .item("visibility", "Visibility", None)
+            .selected(c_tab)
+            .on_change(move |id, _, cx| {
+                wt.update(cx, |g, cx| {
+                    g.c_tab = id;
+                    cx.notify()
+                })
+                .ok();
+            });
+        let c_body = v_flex()
+            .child(
+                FormRow::new("Line")
+                    .comfortable()
+                    .label_auto()
+                    .control(measure(
+                        "line-picker",
+                        &m,
+                        LinePicker::new("c-line", self.line)
+                            .on_change(move |v, _, cx| u5(Box::new(move |g| g.line = v), cx)),
+                    )),
+            )
+            .child(
+                FormRow::check(
+                    "c-price-label",
+                    "Price label",
+                    self.c_check,
+                    move |on, _, cx| u6(Box::new(move |g| g.c_check = on), cx),
+                )
+                .comfortable(),
+            )
+            .child(
+                h_flex().h(px(t::C_ROW)).items_center().child(
+                    TextStyleBar::new("c-text", self.text_style, &[10, 11, 12, 14, 16, 20, 24])
+                        .on_change(move |v, _, cx| u7(Box::new(move |g| g.text_style = v), cx)),
+                ),
+            )
+            .child(
+                FormRow::new("Text alignment")
+                    .comfortable()
+                    .label_auto()
+                    .control(measure(
+                        "select-c",
+                        &m,
+                        Select::new(
+                            "c-valign",
+                            ["Middle", "Top", "Bottom"].map(|s| (s, s)),
+                            self.c_vertical,
+                        )
+                        .comfortable()
+                        .on_change(move |s, _, cx| u8(Box::new(move |g| g.c_vertical = s), cx)),
+                    ))
+                    .control(measure("field-c", &m, Field::new(&self.number))),
+            )
+            .child({
+                let wr = cx.entity().downgrade();
+                FormRow::check("c-minutes", "Minutes", true, |_, _, _| {})
+                    .comfortable()
+                    .label_width(96.0)
+                    .control(measure(
+                        "range-field",
+                        &m,
+                        RangeField::new(
+                            "c-range",
+                            &self.range_lo,
+                            &self.range_hi,
+                            (1.0, 59.0),
+                            self.range,
+                        )
+                        .on_change(move |a, b, _, cx| {
+                            wr.update(cx, |g, cx| {
+                                g.range = (a, b);
+                                cx.notify()
+                            })
+                            .ok();
+                        }),
+                    ))
+            });
+        let comfortable_preview = v_flex()
+            .w(px(454.))
+            .bg(hsla(ui.panel))
+            .border_1()
+            .border_color(hsla(ui.border))
+            .rounded(px(t::C_R_DIALOG))
+            .shadow_lg()
+            .child(
+                h_flex()
+                    .h(px(t::C_H_HEADER))
+                    .px(px(t::C_PAD_X))
+                    .items_center()
+                    .gap(px(5.))
+                    .text_size(px(t::C_TEXT_TITLE))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child("Horizontal ray")
+                    .child(glyph(Glyph::PENCIL, t::ICON_MD + 2.0)),
+            )
+            .child(
+                DialogFrame::new(DialogSize::Sm)
+                    .id("c-frame")
+                    .comfortable()
+                    .nav(tabs)
+                    .body(c_body),
+            )
+            .child(
+                DialogFooter::new()
+                    .comfortable()
+                    .template(TemplateMenu::defaults(|_, _| {}))
+                    .cancel()
+                    .ok("Ok"),
+            );
         let pane_controls = caption(
             format!(
                 "PaneControls::width(3) = {}",
@@ -680,6 +887,13 @@ impl Render for Gallery {
                                     .child(floating)
                                     .child(pane_controls),
                             )
+                            .child(section(
+                                "Comfortable (TradingView-measured): floating toolbar 38 · dialog",
+                                cx,
+                            ))
+                            .child(floating_tv)
+                            .child(div().h(px(t::S3)))
+                            .child(comfortable_preview)
                             .child(section("Dialog (Sm, top tabs)", cx))
                             .child(dialog_preview)
                             .child(div().pt(px(t::S3)).child(open)),
@@ -716,7 +930,7 @@ impl Render for DialogBody {
 }
 
 /// Expected sizes (token table, §2.4).
-const EXPECTED: [(&str, f32, f32); 9] = [
+const EXPECTED: [(&str, f32, f32); 15] = [
     ("icon-xs", t::CONTROL_XS, t::CONTROL_XS),
     ("icon-sm", t::CONTROL_SM, t::CONTROL_SM),
     ("icon-md", t::CONTROL_MD, t::CONTROL_MD),
@@ -726,6 +940,13 @@ const EXPECTED: [(&str, f32, f32); 9] = [
     ("tb-caret", t::CONTROL_MD, t::CONTROL_MD),
     ("chip", f32::NAN, t::CONTROL_SM),
     ("tb-text", f32::NAN, t::CONTROL_MD),
+    // Comfortable density (section 2.10).
+    ("floating-tv", f32::NAN, t::FT_HEIGHT),
+    ("ft-color-bar", t::FT_BUTTON, t::FT_BUTTON),
+    ("line-picker", tt_ui::picker::W_LINE_PICKER, t::C_CONTROL),
+    ("select-c", t::C_W_FIELD, t::C_CONTROL),
+    ("field-c", t::C_W_FIELD, t::C_CONTROL),
+    ("range-field", f32::NAN, t::C_CONTROL),
 ];
 
 fn main() {

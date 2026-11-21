@@ -113,6 +113,92 @@ pub const H_DIALOG_FOOTER: f32 = 60.0;
 /// Minimum width of dialog footer buttons.
 pub const W_DIALOG_BUTTON: f32 = 72.0;
 
+// ---- comfortable density: dialogs and floating toolbars (§2.10) -------------
+//
+// Measured on TradingView (2026-11, CSS px): the drawing settings dialog and
+// the drawing floating toolbar. The app chrome (top toolbar, menus, lists)
+// keeps the compact tokens above; see docs/specs/ui-guidelines.md §2.10.
+
+/// Dialog title: 20 px, weight 600, line height 28.
+pub const C_TEXT_TITLE: f32 = 20.0;
+pub const C_TITLE_LINE: f32 = 28.0;
+/// Dialog tab labels: 16 px, weight 600.
+pub const C_TEXT_TAB: f32 = 16.0;
+/// Footer Cancel / Ok labels.
+pub const C_TEXT_BUTTON: f32 = 16.0;
+/// Popover section titles ("Opacity", "Thickness"): 12 px, `text_muted`.
+pub const C_TEXT_SECTION: f32 = 12.0;
+/// Dialog header (title row) height; the title sits 17 px from the top.
+pub const C_H_HEADER: f32 = 68.0;
+/// Header buttons (rename ✎, close ×): 34 square, icon 18.
+pub const C_HEADER_BUTTON: f32 = 34.0;
+/// Tab strip: 32 tall (labels + 8 px bottom padding + underline).
+pub const C_H_TABS: f32 = 32.0;
+/// Gap between tab labels.
+pub const C_TAB_GAP: f32 = 24.0;
+/// Active tab underline (radius 2).
+pub const C_TAB_UNDERLINE: f32 = 4.0;
+/// Inputs, selects, footer buttons, toggle buttons inside dialogs.
+pub const C_CONTROL: f32 = 34.0;
+/// A form row: 8 + control + 8.
+pub const C_ROW: f32 = 50.0;
+/// Between controls in a row.
+pub const C_GAP: f32 = 8.0;
+/// Dialog horizontal padding (header, tabs, body, footer).
+pub const C_PAD_X: f32 = 20.0;
+/// Dialog body vertical padding.
+pub const C_PAD_Y: f32 = 16.0;
+/// Label column: label + this gap to the controls.
+pub const C_LABEL_GAP: f32 = 20.0;
+/// Footer: 16 + 34 + 16.
+pub const C_H_FOOTER: f32 = 66.0;
+/// Minimum dialog width (the dialog grows with its widest tab).
+pub const C_W_DIALOG: f32 = 380.0;
+/// Number fields and selects.
+pub const C_W_FIELD: f32 = 100.0;
+/// Multiline text area height.
+pub const C_H_TEXTAREA: f32 = 100.0;
+/// Checkbox box (radius 3); 8 px to its label.
+pub const C_CHECKBOX: f32 = 18.0;
+/// Dialog surface radius.
+pub const C_R_DIALOG: f32 = 20.0;
+/// Inputs, selects, footer buttons.
+pub const C_R_CONTROL: f32 = 8.0;
+/// Square swatch / toggle buttons (line picker, color, B, I).
+pub const C_R_TOGGLE: f32 = 6.0;
+/// Swatch inside a 34 px swatch button (radius 3).
+pub const C_SWATCH: f32 = 24.0;
+/// Two-handle range slider: track 10 tall (radius 5), handles 12.
+pub const C_SLIDER_TRACK: f32 = 10.0;
+pub const C_SLIDER_HANDLE: f32 = 12.0;
+pub const C_W_SLIDER: f32 = 100.0;
+/// Palette popover: 10 columns of 17 px swatches on a 22.6 px pitch.
+pub const C_PALETTE_SWATCH: f32 = 17.0;
+pub const C_PALETTE_GAP: f32 = 5.0;
+/// Popover width (palette, line picker).
+pub const C_W_POPOVER: f32 = 248.0;
+/// Segmented options (thickness, line style) in the line picker.
+pub const C_H_SEGMENT: f32 = 32.0;
+
+/// Floating drawing toolbar: 38 tall, 38 square buttons with no gaps,
+/// a 24 px grip, radius 6.
+pub const FT_HEIGHT: f32 = 38.0;
+pub const FT_BUTTON: f32 = 38.0;
+pub const FT_GRIP: f32 = 24.0;
+pub const FT_RADIUS: f32 = 6.0;
+/// Icons in the floating toolbar (TradingView draws them in a 28 box).
+pub const FT_ICON: f32 = 20.0;
+/// Color-bar buttons: a 16 icon 7 px from the top and a 22 × 4 bar
+/// (radius 2) 27 px from the top.
+pub const FT_BAR_ICON: f32 = 16.0;
+pub const FT_BAR_W: f32 = 22.0;
+pub const FT_BAR_H: f32 = 4.0;
+/// "— 1px" line-width button.
+pub const FT_W_WIDTH_BUTTON: f32 = 68.0;
+/// Text on chart drawings: gap kept on each side of text that sits on a
+/// line (the line breaks behind it).
+pub const TEXT_LINE_GAP: f32 = 6.0;
+
 // ---- motion (§2.9), milliseconds --------------------------------------------
 
 /// Hover, pressed, selection changes.

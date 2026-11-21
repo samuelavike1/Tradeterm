@@ -34,8 +34,9 @@ impl Overlay {
         }
     }
 
-    /// Floating toolbar: a row with a grip handle (`GripVertical` 14) first,
-    /// `S0_5` padding and gap. The caller owns dragging (the handle is the
+    /// Floating toolbar (section 2.10): a `FT_HEIGHT` row with a `FT_GRIP`
+    /// grip handle (`GripVertical` 16) first, no padding or gaps (the
+    /// buttons are `ControlSize::Xl` squares). The caller owns dragging (the handle is the
     /// first child; wire `on_drag` on the overlay itself).
     pub fn floating(mut self) -> Self {
         self.floating = true;
@@ -73,22 +74,25 @@ impl RenderOnce for Overlay {
             .text_color(hsla(t.text))
             .occlude();
         let base = if self.floating {
+            // §2.10 (TradingView-measured): 38 tall, no padding or gaps,
+            // a 24 px grip, radius 6.
             base.flex()
                 .flex_row()
                 .items_center()
-                .p(px(S0_5))
-                .gap(px(S0_5))
+                .h(px(FT_HEIGHT))
+                .rounded(px(FT_RADIUS))
+                .border_0()
                 .child(
                     div()
                         .flex_none()
-                        .w(px(CONTROL_SM / 2. + S0_5))
-                        .h(px(CONTROL_SM))
+                        .w(px(FT_GRIP))
+                        .h(px(FT_HEIGHT))
                         .flex()
                         .items_center()
                         .justify_center()
                         .cursor_grab()
                         .text_color(hsla(t.text_muted))
-                        .child(glyph(Glyph::GRIP_VERTICAL, ICON_XS)),
+                        .child(glyph(Glyph::GRIP_VERTICAL, ICON_SM)),
                 )
         } else {
             base.flex().flex_col().p(px(S3)).gap(px(S0_5))

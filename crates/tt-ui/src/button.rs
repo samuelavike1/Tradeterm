@@ -39,6 +39,9 @@ pub enum ControlSize {
     Md,
     /// 36 px, icon 20: left drawing toolbar.
     Lg,
+    /// 38 px, icon 20: the floating drawing toolbar (section 2.10,
+    /// TradingView-measured).
+    Xl,
 }
 
 impl ControlSize {
@@ -49,6 +52,7 @@ impl ControlSize {
             ControlSize::Sm => CONTROL_SM,
             ControlSize::Md => CONTROL_MD,
             ControlSize::Lg => CONTROL_LG,
+            ControlSize::Xl => FT_BUTTON,
         }
     }
 
@@ -57,13 +61,13 @@ impl ControlSize {
             ControlSize::Xs => ICON_XS,
             ControlSize::Sm => ICON_SM,
             ControlSize::Md => ICON_MD,
-            ControlSize::Lg => ICON_LG,
+            ControlSize::Lg | ControlSize::Xl => FT_ICON,
         }
     }
 
     pub fn radius(self) -> f32 {
         match self {
-            ControlSize::Xs => R_SM,
+            ControlSize::Xs | ControlSize::Xl => R_SM,
             _ => R_MD,
         }
     }
@@ -456,6 +460,7 @@ pub struct ToolbarButton {
     selected: bool,
     open: bool,
     disabled: bool,
+    outlined: bool,
     tooltip: Option<TooltipSpec>,
     menu: Option<MenuBuilder>,
     /// Popover anchor of the menu (TopLeft = below, left-aligned).
@@ -476,6 +481,7 @@ impl ToolbarButton {
             selected: false,
             open: false,
             disabled: false,
+            outlined: false,
             tooltip: None,
             menu: None,
             menu_anchor: Anchor::TopLeft,
@@ -533,6 +539,14 @@ impl ToolbarButton {
         self
     }
 
+    /// A bordered field-like button (section 2.10): `C_CONTROL` tall,
+    /// radius `C_R_CONTROL`, chevron 18 (the comfortable dialog's
+    /// "Template").
+    pub fn outlined(mut self, on: bool) -> Self {
+        self.outlined = on;
+        self
+    }
+
     pub fn tooltip(mut self, label: impl Into<SharedString>) -> Self {
         self.tooltip = Some(TooltipSpec {
             label: label.into(),
@@ -584,7 +598,11 @@ impl ToolbarButton {
 
     fn button(self, cx: &App) -> Button {
         let t = cx.ui();
-        let s = self.size.px();
+        let s = if self.outlined {
+            C_CONTROL
+        } else {
+            self.size.px()
+        };
         let icon = if self.size == ControlSize::Md {
             ICON_MD
         } else {
@@ -598,7 +616,7 @@ impl ToolbarButton {
                 } else {
                     Glyph::CHEVRON_DOWN
                 },
-                ICON_XS,
+                if self.outlined { ICON_MD } else { ICON_XS },
             )
             .color(hsla(t.text_muted))
         });
@@ -641,7 +659,14 @@ impl ToolbarButton {
                     b.px(px(S2))
                 }
             })
-            .when(self.kind == ToolbarKind::Field, |b| b.bg(hsla(t.panel_alt)));
+            .when(self.kind == ToolbarKind::Field, |b| b.bg(hsla(t.panel_alt)))
+            .when(self.outlined, |b| {
+                b.border_1()
+                    .border_color(hsla(t.border))
+                    .rounded(px(C_R_CONTROL))
+                    .pl(px(S3))
+                    .pr(px(S1))
+            });
         // No tooltip over its own open menu (see `IconButton::button`).
         if let Some(tip) = self.tooltip.filter(|_| !self.open) {
             b = tip.apply(b);

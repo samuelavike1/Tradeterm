@@ -99,6 +99,11 @@ impl Glyph {
     pub const FILE_DOWN: Glyph = Glyph::Lucide(Lucide::FileDown);
     pub const RENAME: Glyph = Glyph::Lucide(Lucide::TextCursorInput);
     pub const COMMAND: Glyph = Glyph::Lucide(Lucide::Command);
+    // Floating drawing toolbar and comfortable dialogs (section 2.10).
+    pub const PENCIL: Glyph = Glyph::Lucide(Lucide::Pencil);
+    pub const TYPE: Glyph = Glyph::Lucide(Lucide::Type);
+    pub const PAINT_BUCKET: Glyph = Glyph::Lucide(Lucide::PaintBucket);
+    pub const GRID_PLUS: Glyph = Glyph::Lucide(Lucide::Grid2x2Plus);
 
     /// The font character (`None` for [`Glyph::StarFilled`]).
     pub fn char(self) -> Option<char> {
