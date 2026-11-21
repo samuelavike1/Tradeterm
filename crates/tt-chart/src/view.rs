@@ -242,6 +242,8 @@ pub struct ChartView {
     lod_kind: Option<ChartType>,
     /// Requested zoom (number of bars to fit), applied on the next frame.
     pending_zoom: Option<usize>,
+    /// Time zone of the labels (built by the app, see [`Self::set_time_zone`]).
+    tz: crate::TzOffsets,
     /// Time to put at the left edge once bars arrive (Save chart left edge
     /// position when changing interval).
     pending_left_edge: Option<i64>,
@@ -289,7 +291,18 @@ impl ChartView {
             pending_left_edge: None,
             applied_right_margin: DEFAULT_RIGHT_OFFSET,
             labels: SymbolLabels::default(),
+            tz: crate::TzOffsets::utc(),
         }
+    }
+
+    /// Time zone of the time labels (axis, crosshair, drawings' dates).
+    /// Bars keep their exchange alignment; only labels move.
+    pub fn set_time_zone(&mut self, tz: crate::TzOffsets) {
+        self.tz = tz;
+    }
+
+    pub fn time_zone(&self) -> &crate::TzOffsets {
+        &self.tz
     }
 
     /// Sets the names shown by the symbol name label, the currency label
@@ -824,6 +837,7 @@ impl ChartView {
                 bar_close_ms: data.bar_close_ms,
                 title: data.title,
                 drawings: &self.drawings,
+                tz: &self.tz,
             };
             f(&scene)
         });

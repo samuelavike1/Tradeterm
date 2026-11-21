@@ -80,6 +80,8 @@ pub(crate) struct Scene<'a> {
     pub bar_close_ms: Option<i64>,
     pub title: &'a str,
     pub drawings: &'a crate::drawings::Drawings,
+    /// Zone of the time labels.
+    pub tz: &'a crate::TzOffsets,
 }
 
 /// An indicator pane: the indicator (index into `Scene::indicators`) and
@@ -203,6 +205,7 @@ pub(crate) fn draw_base(c: &mut dyn Canvas, s: &Scene<'_>) {
             );
         }
     }
+    session_breaks(c, s);
 
     if let Some(vr) = s.volume_rect.filter(|_| !s.main_collapsed) {
         c.set_clip(vr);
@@ -598,6 +601,33 @@ fn grid_line(c: &mut dyn Canvas, (color, kind): (Color32, LineKind), a: Pos2, b:
     }
 }
 
+/// Events › Session breaks: a line where each day starts in the chart's
+/// time zone, on intraday charts only.
+fn session_breaks(c: &mut dyn Canvas, s: &Scene<'_>) {
+    let sb = &s.style.events.session_breaks;
+    if !sb.visible || s.bar_interval_ms >= scale::DAY_MS {
+        return;
+    }
+    let ppp = c.pixels_per_point();
+    let vp = s.vp;
+    let color = s
+        .style
+        .resolve(sb.color, Color32::from_rgb(0x49, 0x85, 0xe7));
+    let w = sb.width.max(0.5);
+    let stride = (3.0 / vp.bar_spacing).ceil().max(1.0) as usize;
+    let slots = time_axis::SlotTimes::new(s.display.open_times(), s.bar_interval_ms).with_tz(s.tz);
+    for i in time_axis::day_boundaries(&slots, vp.visible_slots(), stride) {
+        // Between the last bar of the old day and the first of the new.
+        let x = crisp(vp.x_of(i as f32 - 0.5), ppp);
+        let (a, b) = (pos2(x, s.plot.top()), pos2(x, s.plot.bottom()));
+        match sb.kind {
+            LineKind::Solid => c.line(a, b, w, color),
+            LineKind::Dashed => c.dashed_line(a, b, w, color, 6.0 * w, 4.0 * w),
+            LineKind::Dotted => c.dashed_line(a, b, w, color, w, 2.0 * w),
+        }
+    }
+}
+
 /// Grid/label positions on the price axis: (y, label).
 fn price_ticks(s: &Scene<'_>) -> Vec<(f32, String)> {
     let vp = &s.vp;
@@ -617,7 +647,7 @@ fn time_ticks(c: &mut dyn Canvas, s: &Scene<'_>) -> Vec<time_axis::TimeTick> {
     // Gap chosen so regular labels land ~`time_label_spacing` apart.
     let typical = c.text_size("00:00", size).x;
     let gap = (s.style.time_label_spacing - typical).max(16.0);
-    let slots = time_axis::SlotTimes::new(s.display.open_times(), s.bar_interval_ms);
+    let slots = time_axis::SlotTimes::new(s.display.open_times(), s.bar_interval_ms).with_tz(s.tz);
     let hours = s.time_fmt.hours;
     // 12-hour clock: wider labels, so ticks are placed with their width.
     let mut ticks = time_axis::time_ticks(
@@ -639,7 +669,7 @@ fn time_ticks(c: &mut dyn Canvas, s: &Scene<'_>) -> Vec<time_axis::TimeTick> {
     if hours == HoursFormat::H12 {
         for t in &mut ticks {
             if t.weight < time_axis::TickWeight::Day
-                && let Some(ms) = slots.time_at(t.index)
+                && let Some(ms) = slots.local_at(t.index)
             {
                 t.label = scale::format_tick_time(ms, hours);
             }
@@ -918,7 +948,7 @@ fn crosshair(c: &mut dyn Canvas, s: &Scene<'_>, p: Pos2, slot: Option<i64>) -> (
 
     let slots = time_axis::SlotTimes::new(s.display.open_times(), s.bar_interval_ms);
     let time_tag = slot.and_then(|i| slots.time_at(i)).map(|t| {
-        let text = format_full_time_with(t, s.bar_interval_ms, s.time_fmt);
+        let text = format_full_time_with(s.tz.local_ms(t), s.bar_interval_ms, s.time_fmt);
         let size = c.text_size(&text, s.style.scales.text_size) + vec2(16.0, 8.0);
         let mut rect = Align2::CENTER_CENTER.anchor_size(pos2(x, s.time_axis.center().y), size);
         // Keep it inside the time axis.
@@ -1053,6 +1083,7 @@ mod tests {
             bar_close_ms: Some(series.last().map_or(0, |c| c.open_time_ms + 300_000)),
             title: "",
             drawings: &NO_DRAWINGS,
+            tz: crate::TzOffsets::utc_static(),
         }
     }
 
