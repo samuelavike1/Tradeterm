@@ -90,7 +90,9 @@ pub(crate) fn draw_overlay(c: &mut dyn Canvas, s: &Scene<'_>) {
     c.set_clip(s.vp_rect());
     let hovered = ds.hovered.filter(|h| !ds.is_selected(*h));
     for &id in ds.selection().iter().chain(hovered.as_ref()) {
-        if let (Some(d), Some(pts)) = (ds.items.iter().find(|d| d.id == id), ds.screen_of(id)) {
+        if let (Some(d), Some(pts)) = (ds.items.iter().find(|d| d.id == id), ds.screen_of(id))
+            && ds.is_shown(d)
+        {
             lines::overlay_stats(c, s, d, pts);
             handles(c, s, d.tool, pts, d.color());
         }

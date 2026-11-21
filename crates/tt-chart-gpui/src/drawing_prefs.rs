@@ -7,12 +7,14 @@
 //! into the charts (new drawings start from them).
 
 use gpui_kit::component::input::{Input, InputState};
-use gpui_kit::component::{WindowExt as _, v_flex};
+use gpui_kit::component::v_flex;
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use std::rc::Rc;
 use tt_chart::drawings::DrawingTemplates;
 use tt_chart::{DrawingTool, Props};
 use tt_ui::prelude::*;
+use tt_ui::{Menu, hsla};
 use tt_ui::tokens::*;
 use tt_ui::{DialogFooter, DialogOpts, DialogSize, open_dialog};
 

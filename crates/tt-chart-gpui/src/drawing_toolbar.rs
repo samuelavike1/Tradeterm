@@ -16,6 +16,7 @@ use gpui_kit::*;
 use lucide_icons::Icon;
 use std::rc::Rc;
 use tt_chart::{Caps, Drawing, LineStyle, Props, Rgba, VisibilityPreset, VisualOrder};
+use tt_ui::Menu;
 use tt_ui::prelude::*;
 use tt_ui::tokens::*;
 
@@ -71,14 +72,6 @@ impl ColorKind {
             ColorKind::Line => SLOT_LINE,
             ColorKind::Fill => SLOT_FILL,
             ColorKind::Text => SLOT_TEXT,
-        }
-    }
-
-    fn get(self, p: &Props) -> Option<Rgba> {
-        match self {
-            ColorKind::Line => Some(p.line_color()),
-            ColorKind::Fill => p.fill().map(|f| f.color),
-            ColorKind::Text => p.text_style().map(|t| t.color),
         }
     }
 
@@ -444,7 +437,7 @@ impl<S: ChartSource> Chart<S> {
                     DrawingPrefs::update(cx, |pr| pr.toolbar_pos = Some([fx, fy]));
                     drag_this.update(cx, |_, cx| cx.notify()).ok();
                 })
-                .child(Overlay::floating().children(buttons))
+                .child(Overlay::new().floating().children(buttons))
                 .child(
                     div()
                         .id("drawing-toolbar-grip")

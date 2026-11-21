@@ -356,18 +356,6 @@ impl<S: ChartSource> Chart<S> {
         done
     }
 
-    /// Edits the selected drawing (floating toolbar).
-    pub(crate) fn edit_drawing(
-        &self,
-        cx: &mut Context<Self>,
-        f: impl FnMut(&mut tt_chart::Drawing),
-    ) {
-        if self.view_mut(cx, |v| v.drawings.edit_selected(f)) {
-            cx.emit(ChartEvent::DrawingsChanged);
-            cx.notify();
-        }
-    }
-
     fn mouse_down(&mut self, e: &MouseDownEvent, cx: &mut Context<Self>) {
         let p = pos(e.position);
         self.motion.stop_momentum();

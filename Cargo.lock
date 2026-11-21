@@ -6881,6 +6881,7 @@ dependencies = [
  "futures",
  "gpui-kit",
  "lucide-icons",
+ "serde_json",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -6952,6 +6953,7 @@ dependencies = [
  "tt-core",
  "tt-session",
  "tt-theme",
+ "tt-ui",
 ]
 
 [[package]]

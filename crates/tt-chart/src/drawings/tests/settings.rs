@@ -114,9 +114,12 @@ fn applying_a_template_keeps_points_text_and_state() {
     assert!(!d.apply_style(&Props::defaults(DrawingTool::Rectangle)));
     // The saved template has no coordinates or text.
     let v = super::super::templates::template_value(&style);
-    for key in ["points", "text", "locked", "hidden", "visibility"] {
+    for key in ["points", "locked", "hidden", "visibility"] {
         assert!(v.get(key).is_none(), "{key} in a template");
     }
+    // `text` in props is the text layout (on, alignment), never the content.
+    assert!(v["text"].is_object());
+    assert!(!v.to_string().contains("Breakout"));
 }
 
 #[test]
