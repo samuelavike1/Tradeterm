@@ -1,7 +1,7 @@
 //! The title bar: chart tab pills, new tab, theme toggle, main menu.
 
 use crate::app::{LoadSynthetic, NewTab, TogglePerf, ToggleTheme, TradeTerm};
-use crate::ui::{badge_color, snappy};
+use crate::ui::{badge_color, logo_or_badge, snappy};
 use gpui_kit::base::transition;
 use gpui_kit::component::{TitleBar, h_flex};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -21,11 +21,13 @@ impl TradeTerm {
         for (i, chart) in self.tabs.iter().enumerate() {
             let s = &chart.read(cx).state.read(cx).source.tab;
             let (label, badge, change) = (s.display_symbol(), s.base_asset(), s.change_pct());
+            let logo = self.shared.assets.logo(&badge);
             tabs = tabs.child(tab_pill(
                 i,
                 i == self.active,
                 label,
                 badge,
+                logo,
                 change,
                 self.tabs.len() > 1,
                 window,
@@ -134,7 +136,7 @@ fn settings_menu(menu: Menu, app: &WeakEntity<TradeTerm>, window: &Window, cx: &
 /// Badge diameter: the small-icon box, so initials line up with icons.
 const BADGE: f32 = ICON_SM;
 
-/// One chart tab in the title bar: badge, symbol, change %, close button on
+/// One chart tab in the title bar: logo (or letter badge), symbol, change %, close button on
 /// hover. The active tab's background eases in.
 #[allow(clippy::too_many_arguments)]
 pub fn tab_pill(
@@ -142,6 +144,7 @@ pub fn tab_pill(
     active: bool,
     label: String,
     badge: String,
+    logo: Option<std::sync::Arc<std::path::Path>>,
     change: Option<f64>,
     closable: bool,
     window: &mut Window,
@@ -156,6 +159,7 @@ pub fn tab_pill(
     );
     let t = cx.ui().clone();
     let badge_bg = badge_color(&t, &badge);
+    let letter = SharedString::from(badge.chars().next().unwrap_or('?').to_string());
     let group = SharedString::from(format!("tab-{index}"));
     let app = cx.entity().downgrade();
     h_flex()
@@ -172,7 +176,7 @@ pub fn tab_pill(
         .cursor_pointer()
         .text_size(TEXT_DENSE.px())
         .text_color(hsla(t.text))
-        .child(
+        .child(logo_or_badge(logo, BADGE.px(), move || {
             div()
                 .flex_none()
                 .size(BADGE.px())
@@ -185,8 +189,9 @@ pub fn tab_pill(
                 .line_height(TEXT_CAPTION.px())
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(hsla(badge_fg(badge_bg)))
-                .child(badge.chars().next().unwrap_or('?').to_string()),
-        )
+                .child(letter.clone())
+                .into_any_element()
+        }))
         .child(div().whitespace_nowrap().child(label))
         .children(change.map(|pct| {
             let up = pct >= 0.0;

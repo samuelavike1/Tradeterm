@@ -5,7 +5,7 @@
 //! still running, the top result once it arrives), Esc closes.
 
 use crate::app::TradeTerm;
-use crate::ui::badge_color;
+use crate::ui::{badge_color, logo_or_badge};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::{WindowExt as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -14,9 +14,13 @@ use std::ops::Range;
 use std::sync::Arc;
 use tt_brokers::{BinanceSource, MarketDataSource};
 use tt_core::{Symbol, SymbolInfo};
+use tt_session::assets::AssetCache;
 use tt_ui::hsla;
 use tt_ui::prelude::*;
 use tt_ui::tokens::*;
+
+/// Logo / badge diameter in result rows.
+const BADGE: f32 = 28.;
 
 const QUOTES: [&str; 7] = ["All", "USDT", "USDC", "FDUSD", "BTC", "ETH", "BNB"];
 
@@ -25,6 +29,8 @@ pub struct SymbolSearch {
     input: Entity<InputState>,
     source: Arc<BinanceSource>,
     handle: tokio::runtime::Handle,
+    /// Full names and logos of assets.
+    assets: AssetCache,
     recent: Vec<SymbolInfo>,
     query: String,
     /// Results of `results_for`; replaced when a newer search finishes.
@@ -48,6 +54,7 @@ impl SymbolSearch {
         app: WeakEntity<TradeTerm>,
         source: Arc<BinanceSource>,
         handle: tokio::runtime::Handle,
+        assets: AssetCache,
         recent: Vec<SymbolInfo>,
         initial: &str,
         quote: usize,
@@ -84,6 +91,7 @@ impl SymbolSearch {
             input,
             source,
             handle,
+            assets,
             recent,
             query: String::new(),
             results: Vec::new(),
@@ -283,7 +291,8 @@ fn highlighted(text: String, needle: &str, accent: Hsla) -> StyledText {
 }
 
 impl SymbolSearch {
-    /// One result: initial badge, symbol and "BASE / QUOTE" with the query
+    /// One result: logo (or initial badge), symbol and the pair's full name
+    /// ("Bitcoin / TetherUS", else "BASE / QUOTE") with the query
     /// highlighted, SPOT tag, exchange.
     fn row(&self, i: usize, s: &SymbolInfo, cx: &mut Context<Self>) -> ListRow {
         let t = cx.ui();
@@ -293,19 +302,27 @@ impl SymbolSearch {
         } else {
             s.base.clone()
         };
-        let initial = key.chars().next().unwrap_or('?').to_string();
-        let badge = div()
-            .size(px(28.))
-            .flex_none()
-            .rounded(px(R_FULL))
-            .bg(hsla(badge_color(t, &key)))
-            .flex()
-            .items_center()
-            .justify_center()
-            .text_size(px(TEXT_SMALL))
-            .font_weight(FontWeight::MEDIUM)
-            .text_color(hsla(t.text_on_accent))
-            .child(initial);
+        let initial = SharedString::from(key.chars().next().unwrap_or('?').to_string());
+        let (bg, fg) = (hsla(badge_color(t, &key)), hsla(t.text_on_accent));
+        let badge = logo_or_badge(self.assets.logo(&key), px(BADGE), move || {
+            div()
+                .size(px(BADGE))
+                .flex_none()
+                .rounded(px(R_FULL))
+                .bg(bg)
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_size(px(TEXT_SMALL))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(fg)
+                .child(initial.clone())
+                .into_any_element()
+        });
+        let pair = self
+            .assets
+            .pair_name(&s.base, &s.quote)
+            .unwrap_or_else(|| format!("{} / {}", s.base, s.quote));
         let primary =
             div()
                 .whitespace_nowrap()
@@ -313,11 +330,7 @@ impl SymbolSearch {
         let secondary = h_flex()
             .gap(px(S1_5))
             .whitespace_nowrap()
-            .child(highlighted(
-                format!("{} / {}", s.base, s.quote),
-                &self.query,
-                active,
-            ))
+            .child(highlighted(pair, &self.query, active))
             .child(Tag::new("SPOT"));
         let info = s.clone();
         let this = cx.entity().downgrade();

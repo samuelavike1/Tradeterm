@@ -120,6 +120,16 @@ pub fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
 /// TradingView's blue: the `active` token in both palettes.
 const ACTIVE: Color32 = rgb(0x2962ff);
 
+/// Deterministic letter-badge colour for an asset code (stable across runs):
+/// one of the theme's series colours.
+pub fn badge_color(theme: &Theme, key: &str) -> Color32 {
+    let h = key
+        .bytes()
+        .fold(0u32, |a, b| a.wrapping_mul(31).wrapping_add(b as u32));
+    let palette = &theme.series_palette;
+    palette[(h as usize) % palette.len()]
+}
+
 /// Black or white, whichever reads better on `bg` (badges on palette colors).
 pub fn badge_fg(bg: Color32) -> Color32 {
     let [r, g, b, _] = bg.to_srgba_unmultiplied();

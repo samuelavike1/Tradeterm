@@ -975,6 +975,8 @@ pub(crate) static NO_LABELS: crate::view::SymbolLabels = crate::view::SymbolLabe
     currency: String::new(),
     description: String::new(),
     ticker_interval: String::new(),
+    logo_key: String::new(),
+    logo: None,
 };
 
 #[cfg(test)]
@@ -990,6 +992,11 @@ mod tests {
         fills: Vec<(Rect, Color32)>,
         dashes: Vec<(f32, f32, f32)>,
         polylines: Vec<(usize, f32, Color32)>,
+        /// Left edge of each text in `texts`.
+        text_x: Vec<f32>,
+        /// `Some`: the backend draws images (rects recorded here).
+        images: Option<Vec<Rect>>,
+        circles: usize,
     }
 
     impl Canvas for Recorder {
@@ -1011,7 +1018,12 @@ mod tests {
         }
         fn fill_area(&mut self, _: &[Pos2], _: f32, _: f32, _: Color32, _: Color32) {}
         fn fill_between(&mut self, _: &[Pos2], _: &[Pos2], _: Color32) {}
-        fn fill_circle(&mut self, _: Pos2, _: f32, _: Color32) {}
+        fn fill_circle(&mut self, _: Pos2, _: f32, _: Color32) {
+            self.circles += 1;
+        }
+        fn image(&mut self, r: Rect, _: f32, _: &std::sync::Arc<std::path::Path>) -> bool {
+            self.images.as_mut().map(|v| v.push(r)).is_some()
+        }
         fn text_styled(
             &mut self,
             pos: Pos2,
@@ -1022,7 +1034,9 @@ mod tests {
             bold: bool,
         ) -> Rect {
             self.texts.push(text.to_owned());
-            anchor.anchor_size(pos, self.text_size_styled(text, size, bold))
+            let r = anchor.anchor_size(pos, self.text_size_styled(text, size, bold));
+            self.text_x.push(r.left());
+            r
         }
         fn text_size_styled(&mut self, text: &str, size: f32, _: bool) -> Vec2 {
             vec2(text.len() as f32 * size * 0.6, size)
@@ -1593,5 +1607,50 @@ mod tests {
         assert!(t.iter().any(|t| t == "BTCUSDT, 1h") && t.iter().any(|t| t == "BTC / USDT"));
         style.canvas.watermark.description = false;
         assert!(!draw_wm(&style).iter().any(|t| t == "BTC / USDT"));
+    }
+
+    #[test]
+    fn status_line_logo_shifts_the_readout() {
+        let (s, theme) = (series(), Theme::dark());
+        let mut style = ChartStyle::default();
+        let x_of = |c: &Recorder, t: &str| c.text_x[c.texts.iter().position(|x| x == t).unwrap()];
+        let mut labels = crate::view::SymbolLabels::default();
+        let draw_with = |labels: &crate::view::SymbolLabels, style: &ChartStyle, images: bool| {
+            let mut scene = scene_with(&s, &theme, style, None);
+            scene.title = "BTCUSDT · 1h · Binance";
+            scene.labels = labels;
+            let mut c = Recorder {
+                images: images.then(Vec::new),
+                ..Default::default()
+            };
+            readout(&mut c, &scene, None);
+            c
+        };
+        // No asset: no logo.
+        let plain = draw_with(&labels, &style, true);
+        let x0 = x_of(&plain, "BTCUSDT · 1h · Binance");
+        assert_eq!(plain.circles, 0);
+
+        // Known asset, no cached logo: the letter badge, text shifted.
+        labels.logo_key = "BTC".into();
+        let badge = draw_with(&labels, &style, true);
+        assert!(badge.texts.iter().any(|t| t == "B"));
+        assert_eq!(badge.circles, 1);
+        let x1 = x_of(&badge, "BTCUSDT · 1h · Binance");
+        assert!(x1 > x0 + 15.0, "{x0} → {x1}");
+
+        // Logo file: the image instead of the badge, same shift.
+        labels.logo = Some(std::path::Path::new("logos/BTC.png").into());
+        let img = draw_with(&labels, &style, true);
+        assert_eq!(img.images.as_ref().map(Vec::len), Some(1));
+        assert_eq!(img.circles, 0);
+        assert_eq!(x_of(&img, "BTCUSDT · 1h · Binance"), x1);
+        // A backend without images falls back to the badge.
+        assert_eq!(draw_with(&labels, &style, false).circles, 1);
+
+        // Logo off in Settings › Status line.
+        style.status_line.logo = false;
+        let off = draw_with(&labels, &style, true);
+        assert_eq!(x_of(&off, "BTCUSDT · 1h · Binance"), x0);
     }
 }

@@ -10,7 +10,7 @@ use emath::{Align2, Pos2, Rect, pos2, vec2};
 use lucide_icons::Icon;
 use tt_core::Placement;
 use tt_theme::metrics::{CONTROL_XS, ICON_XS, R_SM, S0_5, S1, S1_5, S2};
-use tt_theme::with_alpha;
+use tt_theme::{badge_color, badge_fg, with_alpha};
 
 /// Legend buttons match the kit's xs controls (ui-guidelines L1): 20 px
 /// with a 14 px icon (3 px inset), radius `R_SM`.
@@ -222,18 +222,52 @@ fn legend_row(
     }
 }
 
-/// Top-left readout: title, OHLC, change vs previous close and volume of the
+/// The status line's logo at `pos` (top left, text row of `size`): the base
+/// asset's image, round-clipped, or its letter badge when there is no image
+/// (or the backend can't draw images). Returns its rect.
+fn logo(c: &mut dyn Canvas, s: &Scene<'_>, pos: Pos2, size: f32) -> Rect {
+    let d = (size * 1.4).round();
+    let row_h = c.text_size("O", size).y;
+    let rect = Rect::from_min_size(pos2(pos.x, pos.y + (row_h - d) / 2.0), vec2(d, d));
+    let drawn = s
+        .labels
+        .logo
+        .as_ref()
+        .is_some_and(|p| c.image(rect, d / 2.0, p));
+    if !drawn {
+        let key = &s.labels.logo_key;
+        let bg = badge_color(s.theme, key);
+        c.fill_circle(rect.center(), d / 2.0, bg);
+        let letter: String = key.chars().take(1).collect();
+        c.text_styled(
+            rect.center(),
+            Align2::CENTER_CENTER,
+            &letter,
+            (d * 0.55).round(),
+            badge_fg(bg),
+            true,
+        );
+    }
+    rect
+}
+
+/// Top-left readout: logo, title, OHLC, change vs previous close and volume of the
 /// hovered (or last) bar.
 pub(super) fn readout(c: &mut dyn Canvas, s: &Scene<'_>, bar: Option<usize>) {
     let t = s.theme;
     let size = s.style.scales.text_size;
     let mut pos = s.plot.left_top() + vec2(10.0, 8.0);
+    let st = &s.style.status_line;
+    // The text shifts right past the logo.
+    if st.logo && !s.labels.logo_key.is_empty() {
+        let r = logo(c, s, pos, size);
+        pos.x = r.right() + S1_5;
+    }
     let mut put = |c: &mut dyn Canvas, text: &str, color: Color32, gap: f32| {
         let r = c.text(pos, Align2::LEFT_TOP, text, size, color);
         pos.x = r.right() + gap;
     };
 
-    let st = &s.style.status_line;
     if st.title && !s.title.is_empty() {
         put(c, s.title, t.text, 14.0);
     }

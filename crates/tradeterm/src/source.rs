@@ -24,15 +24,25 @@ impl TabSource {
         // Name label, currency label and watermark (allocates only on change).
         let ticker = self.tab.display_symbol();
         let interval = self.tab.timeframe.to_string();
+        // "Bitcoin / TetherUS" once the asset names are known, else
+        // "BTC / USDT".
+        let assets = &self.shared.assets;
         let (quote, description) = match &self.tab.symbol_info {
-            Some(i) if !i.quote.is_empty() => {
-                (i.quote.as_str(), format!("{} / {}", i.base, i.quote))
-            }
+            Some(i) if !i.quote.is_empty() => (
+                i.quote.as_str(),
+                assets
+                    .pair_name(&i.base, &i.quote)
+                    .unwrap_or_else(|| format!("{} / {}", i.base, i.quote)),
+            ),
             _ => ("", String::new()),
         };
         self.tab
             .chart
             .set_symbol_labels(&ticker, &interval, quote, &description);
+        // Status-line logo: the base asset's file, else its letter badge.
+        let base = self.tab.base_asset();
+        let logo = assets.logo(&base);
+        self.tab.chart.set_symbol_logo(&base, logo);
     }
 }
 
