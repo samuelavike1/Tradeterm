@@ -250,7 +250,7 @@ impl ChartView {
     /// Default zoom, scrolled to the latest bar, auto-fit price axis.
     pub fn reset_view(&mut self) {
         self.bar_spacing = DEFAULT_SPACING;
-        self.right_offset = self.style.margin_right;
+        self.right_offset = self.style.canvas.margins.right;
         self.manual_range = None;
     }
 
@@ -763,8 +763,8 @@ impl ChartView {
             }
         }
         let (top, bottom) = (
-            (self.style.margin_top as f64 / 100.0).clamp(0.0, 0.45),
-            (self.style.margin_bottom as f64 / 100.0).clamp(0.0, 0.45),
+            (self.style.canvas.margins.top as f64 / 100.0).clamp(0.0, 0.45),
+            (self.style.canvas.margins.bottom as f64 / 100.0).clamp(0.0, 0.45),
         );
         let auto = extent.map_or((0.0, 1.0), |(lo, hi)| {
             fit_price_range_margins(lo, hi, vp.scale, top, bottom)
@@ -861,7 +861,7 @@ impl ChartView {
 
     /// Height of a collapsed pane strip.
     fn collapsed_height(&self) -> f32 {
-        self.style.font_size + COLLAPSED_PANE_EXTRA
+        self.style.scales.text_size + COLLAPSED_PANE_EXTRA
     }
 
     /// Per pane: collapsed; plus the strip height and the height left for
@@ -963,7 +963,7 @@ impl ChartView {
             ScaleMode::IndexedTo100 => "10000.00".to_owned(),
             _ => crate::scale::format_price(sample_price, precision),
         };
-        let axis_w = (canvas.text_size(&sample, self.style.font_size).x + 22.0).max(64.0);
+        let axis_w = (canvas.text_size(&sample, self.style.scales.text_size).x + 22.0).max(64.0);
         let plot_right = full.right() - axis_w;
         let plot_bottom = full.bottom() - self.style.time_axis_height;
         let plot = Rect::from_min_max(full.min, pos2(plot_right, plot_bottom));
@@ -1291,7 +1291,7 @@ mod tests {
         };
         let l = draw(&mut v);
         assert_eq!(l.pane_ids, vec![0, rsi, macd]);
-        let strip = v.style.font_size + COLLAPSED_PANE_EXTRA;
+        let strip = v.style.scales.text_size + COLLAPSED_PANE_EXTRA;
 
         // Collapse RSI: a strip; its divider no longer resizes.
         v.toggle_pane_collapsed(rsi);

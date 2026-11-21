@@ -64,7 +64,7 @@ pub(super) fn draw(c: &mut dyn Canvas, s: &Scene<'_>, d: &Drawing, pts: &[Pos2])
             format_span(b.time_ms - a.time_ms)
         ));
     }
-    let size = s.style.font_size;
+    let size = s.style.scales.text_size;
     let line_h = size + 4.0;
     let width = lines
         .iter()

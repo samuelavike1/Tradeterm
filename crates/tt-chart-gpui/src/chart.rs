@@ -176,7 +176,7 @@ pub enum ChartEvent {
     Changed,
     /// The price-scale menu changed an app-wide chart option; apply it to
     /// every chart and save it.
-    StyleChanged(tt_chart::ChartStyle),
+    StyleChanged(Box<tt_chart::ChartStyle>),
     /// "More settings…" in the price-scale menu.
     OpenSettings,
     /// Drawings changed (save them), or the drawing tool was released after
@@ -617,7 +617,7 @@ impl<S: ChartSource> Chart<S> {
             f(&mut v.style);
             v.style.clone()
         });
-        cx.emit(ChartEvent::StyleChanged(style));
+        cx.emit(ChartEvent::StyleChanged(Box::new(style)));
     }
 
     /// Changes this chart's scale and reports it.
@@ -647,7 +647,7 @@ impl<S: ChartSource> Chart<S> {
         let rel = |x: f32, y: f32| (px(x - origin.x), px(y - origin.y));
 
         // A / L / %: fade in quickly while the pointer is over the axis.
-        let shown = match style.scale_buttons {
+        let shown = match style.scales.scale_buttons {
             tt_chart::ScaleButtons::Always => true,
             tt_chart::ScaleButtons::OnHover => self.axis_hover,
             tt_chart::ScaleButtons::Hidden => false,
@@ -810,24 +810,31 @@ impl<S: ChartSource> Chart<S> {
                                 Rc::new(move |c, cx| c.edit_scale(cx, |v| v.scale_mode = m)),
                             ));
                         }
-                        type Toggle = fn(&mut tt_chart::ChartStyle) -> &mut bool;
+                        type Toggle = fn(&mut tt_chart::ChartStyle, bool);
+                        let sc = &style.scales;
                         let toggles: [(&'static str, bool, Toggle); 5] = [
-                            ("Symbol last price label", style.last_price_label, |s| {
-                                &mut s.last_price_label
-                            }),
-                            ("Countdown to bar close", style.countdown, |s| {
-                                &mut s.countdown
+                            (
+                                "Symbol last price label",
+                                sc.symbol_label.shows_value(),
+                                |s, on| {
+                                    s.scales.symbol_label = s.scales.symbol_label.with_value(on)
+                                },
+                            ),
+                            ("Countdown to bar close", sc.countdown, |s, on| {
+                                s.scales.countdown = on
                             }),
                             (
                                 "Indicator value labels",
-                                style.indicator_value_labels,
-                                |s| &mut s.indicator_value_labels,
+                                sc.indicators.shows_value(),
+                                |s, on| s.scales.indicators = s.scales.indicators.with_value(on),
                             ),
-                            ("No overlapping labels", style.no_overlapping_labels, |s| {
-                                &mut s.no_overlapping_labels
-                            }),
-                            ("Price line", style.last_price_line, |s| {
-                                &mut s.last_price_line
+                            (
+                                "No overlapping labels",
+                                sc.no_overlapping_labels,
+                                |s, on| s.scales.no_overlapping_labels = on,
+                            ),
+                            ("Price line", sc.symbol_label.shows_line(), |s, on| {
+                                s.scales.symbol_label = s.scales.symbol_label.with_line(on)
                             }),
                         ];
                         menu = menu.separator().label("Labels and lines");
@@ -835,12 +842,7 @@ impl<S: ChartSource> Chart<S> {
                             menu = menu.item(item(
                                 label,
                                 on,
-                                Rc::new(move |c, cx| {
-                                    c.edit_style(cx, |s| {
-                                        let b = field(s);
-                                        *b = !*b;
-                                    })
-                                }),
+                                Rc::new(move |c, cx| c.edit_style(cx, |s| field(s, !on))),
                             ));
                         }
                         menu.separator().item(

@@ -3,18 +3,22 @@
 use crate::bars::{DrawBar, max_volume};
 use crate::indicators::{Indicator, format_value, histogram_down};
 use crate::render::Canvas;
-use crate::scale::{
-    self, format_countdown, format_full_time, format_percent, format_price, format_signed_price,
-};
+use crate::scale::{self, format_countdown, format_full_time, format_percent, format_price};
+use crate::style::LineKind;
 use crate::time_axis;
 use crate::viewport::Viewport;
 use crate::{ChartStyle, ChartType, ScaleMode};
 use ecolor::Color32;
 use emath::{Align2, Pos2, Rect, pos2, vec2};
-use lucide_icons::Icon;
 use std::ops::Range;
 use tt_core::{Candle, CandleSeries, Placement, Plot, Study};
 use tt_theme::{Theme, with_alpha};
+
+mod legend;
+mod series;
+
+use legend::{legends, readout};
+use series::{BarGeom, series};
 
 /// Everything needed to draw one frame.
 pub(crate) struct Scene<'a> {
@@ -126,7 +130,7 @@ pub(crate) fn draw_base(c: &mut dyn Canvas, s: &Scene<'_>) {
             s.plot.center(),
             Align2::CENTER_CENTER,
             "Waiting for data…",
-            s.style.font_size + 1.0,
+            s.style.scales.text_size + 1.0,
             t.text_muted,
         );
         return;
@@ -139,11 +143,14 @@ pub(crate) fn draw_base(c: &mut dyn Canvas, s: &Scene<'_>) {
 
     // Grid: one line per price label and per time label, like TradingView.
     let ppp = c.pixels_per_point();
-    if s.style.grid_horizontal {
+    let cv = &s.style.canvas;
+    let grid_h = (s.style.grid_color(t, false), cv.grid_h_kind);
+    let grid_v = (s.style.grid_color(t, true), cv.grid_v_kind);
+    if cv.grid_lines.horizontal() {
         c.set_clip(s.vp_rect());
         for (y, _) in price_ticks.iter().filter(|_| !s.main_collapsed) {
             let y = crisp(*y, ppp);
-            grid_line(c, s, false, pos2(s.plot.left(), y), pos2(s.plot.right(), y));
+            grid_line(c, grid_h, pos2(s.plot.left(), y), pos2(s.plot.right(), y));
         }
         for (pane, ticks) in s.panes.iter().zip(&pane_ticks) {
             if pane.collapsed {
@@ -152,17 +159,16 @@ pub(crate) fn draw_base(c: &mut dyn Canvas, s: &Scene<'_>) {
             c.set_clip(pane.rect());
             for (y, _) in ticks {
                 let y = crisp(*y, ppp);
-                grid_line(c, s, false, pos2(s.plot.left(), y), pos2(s.plot.right(), y));
+                grid_line(c, grid_h, pos2(s.plot.left(), y), pos2(s.plot.right(), y));
             }
         }
     }
     c.set_clip(s.plot);
-    if s.style.grid_vertical {
+    if cv.grid_lines.vertical() {
         for tick in &time_ticks {
             grid_line(
                 c,
-                s,
-                true,
+                grid_v,
                 pos2(tick.x, s.plot.top()),
                 pos2(tick.x, s.plot.bottom()),
             );
@@ -212,7 +218,7 @@ pub(crate) fn draw_base(c: &mut dyn Canvas, s: &Scene<'_>) {
     // be hidden. (The crosshair's tags are opaque and drawn by the overlay.)
     c.set_clip(s.full);
     // Axis tags per pane (0 = price pane), spread so they don't overlap.
-    let mut grouped = if s.style.indicator_value_labels {
+    let mut grouped = if s.style.scales.indicators.shows_value() {
         study_tags(s)
     } else {
         Vec::new()
@@ -238,7 +244,7 @@ pub(crate) fn draw_base(c: &mut dyn Canvas, s: &Scene<'_>) {
             .filter(|(p, _)| *p == pane)
             .map(|(_, t)| t.clone())
             .collect();
-        if s.style.no_overlapping_labels {
+        if s.style.scales.no_overlapping_labels {
             spread_tags(&mut group, top, bottom);
         }
         tags.extend(group);
@@ -294,9 +300,10 @@ impl Scene<'_> {
         vp_rect(&self.vp)
     }
 
-    /// Whether a bar counts as rising ("Color bars based on previous close").
-    fn rising(&self, b: &DrawBar) -> bool {
-        if self.style.color_by_prev_close {
+    /// Whether a bar counts as rising; `by_prev_close` is the chart type's
+    /// "Color bars based on previous close" (read once per frame).
+    fn rising(by_prev_close: bool, b: &DrawBar) -> bool {
+        if by_prev_close {
             b.close >= b.prev_close
         } else {
             b.close >= b.open
@@ -315,345 +322,6 @@ impl Scene<'_> {
 /// Snaps a coordinate to the center of a physical pixel for crisp 1px lines.
 fn crisp(v: f32, ppp: f32) -> f32 {
     ((v * ppp).floor() + 0.5) / ppp
-}
-
-/// Pixel-aligned bar geometry shared by all bar-like chart types.
-struct BarGeom {
-    ppp: f32,
-    /// Body width in physical pixels (odd, ≥ 1).
-    body_px: f32,
-    /// Wick/line width in physical pixels.
-    wick_px: f32,
-}
-
-impl BarGeom {
-    fn new(spacing: f32, ppp: f32) -> Self {
-        let mut body_px = (spacing * ppp * 0.72).floor().max(1.0);
-        if body_px as i32 % 2 == 0 {
-            body_px -= 1.0;
-        }
-        let body_px = body_px.max(1.0);
-        Self {
-            ppp,
-            body_px,
-            wick_px: ppp.round().max(1.0).min(body_px),
-        }
-    }
-
-    /// Physical-pixel center column for screen x.
-    fn center_px(&self, x: f32) -> f32 {
-        (x * self.ppp).round()
-    }
-
-    /// Rect `width_px` physical pixels wide, centered on `cx_px`, between y0 and y1.
-    fn column(&self, cx_px: f32, width_px: f32, y0: f32, y1: f32) -> Rect {
-        let x0 = (cx_px - (width_px / 2.0).floor()) / self.ppp;
-        Rect::from_min_max(
-            pos2(x0, y0.min(y1)),
-            pos2(x0 + width_px / self.ppp, y0.max(y1)),
-        )
-    }
-
-    /// Snaps y0..y1 to pixels, at least one pixel tall.
-    fn span(&self, a: f32, b: f32) -> (f32, f32) {
-        let y0 = (a.min(b) * self.ppp).round() / self.ppp;
-        let y1 = ((a.max(b) * self.ppp).round() / self.ppp).max(y0 + 1.0 / self.ppp);
-        (y0, y1)
-    }
-}
-
-fn series(c: &mut dyn Canvas, s: &Scene<'_>) {
-    let g = BarGeom::new(s.vp.bar_spacing, c.pixels_per_point());
-    if s.decimated {
-        decimated(c, s, &g);
-        return;
-    }
-    match s.chart_type {
-        ChartType::Candles | ChartType::HeikinAshi => candles(c, s, &g, false),
-        ChartType::HollowCandles => candles(c, s, &g, true),
-        ChartType::VolumeCandles => volume_candles(c, s, &g),
-        ChartType::Bars => ohlc_bars(c, s, &g),
-        ChartType::Line => line(c, s, false),
-        ChartType::LineWithMarkers => {
-            line(c, s, false);
-            markers(c, s);
-        }
-        ChartType::StepLine => step_line(c, s),
-        ChartType::Area => line(c, s, true),
-        ChartType::HlcArea => hlc_area(c, s),
-        ChartType::Baseline => baseline(c, s),
-        ChartType::Columns => columns(c, s, &g),
-        ChartType::HighLow => high_low(c, s, &g),
-        ChartType::Renko | ChartType::LineBreak => bricks(c, s),
-    }
-}
-
-/// Candles whose body width is proportional to volume (vs. the visible max).
-fn volume_candles(c: &mut dyn Canvas, s: &Scene<'_>, g: &BarGeom) {
-    let vp = &s.vp;
-    let max = max_volume(s.bars).max(f64::MIN_POSITIVE);
-    // Allow wider bodies than regular candles: the busiest bar fills its slot.
-    let full_px = (s.vp.bar_spacing * g.ppp * 0.92).floor().max(1.0);
-    for b in s.bars {
-        let (body, wick) = s.colors(b.close >= b.open);
-        let cx = g.center_px(b.x);
-        let mut w = (full_px * (b.volume / max) as f32).round().max(1.0);
-        if w as i32 % 2 == 0 {
-            w -= 1.0;
-        }
-        let w = w.max(1.0);
-        c.fill_rect(
-            g.column(cx, g.wick_px.min(w), vp.y_of(b.high), vp.y_of(b.low)),
-            wick,
-        );
-        let (y0, y1) = g.span(vp.y_of(b.open), vp.y_of(b.close));
-        c.fill_rect(g.column(cx, w, y0, y1), body);
-    }
-}
-
-/// A dot on each close (when bars are far enough apart to see them).
-fn markers(c: &mut dyn Canvas, s: &Scene<'_>) {
-    if s.vp.bar_spacing < 6.0 {
-        return;
-    }
-    let color = line_color(s);
-    let r = (s.vp.bar_spacing * 0.18).clamp(2.0, 3.5);
-    for b in s.bars {
-        c.fill_circle(pos2(b.x, s.vp.y_of(b.close)), r, color);
-    }
-}
-
-fn step_line(c: &mut dyn Canvas, s: &Scene<'_>) {
-    let half = s.vp.bar_spacing / 2.0;
-    let mut pts = Vec::with_capacity(s.bars.len() * 2);
-    for b in s.bars {
-        let y = s.vp.y_of(b.close);
-        pts.push(pos2(b.x - half, y));
-        pts.push(pos2(b.x + half, y));
-    }
-    c.polyline(&pts, 1.5, line_color(s));
-}
-
-/// High (up color), low (down color) and close lines with bands between.
-fn hlc_area(c: &mut dyn Canvas, s: &Scene<'_>) {
-    let vp = &s.vp;
-    let pts = |f: fn(&DrawBar) -> f64| -> Vec<Pos2> {
-        s.bars.iter().map(|b| pos2(b.x, vp.y_of(f(b)))).collect()
-    };
-    let (high, low, close) = (pts(|b| b.high), pts(|b| b.low), pts(|b| b.close));
-    let alpha = if s.theme.dark { 0.22 } else { 0.18 };
-    c.fill_between(&high, &close, with_alpha(s.theme.up, alpha));
-    c.fill_between(&close, &low, with_alpha(s.theme.down, alpha));
-    c.polyline(&high, 1.0, s.theme.up);
-    c.polyline(&low, 1.0, s.theme.down);
-    c.polyline(&close, 1.5, line_color(s));
-}
-
-/// Closes against a baseline at the middle of the visible price range
-/// (TradingView's default 50%): green above, red below.
-fn baseline(c: &mut dyn Canvas, s: &Scene<'_>) {
-    let vp = &s.vp;
-    let base = vp.price_min + (vp.price_max - vp.price_min) * 0.5;
-    let yb = vp.y_of(base);
-    // Close points, with exact crossing points inserted so fills split cleanly.
-    let mut pts: Vec<Pos2> = Vec::with_capacity(s.bars.len() + 8);
-    for b in s.bars {
-        let p = pos2(b.x, vp.y_of(b.close));
-        if let Some(prev) = pts.last().copied()
-            && (prev.y - yb) * (p.y - yb) < 0.0
-        {
-            let t = (yb - prev.y) / (p.y - prev.y);
-            pts.push(pos2(prev.x + (p.x - prev.x) * t, yb));
-        }
-        pts.push(p);
-    }
-    let alpha = if s.theme.dark { 0.25 } else { 0.2 };
-    let above: Vec<Pos2> = pts.iter().map(|p| pos2(p.x, p.y.min(yb))).collect();
-    let below: Vec<Pos2> = pts.iter().map(|p| pos2(p.x, p.y.max(yb))).collect();
-    let flat: Vec<Pos2> = pts.iter().map(|p| pos2(p.x, yb)).collect();
-    c.fill_between(&above, &flat, with_alpha(s.theme.up, alpha));
-    c.fill_between(&flat, &below, with_alpha(s.theme.down, alpha));
-    let rect = s.vp_rect();
-    c.dashed_line(
-        pos2(rect.left(), yb),
-        pos2(rect.right(), yb),
-        1.0,
-        s.theme.text_muted,
-        3.0,
-        3.0,
-    );
-    // The line itself: up color above the baseline, down color below.
-    c.set_clip(Rect::from_min_max(rect.min, pos2(rect.right(), yb)));
-    c.polyline(&pts, 1.5, s.theme.up);
-    c.set_clip(Rect::from_min_max(pos2(rect.left(), yb), rect.max));
-    c.polyline(&pts, 1.5, s.theme.down);
-    c.set_clip(rect);
-}
-
-/// Columns from the bottom of the price area up to each close.
-fn columns(c: &mut dyn Canvas, s: &Scene<'_>, g: &BarGeom) {
-    let bottom = s.vp.plot.bottom;
-    for b in s.bars {
-        let (color, _) = s.colors(b.close >= b.prev_close);
-        let col = g.column(g.center_px(b.x), g.body_px, s.vp.y_of(b.close), bottom);
-        c.fill_rect(col, with_alpha(color, 0.85));
-    }
-}
-
-/// Bars spanning each high-low range.
-fn high_low(c: &mut dyn Canvas, s: &Scene<'_>, g: &BarGeom) {
-    let color = line_color(s);
-    for b in s.bars {
-        let (y0, y1) = g.span(s.vp.y_of(b.high), s.vp.y_of(b.low));
-        c.fill_rect(g.column(g.center_px(b.x), g.body_px, y0, y1), color);
-    }
-}
-
-/// Renko / Line break bricks: adjacent bodies without wicks.
-fn bricks(c: &mut dyn Canvas, s: &Scene<'_>) {
-    let ppp = c.pixels_per_point();
-    let w = (s.vp.bar_spacing * ppp * 0.9).floor().max(1.0) / ppp;
-    for b in s.bars {
-        let (color, _) = s.colors(b.close >= b.open);
-        let (y0, y1) = (s.vp.y_of(b.open), s.vp.y_of(b.close));
-        let rect = Rect::from_min_max(
-            pos2(b.x - w / 2.0, y0.min(y1)),
-            pos2(b.x + w / 2.0, y0.max(y1).max(y0.min(y1) + 1.0 / ppp)),
-        );
-        c.fill_rect(rect, color);
-    }
-}
-
-fn candles(c: &mut dyn Canvas, s: &Scene<'_>, g: &BarGeom, hollow: bool) {
-    let vp = &s.vp;
-    let st = s.style;
-    for b in s.bars {
-        let rising = b.close >= b.open;
-        // Hollow candles: color by close vs previous close, hollow when rising.
-        let up = if hollow {
-            b.close >= b.prev_close
-        } else {
-            s.rising(b)
-        };
-        let (body, wick) = s.colors(up);
-        let cx = g.center_px(b.x);
-        let (yh, yl) = (vp.y_of(b.high), vp.y_of(b.low));
-        let (y0, y1) = g.span(vp.y_of(b.open), vp.y_of(b.close));
-
-        if g.body_px <= g.wick_px {
-            c.fill_rect(g.column(cx, g.wick_px, yh, yl), wick);
-            continue;
-        }
-        if hollow && rising {
-            // Wick above and below the body only, then an outlined body.
-            if st.wick {
-                c.fill_rect(g.column(cx, g.wick_px, yh, y0), wick);
-                c.fill_rect(g.column(cx, g.wick_px, y1, yl), wick);
-            }
-            c.stroke_rect(g.column(cx, g.body_px, y0, y1), g.wick_px / g.ppp, body);
-        } else {
-            if st.wick {
-                c.fill_rect(g.column(cx, g.wick_px, yh, yl), wick);
-            }
-            let rect = g.column(cx, g.body_px, y0, y1);
-            if st.body {
-                c.fill_rect(rect, body);
-            }
-            // Borders only cost a primitive when they differ from the body.
-            let border = st.border_color(s.theme, up);
-            if st.borders && (!st.body || border != body) {
-                c.stroke_rect(rect, 1.0 / g.ppp, border);
-            }
-        }
-    }
-}
-
-fn ohlc_bars(c: &mut dyn Canvas, s: &Scene<'_>, g: &BarGeom) {
-    let vp = &s.vp;
-    let tick_px = ((g.body_px - g.wick_px) / 2.0).floor().max(1.0);
-    let w = g.wick_px / g.ppp;
-    for b in s.bars {
-        let (color, _) = s.colors(s.rising(b));
-        let cx = g.center_px(b.x);
-        c.fill_rect(
-            g.column(cx, g.wick_px, vp.y_of(b.high), vp.y_of(b.low)),
-            color,
-        );
-        let half_wick = (g.wick_px / 2.0).floor();
-        let yo = crisp(vp.y_of(b.open), g.ppp);
-        let yc = crisp(vp.y_of(b.close), g.ppp);
-        // Open tick to the left, close tick to the right.
-        let left = (cx - half_wick - tick_px) / g.ppp;
-        let right = (cx - half_wick + g.wick_px) / g.ppp;
-        let tick = |x0: f32, y: f32| {
-            Rect::from_min_max(
-                pos2(x0, y - w / 2.0),
-                pos2(x0 + tick_px / g.ppp, y + w / 2.0),
-            )
-        };
-        c.fill_rect(tick(left, yo), color);
-        c.fill_rect(tick(right, yc), color);
-    }
-}
-
-fn line_color(s: &Scene<'_>) -> Color32 {
-    s.theme.series_palette[0]
-}
-
-fn area_fill(c: &mut dyn Canvas, s: &Scene<'_>, pts: &[Pos2]) {
-    let color = line_color(s);
-    let alpha = if s.theme.dark { 0.28 } else { 0.22 };
-    c.fill_area(
-        pts,
-        s.vp.plot.bottom,
-        s.vp.plot.top,
-        with_alpha(color, alpha),
-        with_alpha(color, 0.0),
-    );
-}
-
-fn line(c: &mut dyn Canvas, s: &Scene<'_>, area: bool) {
-    let pts: Vec<Pos2> = s
-        .bars
-        .iter()
-        .map(|b| pos2(b.x, s.vp.y_of(b.close)))
-        .collect();
-    if area {
-        area_fill(c, s, &pts);
-    }
-    c.polyline(&pts, 1.5, line_color(s));
-}
-
-/// Zoomed far out: one aggregated column per pixel.
-fn decimated(c: &mut dyn Canvas, s: &Scene<'_>, g: &BarGeom) {
-    let vp = &s.vp;
-    match s.chart_type {
-        t if t.is_line_like() => {
-            let color = line_color(s);
-            let pts: Vec<Pos2> = s.bars.iter().map(|b| pos2(b.x, vp.y_of(b.close))).collect();
-            if matches!(s.chart_type, ChartType::Area | ChartType::Baseline) {
-                area_fill(c, s, &pts);
-            }
-            // Min/max envelope per column keeps spikes visible; then the close path.
-            for b in s.bars {
-                let col = g.column(
-                    g.center_px(b.x),
-                    1.0,
-                    vp.y_of(b.close_max),
-                    vp.y_of(b.close_min),
-                );
-                c.fill_rect(col, color);
-            }
-            c.polyline(&pts, 1.0, color);
-        }
-        _ => {
-            for b in s.bars {
-                let (color, _) = s.colors(b.close >= b.open);
-                let col = g.column(g.center_px(b.x), 1.0, vp.y_of(b.high), vp.y_of(b.low));
-                c.fill_rect(col, color);
-            }
-        }
-    }
 }
 
 /// Volume scale of the overlay: the busiest visible bar reaches the top.
@@ -921,183 +589,12 @@ fn study_tags(s: &Scene<'_>) -> Vec<(usize, Tag)> {
     tags
 }
 
-const LEGEND_ICON: f32 = 15.0;
-const LEGEND_BUTTON: f32 = 20.0;
-
-/// Legends: price-pane indicators under the OHLC readout (collapsible), and
-/// each pane's indicator at its top left. Values are for `bar`.
-fn legends(c: &mut dyn Canvas, s: &Scene<'_>, bar: Option<usize>) -> Vec<LegendHit> {
-    let mut hits = Vec::new();
-    let row_h = s.style.font_size + 10.0;
-    let mut pos = s.plot.left_top() + vec2(10.0, 8.0 + row_h);
-    let main: Vec<&Indicator> = s
-        .indicators
-        .iter()
-        .filter(|i| i.placement() != Placement::Pane)
-        .collect();
-    if !main.is_empty() && !s.main_collapsed {
-        if !s.legend_collapsed {
-            for ind in &main {
-                hits.push(legend_row(c, s, pos, ind, bar));
-                pos.y += row_h;
-            }
-        }
-        // Collapse / expand toggle; collapsed it shows the indicator count.
-        let count = if s.legend_collapsed {
-            main.len().to_string()
-        } else {
-            String::new()
-        };
-        let text_w = if count.is_empty() {
-            0.0
-        } else {
-            c.text_size(&count, s.style.font_size).x + 6.0
-        };
-        let rect = Rect::from_min_size(
-            pos - vec2(4.0, 2.0),
-            vec2(LEGEND_BUTTON + text_w, LEGEND_BUTTON),
-        );
-        let hovered = s.legend_hover == Some(0);
-        let bg = if hovered {
-            s.theme.selection
-        } else {
-            with_alpha(s.theme.bg, 0.85)
-        };
-        c.fill_rounded_rect(rect, 4.0, bg);
-        c.stroke_rect(rect, 1.0, s.theme.border);
-        let icon = if s.legend_collapsed {
-            Icon::ChevronDown
-        } else {
-            Icon::ChevronUp
-        };
-        let ic = c.icon(
-            pos2(rect.left() + LEGEND_BUTTON / 2.0, rect.center().y),
-            char::from(icon),
-            LEGEND_ICON,
-            s.theme.text,
-        );
-        if !count.is_empty() {
-            c.text(
-                pos2(ic.right() + 2.0, rect.center().y),
-                Align2::LEFT_CENTER,
-                &count,
-                s.style.font_size,
-                s.theme.text,
-            );
-        }
-        hits.push(LegendHit {
-            id: 0,
-            row: rect,
-            buttons: vec![(LegendButton::Collapse, rect)],
-        });
-    }
-    for pane in &s.panes {
-        let pos = pane.rect().left_top() + vec2(10.0, 6.0);
-        hits.push(legend_row(c, s, pos, &s.indicators[pane.index], bar));
-    }
-    hits
-}
-
-/// One legend row: title, hover buttons (eye / settings / remove), values.
-fn legend_row(
-    c: &mut dyn Canvas,
-    s: &Scene<'_>,
-    pos: Pos2,
-    ind: &Indicator,
-    bar: Option<usize>,
-) -> LegendHit {
-    let t = s.theme;
-    let size = s.style.font_size;
-    let hovered = s.legend_hover == Some(ind.id);
-    let full = ind.study.legend_title();
-    let title = match (s.style.legend_titles, s.style.legend_inputs) {
-        (false, _) => String::new(),
-        (true, true) => full,
-        (true, false) => full.split_whitespace().next().unwrap_or("").to_owned(),
-    };
-    let name = Rect::from_min_size(pos, c.text_size(&title, size));
-    let name_color = if ind.visible {
-        t.text
-    } else {
-        with_alpha(t.text_muted, 0.6)
-    };
-    if hovered {
-        let r = name.expand2(vec2(5.0, 3.0));
-        c.fill_rounded_rect(r, 3.0, with_alpha(t.bg, 0.85));
-        c.stroke_rect(r, 1.0, t.border);
-    }
-    c.text(pos, Align2::LEFT_TOP, &title, size, name_color);
-    let mut x = name.right() + 8.0;
-    let eye = if ind.visible { Icon::Eye } else { Icon::EyeOff };
-    let shown: &[(LegendButton, Icon)] = if hovered {
-        &[
-            (LegendButton::ToggleVisible, eye),
-            (LegendButton::Settings, Icon::Settings),
-            (LegendButton::Remove, Icon::Trash2),
-        ]
-    } else if !ind.visible {
-        &[(LegendButton::ToggleVisible, eye)]
-    } else {
-        &[]
-    };
-    let mut buttons = Vec::new();
-    for (button, icon) in shown {
-        let r = Rect::from_min_size(
-            pos2(x, name.center().y - LEGEND_BUTTON / 2.0),
-            vec2(LEGEND_BUTTON, LEGEND_BUTTON),
-        );
-        c.fill_rounded_rect(r, 3.0, with_alpha(t.bg, 0.85));
-        c.icon(r.center(), char::from(*icon), LEGEND_ICON, name_color);
-        buttons.push((*button, r));
-        x = r.right() + 2.0;
-    }
-    if !shown.is_empty() {
-        x += 6.0;
-    }
-    if ind.visible
-        && s.style.legend_values
-        && let Some(i) = bar
-    {
-        let outs = ind.outputs();
-        for (k, (_, plot)) in ind.study.outputs().iter().enumerate() {
-            if !ind.output_enabled(k) {
-                continue;
-            }
-            let Some(v) = outs.get(k).and_then(|o| o.get(i)).copied() else {
-                continue;
-            };
-            let color = match plot {
-                Plot::VolumeColumns if volume_rising_at(s, ind, i) => t.up,
-                Plot::VolumeColumns => t.down,
-                Plot::Histogram if v < 0.0 => histogram_down(),
-                _ => ind.color(k),
-            };
-            let r = c.text(
-                pos2(x, pos.y),
-                Align2::LEFT_TOP,
-                &format_value(&ind.study, v, s.precision),
-                size,
-                color,
-            );
-            x = r.right() + 8.0;
-        }
-    }
-    // Hover area covers where the buttons appear, so they don't flicker.
-    let right = x.max(name.right() + 3.0 * LEGEND_BUTTON + 16.0);
-    LegendHit {
-        id: ind.id,
-        row: Rect::from_min_max(pos - vec2(6.0, 3.0), pos2(right, name.bottom() + 3.0)),
-        buttons,
-    }
-}
-
 /// One grid line: dotted (1 px on, 3 px off) or solid, per the style.
-fn grid_line(c: &mut dyn Canvas, s: &Scene<'_>, vertical: bool, a: Pos2, b: Pos2) {
-    let color = s.style.grid_color(s.theme, vertical);
-    if s.style.dotted_grid {
-        c.dotted_line(a, b, color);
-    } else {
+fn grid_line(c: &mut dyn Canvas, (color, kind): (Color32, LineKind), a: Pos2, b: Pos2) {
+    if kind == LineKind::Solid {
         c.line(a, b, 1.0, color);
+    } else {
+        c.dotted_line(a, b, color);
     }
 }
 
@@ -1116,7 +613,7 @@ fn time_ticks(c: &mut dyn Canvas, s: &Scene<'_>) -> Vec<time_axis::TimeTick> {
     let vp = s.vp;
     // Examine at most one candidate bar per ~3 points.
     let stride = (3.0 / vp.bar_spacing).ceil().max(1.0) as usize;
-    let size = s.style.font_size;
+    let size = s.style.scales.text_size;
     // Gap chosen so regular labels land ~`time_label_spacing` apart.
     let typical = c.text_size("00:00", size).x;
     let gap = (s.style.time_label_spacing - typical).max(16.0);
@@ -1164,7 +661,7 @@ pub(crate) struct Tag {
 
 pub(crate) fn draw_tag(c: &mut dyn Canvas, s: &Scene<'_>, tag: &Tag) {
     c.fill_rounded_rect(tag.rect, 2.0, tag.bg);
-    let line_h = s.style.font_size + 3.0;
+    let line_h = s.style.scales.text_size + 3.0;
     let top = tag.rect.center().y - line_h * tag.lines.len() as f32 / 2.0;
     for (i, text) in tag.lines.iter().enumerate() {
         let y = top + line_h * (i as f32 + 0.5);
@@ -1174,13 +671,19 @@ pub(crate) fn draw_tag(c: &mut dyn Canvas, s: &Scene<'_>, tag: &Tag) {
         } else {
             (pos2(tag.rect.center().x, y), Align2::CENTER_CENTER)
         };
-        c.text(pos, align, text, s.style.font_size, s.theme.text_on_accent);
+        c.text(
+            pos,
+            align,
+            text,
+            s.style.scales.text_size,
+            s.theme.text_on_accent,
+        );
     }
 }
 
 /// A tag spanning the price axis, centered on `y`.
 pub(crate) fn price_axis_tag(s: &Scene<'_>, y: f32, lines: Vec<String>, bg: Color32) -> Tag {
-    let line_h = s.style.font_size + 3.0;
+    let line_h = s.style.scales.text_size + 3.0;
     let h = line_h * lines.len() as f32 + 6.0;
     let rect = Rect::from_min_max(
         pos2(s.price_axis.left() + 1.0, y - h / 2.0),
@@ -1202,7 +705,7 @@ fn price_labels(
     (top, bottom): (f32, f32),
 ) {
     let x = s.price_axis.left() + 8.0;
-    let half = s.style.font_size * 0.7;
+    let half = s.style.scales.text_size * 0.7;
     for (y, label) in ticks {
         if *y < top + half || *y > bottom - half {
             continue;
@@ -1218,7 +721,7 @@ fn price_labels(
             pos2(x, *y),
             Align2::LEFT_CENTER,
             label,
-            s.style.font_size,
+            s.style.scales.text_size,
             s.theme.text_muted,
         );
     }
@@ -1231,7 +734,7 @@ fn time_labels(
     tag: Option<&Tag>,
 ) {
     let y = s.time_axis.center().y;
-    let size = s.style.font_size;
+    let size = s.style.scales.text_size;
     for t in ticks {
         let w = c.text_size_styled(&t.label, size, t.major).x;
         let (l, r) = (t.x - w / 2.0, t.x + w / 2.0);
@@ -1263,7 +766,7 @@ fn axis_value_label(s: &Scene<'_>, price: f64) -> String {
 
 /// Dotted last-price line across the plot in the last candle's color.
 fn last_price_line(c: &mut dyn Canvas, s: &Scene<'_>) {
-    if !s.style.last_price_line {
+    if !s.style.scales.symbol_label.shows_line() {
         return;
     }
     let Some(last) = s.last_raw else { return };
@@ -1286,7 +789,7 @@ fn last_price_line(c: &mut dyn Canvas, s: &Scene<'_>) {
 
 /// Last-price tag: price plus the time left until the bar closes.
 fn last_price_tag(c: &mut dyn Canvas, s: &Scene<'_>) -> Option<Tag> {
-    if !s.style.last_price_label {
+    if !s.style.scales.symbol_label.shows_value() {
         return None;
     }
     let last = s.last_raw?;
@@ -1296,7 +799,7 @@ fn last_price_tag(c: &mut dyn Canvas, s: &Scene<'_>) -> Option<Tag> {
         return None;
     }
     let mut lines = vec![axis_value_label(s, last.close)];
-    if let (true, Some(now), Some(close)) = (s.style.countdown, s.now_ms, s.bar_close_ms) {
+    if let (true, Some(now), Some(close)) = (s.style.scales.countdown, s.now_ms, s.bar_close_ms) {
         // Hidden once the bar should have closed (e.g. market closed / stale).
         let remaining = close - now;
         if remaining > 0 && close - last.open_time_ms >= remaining {
@@ -1346,12 +849,12 @@ fn crosshair(c: &mut dyn Canvas, s: &Scene<'_>, p: Pos2, slot: Option<i64>) -> (
     let slots = time_axis::SlotTimes::new(s.display.open_times(), s.bar_interval_ms);
     let time_tag = slot.and_then(|i| slots.time_at(i)).map(|t| {
         let mut text = format_full_time(t, s.bar_interval_ms);
-        if !s.style.day_of_week
+        if !s.style.scales.day_of_week
             && let Some((_, rest)) = text.split_once(' ')
         {
             text = rest.to_owned();
         }
-        let size = c.text_size(&text, s.style.font_size) + vec2(16.0, 8.0);
+        let size = c.text_size(&text, s.style.scales.text_size) + vec2(16.0, 8.0);
         let mut rect = Align2::CENTER_CENTER.anchor_size(pos2(x, s.time_axis.center().y), size);
         // Keep it inside the time axis.
         let dx = (s.plot.left() - rect.left()).max(0.0) + (s.plot.right() - rect.right()).min(0.0);
@@ -1364,55 +867,6 @@ fn crosshair(c: &mut dyn Canvas, s: &Scene<'_>, p: Pos2, slot: Option<i64>) -> (
         }
     });
     (price_tag, time_tag)
-}
-
-/// Top-left readout: title, OHLC, change vs previous close and volume of the
-/// hovered (or last) bar.
-fn readout(c: &mut dyn Canvas, s: &Scene<'_>, bar: Option<usize>) {
-    let t = s.theme;
-    let size = s.style.font_size;
-    let mut pos = s.plot.left_top() + vec2(10.0, 8.0);
-    let mut put = |c: &mut dyn Canvas, text: &str, color: Color32, gap: f32| {
-        let r = c.text(pos, Align2::LEFT_TOP, text, size, color);
-        pos.x = r.right() + gap;
-    };
-
-    let st = s.style;
-    if st.status_title && !s.title.is_empty() {
-        put(c, s.title, t.text, 14.0);
-    }
-    let Some(i) = bar else { return };
-    let Some(k) = s.display.get(i) else { return };
-    let prev_close = i
-        .checked_sub(1)
-        .and_then(|j| s.display.get(j))
-        .map_or(k.open, |p| p.close);
-    let change = k.close - prev_close;
-    let (color, _) = s.colors(change >= 0.0);
-    let d = s.precision;
-    if st.status_values {
-        for (name, v) in [("O", k.open), ("H", k.high), ("L", k.low), ("C", k.close)] {
-            put(c, name, t.text_muted, 3.0);
-            put(c, &format_price(v, d), color, 10.0);
-        }
-    }
-    if st.status_change {
-        let pct = if prev_close != 0.0 {
-            change / prev_close * 100.0
-        } else {
-            0.0
-        };
-        put(
-            c,
-            &format!("{} ({pct:+.2}%)", format_signed_price(change, d)),
-            color,
-            14.0,
-        );
-    }
-    if st.status_volume {
-        put(c, "Vol", t.text_muted, 3.0);
-        put(c, &scale::format_volume(k.volume), color, 10.0);
-    }
 }
 
 #[cfg(test)]

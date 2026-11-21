@@ -1,0 +1,76 @@
+{
+  "font_size": 14.0,
+  "dotted_grid": false,
+  "color_by_prev_close": true,
+  "body": true,
+  "borders": false,
+  "wick": true,
+  "status_title": true,
+  "status_values": true,
+  "status_change": true,
+  "status_volume": true,
+  "legend_titles": true,
+  "legend_inputs": false,
+  "legend_values": true,
+  "scale_buttons": "Always",
+  "no_overlapping_labels": true,
+  "countdown": false,
+  "last_price_label": true,
+  "last_price_line": false,
+  "indicator_value_labels": false,
+  "day_of_week": false,
+  "grid_vertical": false,
+  "grid_horizontal": true,
+  "margin_top": 12.0,
+  "margin_bottom": 8.0,
+  "margin_right": 9.0,
+  "colors": {
+    "up_body": [
+      38,
+      166,
+      154,
+      255
+    ],
+    "down_body": null,
+    "up_border": null,
+    "down_border": [
+      200,
+      10,
+      20,
+      255
+    ],
+    "up_wick": [
+      1,
+      2,
+      3,
+      255
+    ],
+    "down_wick": null,
+    "background": [
+      9,
+      9,
+      9,
+      255
+    ],
+    "grid_vertical": null,
+    "grid_horizontal": [
+      20,
+      20,
+      20,
+      128
+    ],
+    "crosshair": [
+      150,
+      150,
+      150,
+      255
+    ],
+    "scale_text": [
+      170,
+      170,
+      170,
+      255
+    ],
+    "scale_lines": null
+  }
+}

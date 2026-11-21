@@ -261,15 +261,16 @@ fn only_current_tools_are_available() {
 fn rgba_hex() {
     let c = Rgba::from_hex("#2962FF").unwrap();
     assert_eq!(c, Rgba::new(0x29, 0x62, 0xff, 255));
-    assert_eq!(c.to_hex(), "#2962FFFF");
+    assert_eq!(c.to_hex(), "#2962ff");
     assert_eq!(Rgba::from_hex("#2962ff33").unwrap().a(), 0x33);
     assert_eq!(Rgba::from_hex("#12345"), None);
     assert_eq!(Rgba::from_hex("#zz62ff"), None);
     assert_eq!(c.with_opacity(0.2).a(), 51);
     let json = serde_json::to_string(&c.with_opacity(0.2)).unwrap();
-    assert_eq!(json, "\"#2962FF33\"");
-    let back: Rgba = serde_json::from_str("[1, 2, 3, 4]").unwrap();
-    assert_eq!(back, Rgba::new(1, 2, 3, 4));
+    assert_eq!(json, "\"#2962ff33\"");
+    // ecolor's legacy arrays are premultiplied.
+    let back: Rgba = serde_json::from_str("[1, 2, 3, 255]").unwrap();
+    assert_eq!(back, Rgba::new(1, 2, 3, 255));
     // Low opacity keeps its exact color (premultiplied would lose it).
     let faint = Rgba::new(0x29, 0x62, 0xff, 5);
     let back: Rgba = serde_json::from_str(&serde_json::to_string(&faint).unwrap()).unwrap();

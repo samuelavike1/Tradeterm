@@ -50,7 +50,7 @@ pub(super) fn draw(c: &mut dyn Canvas, s: &Scene<'_>, d: &Drawing, pts: &[Pos2])
             pos2(x0 - 4.0, y),
             Align2::RIGHT_CENTER,
             &label,
-            s.style.font_size - 1.0,
+            s.style.scales.text_size - 1.0,
             col,
         );
     }
