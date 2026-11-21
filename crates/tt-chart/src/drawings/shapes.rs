@@ -19,8 +19,16 @@ pub(super) fn rectangle(c: &mut dyn Canvas, d: &Drawing, pts: &[Pos2], pane: Rec
     };
     let r = Rect::from_two_pos(pts[0], pts[1]);
     let (left, right) = (
-        if sp.extend.left { pane.left() } else { r.left() },
-        if sp.extend.right { pane.right() } else { r.right() },
+        if sp.extend.left {
+            pane.left()
+        } else {
+            r.left()
+        },
+        if sp.extend.right {
+            pane.right()
+        } else {
+            r.right()
+        },
     );
     let wide = Rect::from_min_max(pos2(left, r.top()), pos2(right, r.bottom()));
     if sp.background.on {

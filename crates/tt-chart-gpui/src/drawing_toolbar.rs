@@ -186,7 +186,9 @@ impl<S: ChartSource> Chart<S> {
                 if let ColorPickerEvent::Change(Some(c)) = ev {
                     let c = from_hsla(*c);
                     chart
-                        .update(cx, |ch, cx| ch.toolbar_edit(kind.slot(), |d| kind.set(d, c), cx))
+                        .update(cx, |ch, cx| {
+                            ch.toolbar_edit(kind.slot(), |d| kind.set(d, c), cx)
+                        })
                         .ok();
                 }
             });
@@ -227,9 +229,9 @@ impl<S: ChartSource> Chart<S> {
         let plot = layout.plot;
         let this = cx.entity().downgrade();
 
-        let caps = drawings
-            .iter()
-            .fold(primary.props.capabilities(), |c, d| c & d.props.capabilities());
+        let caps = drawings.iter().fold(primary.props.capabilities(), |c, d| {
+            c & d.props.capabilities()
+        });
         let same_tool = drawings.iter().all(|d| d.tool == primary.tool);
         let p = &primary.props;
 
@@ -329,13 +331,13 @@ impl<S: ChartSource> Chart<S> {
                                     ("dt-style-opt", i),
                                     format!("{}   {}", style_mark(st), st.label()),
                                 )
-                                    .checked(st == now)
-                                    .on_select(move |_, cx| {
-                                        t.update(cx, |c, cx| {
-                                            c.toolbar_edit(SLOT_STYLE, |d| d.set_style(st), cx)
-                                        })
-                                        .ok();
-                                    }),
+                                .checked(st == now)
+                                .on_select(move |_, cx| {
+                                    t.update(cx, |c, cx| {
+                                        c.toolbar_edit(SLOT_STYLE, |d| d.set_style(st), cx)
+                                    })
+                                    .ok();
+                                }),
                             );
                         }
                         menu
@@ -411,12 +413,8 @@ impl<S: ChartSource> Chart<S> {
             ),
             None => (pane.center().x - w / 2.0, pane.top() + TOP_CLEAR),
         };
-        let x = x
-            .min(pane.right() - w - EDGE)
-            .max(plot.left() + EDGE);
-        let y = y
-            .min(pane.bottom() - h - EDGE)
-            .max(pane.top() + TOP_CLEAR);
+        let x = x.min(pane.right() - w - EDGE).max(plot.left() + EDGE);
+        let y = y.min(pane.bottom() - h - EDGE).max(pane.top() + TOP_CLEAR);
         let origin = plot.min;
         let grip_w = S0_5 + CONTROL_SM / 2.0 + S0_5;
 
@@ -460,12 +458,13 @@ impl<S: ChartSource> Chart<S> {
 
 /// The "…" menu: clone, copy, visual order, visibility presets, hide.
 fn more_menu<S: ChartSource>(menu: Menu, t: WeakEntity<Chart<S>>) -> Menu {
-    let row = |id: &'static str, label: &'static str, f: fn(&mut Chart<S>, &mut Context<Chart<S>>)| {
-        let t = t.clone();
-        MenuRow::new(id, label).on_select(move |_, cx| {
-            t.update(cx, |c, cx| f(c, cx)).ok();
-        })
-    };
+    let row =
+        |id: &'static str, label: &'static str, f: fn(&mut Chart<S>, &mut Context<Chart<S>>)| {
+            let t = t.clone();
+            MenuRow::new(id, label).on_select(move |_, cx| {
+                t.update(cx, f).ok();
+            })
+        };
     let mut menu = menu
         .width(MenuWidth::Lg)
         .row(
@@ -484,19 +483,23 @@ fn more_menu<S: ChartSource>(menu: Menu, t: WeakEntity<Chart<S>>) -> Menu {
         .section("Visual order");
     for (i, op) in VisualOrder::ALL.into_iter().enumerate() {
         let t = t.clone();
-        menu = menu.row(MenuRow::new(("dt-order", i), op.label()).on_select(move |_, cx| {
-            t.update(cx, |c, cx| {
-                c.reorder_drawings(op, cx);
-            })
-            .ok();
-        }));
+        menu = menu.row(
+            MenuRow::new(("dt-order", i), op.label()).on_select(move |_, cx| {
+                t.update(cx, |c, cx| {
+                    c.reorder_drawings(op, cx);
+                })
+                .ok();
+            }),
+        );
     }
     menu = menu.separator().section("Visibility on intervals");
     for (i, p) in VisibilityPreset::ALL.into_iter().enumerate() {
         let t = t.clone();
-        menu = menu.row(MenuRow::new(("dt-vis", i), p.label()).on_select(move |_, cx| {
-            t.update(cx, |c, cx| c.set_drawings_visibility(p, cx)).ok();
-        }));
+        menu = menu.row(
+            MenuRow::new(("dt-vis", i), p.label()).on_select(move |_, cx| {
+                t.update(cx, |c, cx| c.set_drawings_visibility(p, cx)).ok();
+            }),
+        );
     }
     menu.separator().row(
         row("dt-hide", "Hide", |c, cx| {

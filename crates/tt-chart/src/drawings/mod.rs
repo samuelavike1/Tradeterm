@@ -20,6 +20,7 @@
 mod channel;
 mod constrain;
 mod fib;
+pub mod form;
 mod freehand;
 mod history;
 mod hit;
@@ -33,7 +34,6 @@ mod render;
 mod select;
 mod shapes;
 mod stats;
-pub mod form;
 pub mod templates;
 mod text;
 

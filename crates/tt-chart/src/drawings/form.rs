@@ -90,7 +90,8 @@ impl Field {
 }
 
 const ENDS: &[(&str, &str)] = &[("Normal", "Normal"), ("Arrow", "Arrow")];
-const STATS_POSITION: &[(&str, &str)] = &[("Left", "Left"), ("Center", "Center"), ("Right", "Right")];
+const STATS_POSITION: &[(&str, &str)] =
+    &[("Left", "Left"), ("Center", "Center"), ("Right", "Right")];
 const STATS_POSITION_AUTO: &[(&str, &str)] = &[
     ("Left", "Left"),
     ("Center", "Center"),
@@ -202,7 +203,9 @@ pub fn style_fields(tool: DrawingTool, props: &Props) -> Vec<Field> {
         }
         Props::Channel(_) => {
             f.push(Field::new("Line", "/line", Line));
-            f.push(Field::new("Background", "/background/color", Color).with_check("/background/on"));
+            f.push(
+                Field::new("Background", "/background/color", Color).with_check("/background/on"),
+            );
             f.push(Field::check("Extend left", "/extend/left"));
             f.push(Field::check("Extend right", "/extend/right"));
             f.push(Field::section("Levels"));
@@ -213,10 +216,15 @@ pub fn style_fields(tool: DrawingTool, props: &Props) -> Vec<Field> {
             f.push(Field::new("Levels line", "/levels_line", WidthStyle));
             f.push(Field::check("Extend left", "/extend/left"));
             f.push(Field::check("Extend right", "/extend/right"));
-            f.push(Field::new("Background", "/background_opacity", Percent).with_check("/background_on"));
+            f.push(
+                Field::new("Background", "/background_opacity", Percent)
+                    .with_check("/background_on"),
+            );
             f.push(Field::check("Reverse", "/reverse"));
             f.push(Field::check("Prices", "/show_prices"));
-            f.push(Field::new("Levels", "/percents", Choice(LEVEL_LABELS)).with_check("/show_levels"));
+            f.push(
+                Field::new("Levels", "/percents", Choice(LEVEL_LABELS)).with_check("/show_levels"),
+            );
             f.push(Field::new("Labels horizontal", "/label_h", Choice(H_ALIGN)));
             f.push(Field::new("Labels vertical", "/label_v", Choice(V_ALIGN)));
             f.push(Field::new("Font size", "/font_size", FontSize));
@@ -226,7 +234,9 @@ pub fn style_fields(tool: DrawingTool, props: &Props) -> Vec<Field> {
         }
         Props::Shape(_) => {
             f.push(Field::new("Border", "/border", Line));
-            f.push(Field::new("Background", "/background/color", Color).with_check("/background/on"));
+            f.push(
+                Field::new("Background", "/background/color", Color).with_check("/background/on"),
+            );
             f.push(Field::new("Middle line", "/middle_line", Line).with_check("/middle_line_on"));
             f.push(Field::check("Extend left", "/extend/left"));
             f.push(Field::check("Extend right", "/extend/right"));
@@ -235,7 +245,9 @@ pub fn style_fields(tool: DrawingTool, props: &Props) -> Vec<Field> {
             f.push(Field::new("Line", "/line", Line));
             f.push(Field::new("Left end", "/ends/left", Choice(ENDS)));
             f.push(Field::new("Right end", "/ends/right", Choice(ENDS)));
-            f.push(Field::new("Background", "/background/color", Color).with_check("/background/on"));
+            f.push(
+                Field::new("Background", "/background/color", Color).with_check("/background/on"),
+            );
         }
         Props::Path(_) => {
             f.push(Field::new("Line", "/line", Line));
@@ -243,7 +255,9 @@ pub fn style_fields(tool: DrawingTool, props: &Props) -> Vec<Field> {
             f.push(Field::new("Right end", "/ends/right", Choice(ENDS)));
         }
         Props::TextBox(_) => {
-            f.push(Field::new("Background", "/background/color", Color).with_check("/background/on"));
+            f.push(
+                Field::new("Background", "/background/color", Color).with_check("/background/on"),
+            );
             f.push(Field::new("Border", "/border", Line).with_check("/border_on"));
             if tool == DrawingTool::Note {
                 f.push(Field::new("Label", "/marker", Color));
@@ -265,7 +279,11 @@ pub fn style_fields(tool: DrawingTool, props: &Props) -> Vec<Field> {
         Props::Position(_) => {
             f.push(Field::section("Inputs"));
             let num = |min: f64, max: f64, step: f64| Number { min, max, step };
-            f.push(Field::new("Account size", "/account_size", num(0.0, 1e12, 100.0)));
+            f.push(Field::new(
+                "Account size",
+                "/account_size",
+                num(0.0, 1e12, 100.0),
+            ));
             f.push(Field::new("Lot size", "/lot_size", num(0.0, 1e9, 1.0)));
             f.push(Field::new("Risk", "/risk", num(0.0, 1e12, 1.0)));
             f.push(Field::new(
@@ -287,7 +305,9 @@ pub fn style_fields(tool: DrawingTool, props: &Props) -> Vec<Field> {
         Props::Range(_) => {
             f.push(Field::new("Line", "/line", Line));
             f.push(Field::new("Border", "/border", Line).with_check("/border_on"));
-            f.push(Field::new("Background", "/background/color", Color).with_check("/background/on"));
+            f.push(
+                Field::new("Background", "/background/color", Color).with_check("/background/on"),
+            );
             f.push(Field::new("Down color", "/down_color", Color));
             match tool {
                 DrawingTool::PriceRange => {
@@ -319,7 +339,11 @@ pub fn text_fields(tool: DrawingTool, props: &Props) -> Vec<Field> {
     use FieldKind::*;
     let mut f = Vec::new();
     let layout = |f: &mut Vec<Field>| {
-        f.push(Field::new("Horizontal alignment", "/text/h", Choice(H_ALIGN)));
+        f.push(Field::new(
+            "Horizontal alignment",
+            "/text/h",
+            Choice(H_ALIGN),
+        ));
         f.push(Field::new("Vertical alignment", "/text/v", Choice(V_ALIGN)));
     };
     match props {
@@ -327,7 +351,11 @@ pub fn text_fields(tool: DrawingTool, props: &Props) -> Vec<Field> {
             // The angle label's style (spec 3.5).
             f.push(Field::new("Angle label", "/text_style", TextStyle));
         }
-        Props::Line(_) | Props::HLine(_) | Props::Channel(_) | Props::Shape(_) | Props::Range(_) => {
+        Props::Line(_)
+        | Props::HLine(_)
+        | Props::Channel(_)
+        | Props::Shape(_)
+        | Props::Range(_) => {
             f.push(Field::check("Show text", "/text/on"));
             f.push(Field::new("Text style", "/text_style", TextStyle));
             layout(&mut f);
@@ -336,10 +364,15 @@ pub fn text_fields(tool: DrawingTool, props: &Props) -> Vec<Field> {
             f.push(Field::check("Show text", "/text/on"));
             f.push(Field::new("Text style", "/text_style", TextStyle));
             layout(&mut f);
-            f.push(Field::new("Text orientation", "/text/vertical", Choice(ORIENTATION)));
+            f.push(Field::new(
+                "Text orientation",
+                "/text/vertical",
+                Choice(ORIENTATION),
+            ));
         }
         Props::TextBox(_) => f.push(Field::new("Text style", "/text_style", TextStyle)),
-        Props::Cross(_) | Props::Fib(_) | Props::Brush(_) | Props::Path(_) | Props::Position(_) => {}
+        Props::Cross(_) | Props::Fib(_) | Props::Brush(_) | Props::Path(_) | Props::Position(_) => {
+        }
     }
     f
 }
@@ -478,7 +511,7 @@ pub mod level {
         let Some((l, line)) = get_mut(props, i) else {
             return false;
         };
-        let before = l.clone();
+        let before = *l;
         l.color = c;
         if channel {
             let mut s = l.stroke.unwrap_or(line);
@@ -549,7 +582,11 @@ pub fn parse_time(s: &str) -> Option<i64> {
         hh = tp.next()?.trim().parse().ok()?;
         mm = tp.next().map_or(Some(0), |x| x.trim().parse().ok())?;
         ss = tp.next().map_or(Some(0), |x| x.trim().parse().ok())?;
-        if tp.next().is_some() || !(0..24).contains(&hh) || !(0..60).contains(&mm) || !(0..60).contains(&ss) {
+        if tp.next().is_some()
+            || !(0..24).contains(&hh)
+            || !(0..60).contains(&mm)
+            || !(0..60).contains(&ss)
+        {
             return None;
         }
     }
@@ -562,7 +599,12 @@ pub fn parse_time(s: &str) -> Option<i64> {
 }
 
 /// Sets point `k` (Coordinates tab); `None` leaves that part.
-pub fn set_point(points: &mut [Anchor], k: usize, time_ms: Option<i64>, price: Option<f64>) -> bool {
+pub fn set_point(
+    points: &mut [Anchor],
+    k: usize,
+    time_ms: Option<i64>,
+    price: Option<f64>,
+) -> bool {
     let Some(a) = points.get_mut(k) else {
         return false;
     };

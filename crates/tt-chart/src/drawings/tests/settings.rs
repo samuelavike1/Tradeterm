@@ -9,10 +9,7 @@ use super::*;
 use tt_core::{TimeUnit, Timeframe};
 
 fn at(price: f64) -> Anchor {
-    Anchor {
-        time_ms: 0,
-        price,
-    }
+    Anchor { time_ms: 0, price }
 }
 
 fn trend() -> Drawing {
@@ -26,7 +23,10 @@ fn templates_round_trip() {
     p.set_line_color(Rgba::new(1, 2, 3, 128));
     p.set_line_width(4);
     assert!(!t.save_named(DrawingTool::TrendLine, "Support", &p));
-    assert!(t.save_named(DrawingTool::TrendLine, "Support", &p), "replaces");
+    assert!(
+        t.save_named(DrawingTool::TrendLine, "Support", &p),
+        "replaces"
+    );
     t.set_default(DrawingTool::TrendLine, &p);
     // Another family's style is never stored for a tool.
     t.set_default(DrawingTool::Rectangle, &p);
@@ -36,7 +36,10 @@ fn templates_round_trip() {
     let back: DrawingTemplates = serde_json::from_str(&json).unwrap();
     assert_eq!(back, t);
     assert_eq!(back.named(DrawingTool::TrendLine).len(), 1);
-    assert_eq!(back.named_props(DrawingTool::TrendLine, "Support"), Some(p.clone()));
+    assert_eq!(
+        back.named_props(DrawingTool::TrendLine, "Support"),
+        Some(p.clone())
+    );
     assert_eq!(back.new_drawing_props(DrawingTool::TrendLine), p);
     // Templates are per tool.
     assert!(back.named(DrawingTool::Ray).is_empty());
@@ -205,7 +208,10 @@ fn drawings_outside_their_intervals_are_not_drawn_or_hit() {
     ds.select_only(id);
     ds.set_timeframe(Some(Timeframe::M5));
     assert!(ds.hit(p).is_none());
-    assert!(ds.selection().is_empty(), "hidden drawings leave the selection");
+    assert!(
+        ds.selection().is_empty(),
+        "hidden drawings leave the selection"
+    );
     assert!(!ds.is_shown(&ds.items[0]));
 }
 
@@ -223,19 +229,42 @@ fn form_fields_edit_props_by_path() {
             assert!(form::get(&v, c).is_some(), "{c}");
         }
     }
-    assert!(form::set(&mut p, "/ends/right", form::choice_value("Arrow")));
-    assert!(form::set(&mut p, "/stats/angle", serde_json::Value::Bool(true)));
-    assert!(form::set_color(&mut p, "/line/color", Rgba::new(1, 2, 3, 4)));
+    assert!(form::set(
+        &mut p,
+        "/ends/right",
+        form::choice_value("Arrow")
+    ));
+    assert!(form::set(
+        &mut p,
+        "/stats/angle",
+        serde_json::Value::Bool(true)
+    ));
+    assert!(form::set_color(
+        &mut p,
+        "/line/color",
+        Rgba::new(1, 2, 3, 4)
+    ));
     // Unreadable values leave the props unchanged.
-    assert!(!form::set(&mut p, "/ends/left", form::choice_value("Spiral")));
-    assert!(!form::set(&mut p, "/no/such/path", serde_json::Value::Bool(true)));
+    assert!(!form::set(
+        &mut p,
+        "/ends/left",
+        form::choice_value("Spiral")
+    ));
+    assert!(!form::set(
+        &mut p,
+        "/no/such/path",
+        serde_json::Value::Bool(true)
+    ));
     let Props::Line(lp) = &p else {
         panic!("line props");
     };
     assert_eq!(lp.ends.right, LineEnd::Arrow);
     assert!(lp.stats.angle);
     assert_eq!(lp.line.color, Rgba::new(1, 2, 3, 4));
-    assert_eq!(form::get_choice(&form::props_value(&p), "/ends/right"), "Arrow");
+    assert_eq!(
+        form::get_choice(&form::props_value(&p), "/ends/right"),
+        "Arrow"
+    );
 }
 
 #[test]
@@ -269,8 +298,15 @@ fn level_helpers() {
     assert!(form::level::set_on(&mut fib, 11, true));
     assert!(form::level::set_coeff(&mut fib, 11, 1.5));
     assert!(!form::level::set_coeff(&mut fib, 11, f64::NAN));
-    assert!(form::level::set_all_colors(&mut fib, Rgba::new(5, 5, 5, 255)));
-    assert!(form::levels(&fib).iter().all(|l| l.color == Rgba::new(5, 5, 5, 255)));
+    assert!(form::level::set_all_colors(
+        &mut fib,
+        Rgba::new(5, 5, 5, 255)
+    ));
+    assert!(
+        form::levels(&fib)
+            .iter()
+            .all(|l| l.color == Rgba::new(5, 5, 5, 255))
+    );
     assert_eq!(form::levels(&fib)[11].coeff, 1.5);
 
     // A channel level drawn in the channel's line gets its own stroke.
@@ -296,9 +332,18 @@ fn coordinates_time_format() {
     assert_eq!(form::parse_time("yesterday"), None);
     let mut pts = vec![at(1.0)];
     assert!(form::set_point(&mut pts, 0, Some(t), Some(2.0)));
-    assert_eq!(pts[0], Anchor { time_ms: t, price: 2.0 });
+    assert_eq!(
+        pts[0],
+        Anchor {
+            time_ms: t,
+            price: 2.0
+        }
+    );
     assert!(!form::set_point(&mut pts, 0, None, Some(f64::NAN)));
-    assert_eq!(form::coordinate_parts(DrawingTool::HorizontalLine, 0), (false, true));
+    assert_eq!(
+        form::coordinate_parts(DrawingTool::HorizontalLine, 0),
+        (false, true)
+    );
 }
 
 #[test]
@@ -353,10 +398,14 @@ fn rectangle_background_is_its_own_color() {
     assert_eq!(sp.border.color, Rgba::new(1, 1, 1, 255));
     assert_eq!(sp.background.color, Rgba::new(2, 2, 2, 100));
     assert!(d.props.capabilities().contains(Caps::FILL));
-    assert!(Props::defaults(DrawingTool::PriceRange)
-        .capabilities()
-        .contains(Caps::FILL));
-    assert!(!Props::defaults(DrawingTool::FibRetracement)
-        .capabilities()
-        .contains(Caps::FILL));
+    assert!(
+        Props::defaults(DrawingTool::PriceRange)
+            .capabilities()
+            .contains(Caps::FILL)
+    );
+    assert!(
+        !Props::defaults(DrawingTool::FibRetracement)
+            .capabilities()
+            .contains(Caps::FILL)
+    );
 }

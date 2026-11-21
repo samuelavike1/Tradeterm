@@ -14,9 +14,9 @@ use std::rc::Rc;
 use tt_chart::drawings::DrawingTemplates;
 use tt_chart::{DrawingTool, Props};
 use tt_ui::prelude::*;
-use tt_ui::{Menu, hsla};
 use tt_ui::tokens::*;
 use tt_ui::{DialogFooter, DialogOpts, DialogSize, open_dialog};
+use tt_ui::{Menu, hsla};
 
 /// Drawing preferences shared by every chart.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -54,13 +54,18 @@ impl DrawingPrefs {
     }
 }
 
+/// Reads the style a template menu saves.
+pub type CurrentStyle = Rc<dyn Fn(&App) -> Option<Props>>;
+/// Applies a style picked in a template menu.
+pub type ApplyStyle = Rc<dyn Fn(Props, &mut Window, &mut App)>;
+
 /// What a template menu works on: the tool, the current style and how to
 /// apply a style (to the selection or to the dialog's drawings).
 #[derive(Clone)]
 pub struct TemplateTarget {
     pub tool: DrawingTool,
-    pub current: Rc<dyn Fn(&App) -> Option<Props>>,
-    pub apply: Rc<dyn Fn(Props, &mut Window, &mut App)>,
+    pub current: CurrentStyle,
+    pub apply: ApplyStyle,
 }
 
 /// The "Template ▾" menu (spec 5.1): save as…, save as default, apply
@@ -70,15 +75,13 @@ pub fn template_menu(menu: Menu, target: TemplateTarget, cx: &App) -> Menu {
     let tool = target.tool;
     let prefs = DrawingPrefs::get(cx);
     let t = target.clone();
-    let mut menu = menu
-        .width(MenuWidth::Lg)
-        .row(
-            MenuRow::new("tpl-save-as", "Save drawing template as…").on_select(move |w, cx| {
-                if let Some(p) = (t.current)(cx) {
-                    prompt_template_name(tool, p, w, cx);
-                }
-            }),
-        );
+    let mut menu = menu.width(MenuWidth::Lg).row(
+        MenuRow::new("tpl-save-as", "Save drawing template as…").on_select(move |w, cx| {
+            if let Some(p) = (t.current)(cx) {
+                prompt_template_name(tool, p, w, cx);
+            }
+        }),
+    );
     let t = target.clone();
     menu = menu.row(
         MenuRow::new("tpl-save-default", "Save as default").on_select(move |_, cx| {
@@ -140,28 +143,25 @@ pub fn prompt_template_name(tool: DrawingTool, props: Props, window: &mut Window
         confirm_replace: None,
     });
     let (ok_panel, focus_input) = (panel.clone(), input.clone());
-    let footer = DialogFooter::new()
-        .cancel()
-        .ok("Save")
-        .on_ok(move |_, cx| {
-            let name = ok_panel.read(cx).input.read(cx).value().trim().to_owned();
-            if name.is_empty() {
-                return false;
-            }
-            let exists = DrawingPrefs::get(cx).templates.has_named(tool, &name);
-            let confirmed = ok_panel.read(cx).confirm_replace.as_deref() == Some(name.as_str());
-            if exists && !confirmed {
-                ok_panel.update(cx, |p, cx| {
-                    p.confirm_replace = Some(name);
-                    cx.notify();
-                });
-                return false;
-            }
-            DrawingPrefs::update(cx, |pr| {
-                pr.templates.save_named(tool, &name, &props);
+    let footer = DialogFooter::new().cancel().ok("Save").on_ok(move |_, cx| {
+        let name = ok_panel.read(cx).input.read(cx).value().trim().to_owned();
+        if name.is_empty() {
+            return false;
+        }
+        let exists = DrawingPrefs::get(cx).templates.has_named(tool, &name);
+        let confirmed = ok_panel.read(cx).confirm_replace.as_deref() == Some(name.as_str());
+        if exists && !confirmed {
+            ok_panel.update(cx, |p, cx| {
+                p.confirm_replace = Some(name);
+                cx.notify();
             });
-            true
+            return false;
+        }
+        DrawingPrefs::update(cx, |pr| {
+            pr.templates.save_named(tool, &name, &props);
         });
+        true
+    });
     open_dialog(
         window,
         cx,
@@ -232,6 +232,9 @@ struct Message(SharedString);
 
 impl Render for Message {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div().py(px(S2)).text_size(px(TEXT_BODY)).child(self.0.clone())
+        div()
+            .py(px(S2))
+            .text_size(px(TEXT_BODY))
+            .child(self.0.clone())
     }
 }

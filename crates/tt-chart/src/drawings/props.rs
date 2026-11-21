@@ -816,10 +816,12 @@ impl Props {
             // Fills followed the line color before props existed: the
             // rectangle at 20 %, ranges keeping their opacities.
             match self {
-                Props::Shape(p) => p.background = Fill {
-                    on: true,
-                    color: c.with_opacity(0.2),
-                },
+                Props::Shape(p) => {
+                    p.background = Fill {
+                        on: true,
+                        color: c.with_opacity(0.2),
+                    }
+                }
                 Props::Range(p) => {
                     p.background.color = p.background.color.with_rgb_of(c);
                     p.label_background.color = p.label_background.color.with_rgb_of(c);

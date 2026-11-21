@@ -11,16 +11,14 @@
 use crate::app::{TabChart, TradeTerm};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::color_picker::{ColorPickerEvent, ColorPickerState};
-use gpui_kit::component::input::{
-    Input, InputEvent, InputState, Textarea, TextareaState,
-};
+use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
 use gpui_kit::component::{Sizable as _, WindowExt as _, h_flex, v_flex};
 
 use gpui_kit::*;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::rc::Rc;
-use tt_chart::drawings::form::{self, Field, FieldKind, FONT_SIZES};
+use tt_chart::drawings::form::{self, FONT_SIZES, Field, FieldKind};
 use tt_chart::{Drawing, DrawingTool, Drawings, LineStyle, Props, Rgba, Visibility};
 use tt_chart_gpui::{ChartEvent, DrawingPrefs, TemplateTarget, template_menu};
 use tt_core::TimeUnit;
@@ -102,6 +100,9 @@ fn trim_number(v: f64) -> String {
         s.to_owned()
     }
 }
+
+/// Writes a value at a props path (checkboxes, selects).
+type Setter = Rc<dyn Fn(Value, &mut App)>;
 
 /// What a color picker of the dialog edits.
 #[derive(Debug, Clone, PartialEq)]
@@ -223,7 +224,12 @@ impl DrawingSettingsPanel {
         let v = form::props_value(&d.props);
         let mut colors = Vec::new();
         let mut numbers = Vec::new();
-        let fields: Vec<Field> = self.style.iter().chain(&self.text_fields).cloned().collect();
+        let fields: Vec<Field> = self
+            .style
+            .iter()
+            .chain(&self.text_fields)
+            .cloned()
+            .collect();
         for f in &fields {
             match &f.kind {
                 FieldKind::Color => colors.push(ColorTarget::Path(f.path.clone())),
@@ -262,8 +268,8 @@ impl DrawingSettingsPanel {
             let picker =
                 cx.new(|cx| ColorPickerState::new(window, cx).default_value(to_hsla(value)));
             let t = target.clone();
-            self._subs
-                .push(cx.subscribe(&picker, move |this, _, ev: &ColorPickerEvent, cx| {
+            self._subs.push(
+                cx.subscribe(&picker, move |this, _, ev: &ColorPickerEvent, cx| {
                     if let ColorPickerEvent::Change(Some(c)) = ev {
                         let c = from_hsla(*c);
                         let t = t.clone();
@@ -279,7 +285,8 @@ impl DrawingSettingsPanel {
                             }
                         });
                     }
-                }));
+                }),
+            );
             self.colors.push((target, picker));
         }
         for target in numbers {
@@ -292,14 +299,15 @@ impl DrawingSettingsPanel {
                 }
             });
             let t = target.clone();
-            self._subs
-                .push(cx.subscribe(&input, move |this, input, ev: &InputEvent, cx| {
+            self._subs.push(
+                cx.subscribe(&input, move |this, input, ev: &InputEvent, cx| {
                     if !matches!(ev, InputEvent::Change) {
                         return;
                     }
                     let s = input.read(cx).value().trim().to_owned();
                     this.number_changed(&t, &s, cx);
-                }));
+                }),
+            );
             self.numbers.push((target, input));
         }
         if form::has_text_content(d.tool, &d.props) {
@@ -410,7 +418,10 @@ impl DrawingSettingsPanel {
 
     fn current(&self, cx: &App) -> Option<Drawing> {
         let ds = Self::drawings(&self.chart, cx);
-        ds.items.iter().find(|d| Some(d.id) == self.ids.first().copied()).cloned()
+        ds.items
+            .iter()
+            .find(|d| Some(d.id) == self.ids.first().copied())
+            .cloned()
     }
 
     /// Applies a template's style to the edited drawings and refreshes the
@@ -471,15 +482,21 @@ impl DrawingSettingsPanel {
     }
 
     fn picker(&self, t: &ColorTarget) -> Option<Entity<ColorPickerState>> {
-        self.colors.iter().find(|(x, _)| x == t).map(|(_, p)| p.clone())
+        self.colors
+            .iter()
+            .find(|(x, _)| x == t)
+            .map(|(_, p)| p.clone())
     }
 
     fn input(&self, t: &NumberTarget) -> Option<Entity<InputState>> {
-        self.numbers.iter().find(|(x, _)| x == t).map(|(_, p)| p.clone())
+        self.numbers
+            .iter()
+            .find(|(x, _)| x == t)
+            .map(|(_, p)| p.clone())
     }
 
     /// A setter of the value at `path` for checkboxes and selects.
-    fn setter(&self, cx: &mut Context<Self>, path: String) -> Rc<dyn Fn(Value, &mut App)> {
+    fn setter(&self, cx: &mut Context<Self>, path: String) -> Setter {
         let this = cx.entity().downgrade();
         Rc::new(move |value, cx| {
             let (p, v) = (path.clone(), value.clone());
@@ -499,7 +516,13 @@ impl DrawingSettingsPanel {
         }
     }
 
-    fn width_select(&self, id: String, path: String, now: u8, cx: &mut Context<Self>) -> AnyElement {
+    fn width_select(
+        &self,
+        id: String,
+        path: String,
+        now: u8,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let set = self.setter(cx, path);
         Select::new(
             SharedString::from(id),
@@ -666,16 +689,15 @@ impl DrawingSettingsPanel {
     fn levels(&self, d: &Drawing, cx: &mut Context<Self>) -> AnyElement {
         let levels = form::levels(&d.props).to_vec();
         let this = cx.entity().downgrade();
-        let cell = |i: usize, on: bool| {
-            let t = this.clone();
-            h_flex()
-                .gap(px(S2))
-                .items_center()
-                .h(px(H_LIST_ROW))
-                .child(
-                    Checkbox::new(("dlg-level-on", i))
-                        .checked(on)
-                        .on_click(move |v, _, cx| {
+        let cell =
+            |i: usize, on: bool| {
+                let t = this.clone();
+                h_flex()
+                    .gap(px(S2))
+                    .items_center()
+                    .h(px(H_LIST_ROW))
+                    .child(Checkbox::new(("dlg-level-on", i)).checked(on).on_click(
+                        move |v, _, cx| {
                             let v = *v;
                             t.update(cx, |p, cx| {
                                 p.edit(cx, move |d| {
@@ -683,15 +705,15 @@ impl DrawingSettingsPanel {
                                 })
                             })
                             .ok();
-                        }),
-                )
-                .children(self.input(&NumberTarget::LevelCoeff(i)).map(|inp| {
-                    div()
-                        .w(px(W_COEFF))
-                        .child(Input::new(&inp).small().h(px(H_FIELD)))
-                }))
-                .child(self.color_field(ColorTarget::Level(i)))
-        };
+                        },
+                    ))
+                    .children(self.input(&NumberTarget::LevelCoeff(i)).map(|inp| {
+                        div()
+                            .w(px(W_COEFF))
+                            .child(Input::new(&inp).small().h(px(H_FIELD)))
+                    }))
+                    .child(self.color_field(ColorTarget::Level(i)))
+            };
         let half = levels.len().div_ceil(2);
         let col = |range: std::ops::Range<usize>| {
             let mut c = v_flex().flex_1();
@@ -723,7 +745,11 @@ impl DrawingSettingsPanel {
             let mut row = FormRow::new(SharedString::from(form::point_label(k)))
                 .label_width(DialogSize::Sm.label_width() - 80.0);
             if let Some(i) = self.input(&NumberTarget::PointTime(k)) {
-                row = row.control(div().w(px(W_TIME)).child(Input::new(&i).small().h(px(H_FIELD))));
+                row = row.control(
+                    div()
+                        .w(px(W_TIME))
+                        .child(Input::new(&i).small().h(px(H_FIELD))),
+                );
             }
             if let Some(i) = self.input(&NumberTarget::PointPrice(k)) {
                 row = row.control(NumberField::new(&i));
@@ -751,8 +777,10 @@ impl DrawingSettingsPanel {
                 form::unit_label(u),
                 span.on,
                 move |on, _, cx| {
-                    t.update(cx, |p, cx| p.edit(cx, move |d| d.visibility.span_mut(u).on = on))
-                        .ok();
+                    t.update(cx, |p, cx| {
+                        p.edit(cx, move |d| d.visibility.span_mut(u).on = on)
+                    })
+                    .ok();
                 },
             )
             .label_width(DialogSize::Sm.label_width() - 40.0);
@@ -768,7 +796,6 @@ impl DrawingSettingsPanel {
         body.into_any_element()
     }
 }
-
 
 /// The color a picker shows.
 fn color_value(t: &ColorTarget, props: &Props, v: &Value) -> Rgba {

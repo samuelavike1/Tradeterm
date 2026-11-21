@@ -49,11 +49,13 @@ fn template_submenu<S: ChartSource>(
         }),
     );
     let cur = current.clone();
-    m = m.item(PopupMenuItem::new("Save as default").on_click(move |_, _, cx| {
-        if let Some(p) = cur(cx) {
-            DrawingPrefs::update(cx, |pr| pr.templates.set_default(tool, &p));
-        }
-    }));
+    m = m.item(
+        PopupMenuItem::new("Save as default").on_click(move |_, _, cx| {
+            if let Some(p) = cur(cx) {
+                DrawingPrefs::update(cx, |pr| pr.templates.set_default(tool, &p));
+            }
+        }),
+    );
     let tt = t.clone();
     m = m.item(
         PopupMenuItem::new("Apply default drawing template").on_click(move |_, _, cx| {
@@ -74,11 +76,13 @@ fn template_submenu<S: ChartSource>(
         m = m.separator();
         for n in named {
             let (tt, name) = (t.clone(), n.name.clone());
-            m = m.item(PopupMenuItem::new(n.name.clone()).on_click(move |_, _, cx| {
-                if let Some(p) = DrawingPrefs::get(cx).templates.named_props(tool, &name) {
-                    apply(tt.clone(), p, cx);
-                }
-            }));
+            m = m.item(
+                PopupMenuItem::new(n.name.clone()).on_click(move |_, _, cx| {
+                    if let Some(p) = DrawingPrefs::get(cx).templates.named_props(tool, &name) {
+                        apply(tt.clone(), p, cx);
+                    }
+                }),
+            );
         }
     }
     m
@@ -265,48 +269,46 @@ impl<S: ChartSource> Chart<S> {
                         m
                     })
                     .submenu("Visual order", window, cx, move |mut m, _, _| {
-                            for op in VisualOrder::ALL {
-                                let t = t.clone();
-                                m = m.item(PopupMenuItem::new(op.label()).on_click(
-                                    move |_, _, cx| {
-                                        t.update(cx, |c, cx| c.reorder_drawings(op, cx)).ok();
-                                    },
-                                ));
-                            }
-                            m
-                        })
-                        .separator()
-                        .item(item(
-                            "Clone",
-                            Rc::new(|c, cx| {
-                                c.clone_drawings(cx);
-                            }),
-                        ))
-                        .item(item(
-                            "Copy",
-                            Rc::new(|c, cx| {
-                                c.copy_drawings(cx);
-                            }),
-                        ))
-                        .separator()
-                        .item(item(
-                            if locked { "Unlock" } else { "Lock" },
-                            Rc::new(|c, cx| {
-                                c.toggle_drawings_locked(cx);
-                            }),
-                        ))
-                        .item(item(
-                            "Hide",
-                            Rc::new(|c, cx| {
-                                c.hide_drawings(cx);
-                            }),
-                        ))
-                        .item(item(
-                            "Remove",
-                            Rc::new(|c, cx| {
-                                c.delete_selected_drawing(cx);
-                            }),
-                        ))
+                        for op in VisualOrder::ALL {
+                            let t = t.clone();
+                            m = m.item(PopupMenuItem::new(op.label()).on_click(move |_, _, cx| {
+                                t.update(cx, |c, cx| c.reorder_drawings(op, cx)).ok();
+                            }));
+                        }
+                        m
+                    })
+                    .separator()
+                    .item(item(
+                        "Clone",
+                        Rc::new(|c, cx| {
+                            c.clone_drawings(cx);
+                        }),
+                    ))
+                    .item(item(
+                        "Copy",
+                        Rc::new(|c, cx| {
+                            c.copy_drawings(cx);
+                        }),
+                    ))
+                    .separator()
+                    .item(item(
+                        if locked { "Unlock" } else { "Lock" },
+                        Rc::new(|c, cx| {
+                            c.toggle_drawings_locked(cx);
+                        }),
+                    ))
+                    .item(item(
+                        "Hide",
+                        Rc::new(|c, cx| {
+                            c.hide_drawings(cx);
+                        }),
+                    ))
+                    .item(item(
+                        "Remove",
+                        Rc::new(|c, cx| {
+                            c.delete_selected_drawing(cx);
+                        }),
+                    ))
                 }
                 DrawingMenuTarget::Empty => {
                     let mut menu = menu.min_w(px(220.));
