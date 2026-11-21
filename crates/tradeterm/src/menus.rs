@@ -1,23 +1,21 @@
 //! Toolbar dropdowns with stars, TradingView-style:
 //!
-//! - Interval menu: collapsible Seconds / Minutes / Hours / Days sections;
-//!   the star pins an interval to the toolbar; "Add custom interval…".
+//! - Interval menu: "Add custom interval…" first, then collapsible Seconds /
+//!   Minutes / Hours / Days sections; the star pins an interval to the
+//!   toolbar; custom intervals have a remove ×.
 //! - Chart type menu: grouped types with their icon; the star pins a type to
 //!   the toolbar as a quick button; hovering a row explains the type.
+//!
+//! Both are kit `Menu`s (`tt_ui`): 32 px rows, a ✓ on the current item,
+//! keyboard navigation, and a row click closes the menu.
 
 use crate::app::TradeTerm;
-use crate::ui::{chart_type_icon, lucide};
-use ecolor::Color32;
-use gpui_kit::base::PopoverState;
-use gpui_kit::component::button::*;
-use gpui_kit::component::popover::Popover;
-use gpui_kit::component::{Icon, IconName, Sizable, h_flex, v_flex};
-use gpui_kit::prelude::FluentBuilder as _;
+use crate::ui::chart_type_icon;
 use gpui_kit::*;
 use tt_chart::ChartType;
-use tt_chart_gpui::hsla;
 use tt_core::{TimeUnit, Timeframe};
-use tt_theme::Theme;
+use tt_ui::prelude::*;
+use tt_ui::tokens::*;
 
 /// Interval menu sections; `key` is what settings persist.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -104,266 +102,122 @@ pub fn section_rows(section: Section, custom: &[Timeframe]) -> Vec<Timeframe> {
     rows
 }
 
-const GOLD: Color32 = Color32::from_rgb(0xf5, 0xb5, 0x2e);
-
-/// One menu row: optional icon, label, star; selected rows are inverted
-/// like TradingView's.
-#[allow(clippy::too_many_arguments)]
-fn row(
-    id: SharedString,
-    icon: Option<lucide_icons::Icon>,
-    label: String,
-    selected: bool,
-    favorite: bool,
-    theme: &Theme,
-    on_select: impl Fn(&mut Window, &mut App) + 'static,
-    on_star: impl Fn(&mut Window, &mut App) + 'static,
-) -> Stateful<Div> {
-    let (bg, fg) = if selected {
-        (theme.text, theme.bg)
-    } else {
-        (Color32::TRANSPARENT, theme.text)
-    };
-    let group = SharedString::from(format!("{id}-g"));
-    h_flex()
-        .id(id.clone())
-        .group(group.clone())
-        .h(px(32.))
-        .px_2()
-        .gap_2()
-        .rounded(px(5.))
-        .cursor_pointer()
-        .bg(hsla(bg))
-        .text_color(hsla(fg))
-        .when(!selected, |d| d.hover(|s| s.bg(hsla(theme.selection))))
-        .children(icon.map(|i| lucide(i, 17.)))
-        .child(div().flex_1().text_size(px(13.5)).child(label))
-        .child(
-            div()
-                .id(SharedString::from(format!("{id}-star")))
-                .size(px(22.))
-                .flex()
-                .items_center()
-                .justify_center()
-                .when(favorite, |d| {
-                    d.text_color(hsla(if selected { fg } else { GOLD }))
-                })
-                .when(!favorite, |d| {
-                    d.invisible()
-                        .group_hover(group, |s| s.visible())
-                        .text_color(hsla(theme.text_muted))
-                        .hover(|s| s.text_color(hsla(fg)))
-                })
-                .child(
-                    Icon::new(if favorite {
-                        IconName::StarFill
-                    } else {
-                        IconName::Star
-                    })
-                    .size_4(),
-                )
-                .on_click(move |_, window, cx| {
-                    cx.stop_propagation();
-                    on_star(window, cx)
-                }),
-        )
-        .on_click(move |_, window, cx| on_select(window, cx))
-}
-
-/// Closes the popover that `pop` belongs to.
-fn dismiss(pop: &Entity<PopoverState>, window: &mut Window, cx: &mut App) {
-    pop.update(cx, |s, cx| s.dismiss(window, cx));
+/// Menu height cap: the window minus the chrome rows and a margin, so a long
+/// interval list scrolls instead of running off screen.
+fn menu_max_h(window: &Window) -> Pixels {
+    let reserved = H_TITLE_BAR + H_TOOLBAR + H_STATUS_BAR + S4;
+    (window.viewport_size().height - reserved.px()).max((H_MENU_ROW * 6.).px())
 }
 
 /// The interval dropdown (chevron next to the favorite intervals).
 pub fn timeframe_menu(cx: &mut Context<TradeTerm>) -> impl IntoElement + use<> {
     let app = cx.entity().downgrade();
-    Popover::new("tf-popover")
-        .trigger(
-            Button::new("tf-menu")
-                .ghost()
-                .small()
-                .icon(IconName::ChevronDown)
-                .tooltip("Intervals"),
-        )
-        .content(move |_, _, cx| {
-            let pop = cx.entity();
+    ToolbarButton::icon("tf-menu", Glyph::CHEVRON_DOWN)
+        .tooltip("Intervals")
+        .menu(move |menu, window, cx| {
             let Some(app_e) = app.upgrade() else {
-                return div().into_any_element();
+                return menu;
             };
             let a = app_e.read(cx);
-            let (theme, current) = (a.theme().clone(), a.current_timeframe(cx));
+            let current = a.current_timeframe(cx);
             let (favorites, custom, collapsed) = (
                 a.favorite_timeframes.clone(),
                 a.custom_timeframes.clone(),
                 a.collapsed_timeframe_sections.clone(),
             );
-            let mut list = v_flex()
-                .id("tf-list")
-                .w(px(230.))
-                .max_h(px(560.))
-                .overflow_y_scroll();
+            let add = app.clone();
+            let mut menu = menu
+                .id("tf-menu-list")
+                .width(MenuWidth::Md)
+                .max_h(menu_max_h(window))
+                .row(
+                    MenuRow::new("tf-add", "Add custom interval…")
+                        .icon(Glyph::PLUS)
+                        .on_select(move |window, cx| {
+                            add.update(cx, |a, cx| a.open_custom_interval(window, cx))
+                                .ok();
+                        }),
+                )
+                .separator();
             for section in Section::ALL {
                 let open = !collapsed.iter().any(|k| k == section.key());
-                let (app2, pop2) = (app.clone(), pop.clone());
-                list = list.child(
-                    h_flex()
-                        .id(section.key())
-                        .h(px(30.))
-                        .px_2()
-                        .mt_1()
-                        .rounded(px(5.))
-                        .cursor_pointer()
-                        .hover(|s| s.bg(hsla(theme.selection)))
-                        .text_size(px(11.5))
-                        .text_color(hsla(theme.text_muted))
-                        .child(div().flex_1().child(section.title()))
-                        .child(
-                            Icon::new(if open {
-                                IconName::ChevronUp
-                            } else {
-                                IconName::ChevronDown
-                            })
-                            .size_3p5(),
-                        )
-                        .on_click(move |_, _, cx| {
-                            app2.update(cx, |a, cx| a.toggle_timeframe_section(section.key(), cx))
-                                .ok();
-                            pop2.update(cx, |_, cx| cx.notify());
-                        }),
-                );
+                let toggle = app.clone();
+                menu = menu.collapsible_section(section.title(), open, move |_, cx| {
+                    toggle
+                        .update(cx, |a, cx| a.toggle_timeframe_section(section.key(), cx))
+                        .ok();
+                });
                 if !open {
                     continue;
                 }
                 for tf in section_rows(section, &custom) {
-                    let (a_sel, p_sel, a_star, p_star) =
-                        (app.clone(), pop.clone(), app.clone(), pop.clone());
-                    let removable = custom.contains(&tf);
-                    let (a_rm, p_rm) = (app.clone(), pop.clone());
-                    let remove = div()
-                        .id(SharedString::from(format!("tf-rm-{}", tf.code())))
-                        .size(px(22.))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(4.))
-                        .text_color(hsla(theme.text_muted))
-                        .hover(|s| s.text_color(hsla(theme.text)))
-                        .child(Icon::new(IconName::Close).size_3p5())
-                        .on_click(move |_, _, cx| {
-                            cx.stop_propagation();
-                            a_rm.update(cx, |a, cx| a.remove_custom_timeframe(tf, cx))
+                    let (select, star, remove) = (app.clone(), app.clone(), app.clone());
+                    let id = SharedString::from(format!("tf-{}", tf.code()));
+                    let row = MenuRow::new(id, tf.long_name())
+                        .checked(tf == current)
+                        .favorite(favorites.contains(&tf), move |_, cx| {
+                            star.update(cx, |a, cx| a.toggle_favorite_timeframe(tf, cx))
                                 .ok();
-                            p_rm.update(cx, |_, cx| cx.notify());
+                        })
+                        .on_select(move |_, cx| {
+                            select.update(cx, |a, cx| a.set_timeframe(tf, cx)).ok();
                         });
-                    list = list.child(
-                        row(
-                            format!("tf-{}", tf.code()).into(),
-                            None,
-                            tf.long_name(),
-                            tf == current,
-                            favorites.contains(&tf),
-                            &theme,
-                            move |window, cx| {
-                                a_sel.update(cx, |a, cx| a.set_timeframe(tf, cx)).ok();
-                                dismiss(&p_sel, window, cx);
-                            },
-                            move |_, cx| {
-                                a_star
-                                    .update(cx, |a, cx| a.toggle_favorite_timeframe(tf, cx))
-                                    .ok();
-                                p_star.update(cx, |_, cx| cx.notify());
-                            },
-                        )
-                        .when(removable, |r| r.child(remove)),
-                    );
+                    let row = if custom.contains(&tf) {
+                        row.removable("Remove interval", move |_, cx| {
+                            remove
+                                .update(cx, |a, cx| a.remove_custom_timeframe(tf, cx))
+                                .ok();
+                        })
+                    } else {
+                        row
+                    };
+                    menu = menu.row(row);
                 }
             }
-            let (a_add, p_add) = (app.clone(), pop.clone());
-            v_flex()
-                .child(list)
-                .child(div().h(px(1.)).my_1().bg(hsla(theme.border)))
-                .child(
-                    h_flex()
-                        .id("tf-add")
-                        .h(px(32.))
-                        .px_2()
-                        .gap_2()
-                        .rounded(px(5.))
-                        .cursor_pointer()
-                        .hover(|s| s.bg(hsla(theme.selection)))
-                        .child(Icon::new(IconName::Plus).size_4())
-                        .child("Add custom interval…")
-                        .on_click(move |_, window, cx| {
-                            dismiss(&p_add, window, cx);
-                            a_add
-                                .update(cx, |a, cx| a.open_custom_interval(window, cx))
-                                .ok();
-                        }),
-                )
-                .into_any_element()
+            menu
         })
 }
 
-/// The chart type dropdown (current type's icon + chevron).
+/// The chart type dropdown (current type's icon + caret).
 pub fn chart_type_menu(
     current: ChartType,
     cx: &mut Context<TradeTerm>,
 ) -> impl IntoElement + use<> {
     let app = cx.entity().downgrade();
-    Popover::new("ct-popover")
-        .trigger(
-            Button::new("chart-type")
-                .ghost()
-                .small()
-                .child(lucide(chart_type_icon(current), 17.))
-                .dropdown_caret(true)
-                .tooltip(current.label()),
-        )
-        .content(move |_, _, cx| {
-            let pop = cx.entity();
+    ToolbarButton::icon("chart-type", chart_type_icon(current))
+        .caret()
+        .tooltip(current.label())
+        .menu(move |menu, _, cx| {
             let Some(app_e) = app.upgrade() else {
-                return div().into_any_element();
+                return menu;
             };
             let a = app_e.read(cx);
-            let theme = a.theme().clone();
             let current = a.current_chart_type(cx);
             let favorites = a.favorite_chart_types.clone();
-            let mut list = v_flex().w(px(240.));
+            let mut menu = menu.id("ct-menu-list").width(MenuWidth::Md);
             for (g, group) in ChartType::GROUPS.iter().enumerate() {
                 if g > 0 {
-                    list = list.child(div().h(px(1.)).my_1().bg(hsla(theme.border)));
+                    menu = menu.separator();
                 }
                 for &t in group.iter() {
-                    let (a_sel, p_sel, a_star, p_star) =
-                        (app.clone(), pop.clone(), app.clone(), pop.clone());
-                    let desc = t.description();
-                    list = list.child(
-                        row(
-                            format!("ct-{}", t.label()).into(),
-                            Some(chart_type_icon(t)),
-                            t.label().to_owned(),
-                            t == current,
-                            favorites.contains(&t),
-                            &theme,
-                            move |window, cx| {
-                                a_sel.update(cx, |a, cx| a.set_chart_type(t, cx)).ok();
-                                dismiss(&p_sel, window, cx);
-                            },
-                            move |_, cx| {
-                                a_star
-                                    .update(cx, |a, cx| a.toggle_favorite_chart_type(t, cx))
+                    let (select, star) = (app.clone(), app.clone());
+                    let id = SharedString::from(format!("ct-{}", t.label()));
+                    menu = menu.row(
+                        MenuRow::new(id, t.label())
+                            .icon(chart_type_icon(t))
+                            .checked(t == current)
+                            .description(t.description())
+                            .favorite(favorites.contains(&t), move |_, cx| {
+                                star.update(cx, |a, cx| a.toggle_favorite_chart_type(t, cx))
                                     .ok();
-                                p_star.update(cx, |_, cx| cx.notify());
-                            },
-                        )
-                        .tooltip(move |window, cx| {
-                            gpui_kit::component::tooltip::Tooltip::new(desc).build(window, cx)
-                        }),
+                            })
+                            .on_select(move |_, cx| {
+                                select.update(cx, |a, cx| a.set_chart_type(t, cx)).ok();
+                            }),
                     );
                 }
             }
-            list.into_any_element()
+            menu
         })
 }
 

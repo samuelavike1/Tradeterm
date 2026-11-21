@@ -38,7 +38,8 @@ pub struct Shared {
     pub wake_after: WakeAfter,
     pub handle: Handle,
     pub source: Arc<BinanceSource>,
-    /// Style new charts start with (fonts are front-end specific).
+    /// The user default style: new charts start with it and tabs without
+    /// their own style follow it.
     pub chart_style: tt_chart::ChartStyle,
     /// Drawings per symbol, shared by all tabs.
     pub drawings: DrawingStore,
@@ -88,6 +89,9 @@ pub struct ChartTab {
     pub status: ConnectionStatus,
     pub backfill: Backfill,
     pub chart: ChartView,
+    /// `chart.style` is this tab's own style; false = it follows the user
+    /// default (`Shared::chart_style`), see [`TabSettings::style`].
+    pub own_style: bool,
     /// What `series` currently holds (live data), for the cache.
     loaded: Option<(Symbol, Timeframe)>,
     cache: Vec<CachedSeries>,
@@ -103,7 +107,7 @@ impl ChartTab {
             symbol = Symbol::new(TabSettings::default().symbol);
         }
         let mut chart = ChartView::default();
-        chart.style = shared.chart_style.clone();
+        chart.style = s.effective_style(&shared.chart_style).clone();
         chart.chart_type = s.chart_type;
         chart.scale_mode = s.scale_mode;
         chart.invert_scale = s.invert_scale;
@@ -124,6 +128,7 @@ impl ChartTab {
             status: ConnectionStatus::Connecting,
             backfill: Backfill::default(),
             chart,
+            own_style: s.style.is_some(),
             loaded: None,
             cache: Vec::new(),
             restarted_at: Instant::now(),
@@ -132,6 +137,13 @@ impl ChartTab {
         tab.load_drawings(shared);
         tab.restart(shared);
         tab
+    }
+
+    /// Sets this tab's own style (`Some`) or makes it follow `default`
+    /// (`None`).
+    pub fn set_style(&mut self, own: Option<tt_chart::ChartStyle>, default: &tt_chart::ChartStyle) {
+        self.own_style = own.is_some();
+        self.chart.style = own.unwrap_or_else(|| default.clone());
     }
 
     /// Key of this tab's drawings in the store.
@@ -179,6 +191,7 @@ impl ChartTab {
             legend_collapsed: self.chart.legend_collapsed,
             invert_scale: self.chart.invert_scale,
             main_collapsed: self.chart.main_collapsed,
+            style: self.own_style.then(|| self.chart.style.clone()),
             show_volume: None,
         }
     }

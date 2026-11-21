@@ -32,20 +32,6 @@ pub fn apply_theme(theme: &Theme, cx: &mut App) {
     tt_ui::theme::sync(theme, cx);
 }
 
-/// A Lucide glyph (from the icon font registered by `tt_ui::init`).
-pub fn lucide(icon: lucide_icons::Icon, size: f32) -> Div {
-    div()
-        .font_family(tt_ui::ICON_FONT)
-        .text_size(px(size))
-        .line_height(px(size))
-        .child(char::from(icon).to_string())
-}
-
-/// A thin vertical toolbar separator (kit: `tt_ui::Divider::vertical`).
-pub fn separator(_theme: &Theme) -> tt_ui::Divider {
-    tt_ui::Divider::vertical()
-}
-
 /// Connection status dot; breathes (keyframed opacity) while connecting.
 pub fn status_dot(color: Color32, pulsing: bool) -> StatusDot {
     StatusDot { color, pulsing }
@@ -77,8 +63,9 @@ impl RenderOnce for StatusDot {
         } else {
             1.0
         };
+        // The dot is one grid step (S2) across.
         div()
-            .size(px(8.))
+            .size(px(tt_ui::tokens::S2))
             .rounded_full()
             .bg(hsla(self.color))
             .opacity(opacity)
