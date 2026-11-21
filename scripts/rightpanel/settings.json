@@ -1,0 +1,41 @@
+{
+  "theme_mode": "Dark",
+  "tabs": [
+    { "symbol": "BTCUSDT", "timeframe": "1h", "chart_type": "Candles",
+      "indicators": [
+        {"study": {"type": "Volume", "ma_length": 20, "color_by_prev_close": false, "show_ma": false}, "visible": true},
+        {"study": {"type": "Ema", "length": 9, "source": "Close"}, "visible": true},
+        {"study": {"type": "Rsi", "length": 14, "source": "Close"}, "visible": false}
+      ] },
+    { "symbol": "ETHUSDT", "timeframe": "1h", "chart_type": "Candles" }
+  ],
+  "active_tab": 0,
+  "drawings": {
+    "BTCUSDT": [
+      { "tool": "TrendLine", "points": [ { "time_ms": 1794700000000, "price": 64500.0 }, { "time_ms": 1795100000000, "price": 58500.0 } ],
+        "color": [41, 98, 255, 255], "width": 2.0 },
+      { "tool": "HorizontalLine", "points": [ { "time_ms": 1794900000000, "price": 61000.0 } ],
+        "color": [242, 54, 69, 255], "width": 1.0, "locked": true },
+      { "tool": "Rectangle", "points": [ { "time_ms": 1794800000000, "price": 63800.0 }, { "time_ms": 1794950000000, "price": 62500.0 } ],
+        "color": [255, 152, 0, 255], "width": 1.0, "name": "Supply zone" }
+    ]
+  },
+  "watchlists": {
+    "lists": [
+      { "name": "Crypto majors", "items": [
+        { "symbol": "BTCUSDT", "base": "BTC", "quote": "USDT" },
+        { "symbol": "ETHUSDT", "base": "ETH", "quote": "USDT" },
+        { "symbol": "SOLUSDT", "base": "SOL", "quote": "USDT" },
+        { "section": "Alts" },
+        { "symbol": "BNBUSDT", "base": "BNB", "quote": "USDT" },
+        { "symbol": "XRPUSDT", "base": "XRP", "quote": "USDT" },
+        { "symbol": "DOGEUSDT", "base": "DOGE", "quote": "USDT" },
+        { "symbol": "ADAUSDT", "base": "ADA", "quote": "USDT" },
+        { "section": "Collapsed", "collapsed": true },
+        { "symbol": "LINKUSDT", "base": "LINK", "quote": "USDT" }
+      ] },
+      { "name": "Second list", "items": [ { "symbol": "ETHBTC", "base": "ETH", "quote": "BTC" } ] }
+    ]
+  },
+  "right_panel": { "open": "watchlist", "width": 320 }
+}

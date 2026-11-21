@@ -4,8 +4,9 @@
 //! - chart tabs: the UI forwards a tab's last price after it drained new
 //!   bars ([`AlertEngine::tab_price`]; a set lookup and a channel send when
 //!   the symbol has alerts, nothing otherwise);
-//! - for alert symbols no tab streams, one combined Binance `@miniTicker`
-//!   connection, restarted only when that symbol set changes.
+//! - for alert symbols no tab streams, the watchlist's quote feed
+//!   (`BinanceSource::run_mini_tickers`, one combined `@miniTicker`
+//!   connection), restarted only when that symbol set changes.
 //!
 //! The task also runs a 1 s clock (expirations, bar closes without
 //! trades). Fired alerts come back through a channel plus the UI wake-up
@@ -20,8 +21,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::runtime::Handle;
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 use tokio::task::JoinHandle;
-use tracing::info;
+use tracing::{info, warn};
 use tt_brokers::BinanceSource;
+use tt_brokers::binance::Backoff;
 use tt_core::Symbol;
 
 enum Msg {
@@ -35,6 +37,37 @@ pub fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_millis() as i64)
+}
+
+/// The watchlist's quote feed ([`crate::quotes`]: Binance's combined
+/// `@miniTicker` stream, `BinanceSource::run_mini_tickers`) for the alert
+/// symbols no tab streams; reconnects with backoff until the receiver is
+/// gone.
+async fn run_feed(source: Arc<BinanceSource>, symbols: Vec<Symbol>, tx: UnboundedSender<Msg>) {
+    let mut backoff = Backoff::new(Duration::from_millis(500), Duration::from_secs(30));
+    loop {
+        let mut open = true;
+        let r = source
+            .run_mini_tickers(&symbols, |symbol, t| {
+                open = tx
+                    .send(Msg::Price {
+                        symbol,
+                        price: t.last,
+                    })
+                    .is_ok();
+                backoff.reset();
+                open
+            })
+            .await;
+        if !open || tx.is_closed() {
+            return;
+        }
+        let delay = backoff.next_delay();
+        if let Err(e) = r {
+            warn!(?delay, "alert feed disconnected: {e:#}");
+        }
+        tokio::time::sleep(delay).await;
+    }
 }
 
 /// Handle to the alert task (UI side). Dropping it stops the task and its
@@ -102,17 +135,7 @@ impl AlertEngine {
                             let tx = feed_tx.clone();
                             let source = source.clone();
                             let symbols: Vec<Symbol> = want.iter().map(Symbol::new).collect();
-                            let task = tokio::spawn(async move {
-                                source
-                                    .run_mini_tickers(symbols, move |t| {
-                                        tx.send(Msg::Price {
-                                            symbol: t.symbol,
-                                            price: t.price,
-                                        })
-                                        .is_ok()
-                                    })
-                                    .await
-                            });
+                            let task = tokio::spawn(run_feed(source, symbols, tx));
                             feed = Some((want, task));
                         }
                     }

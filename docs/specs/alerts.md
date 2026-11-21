@@ -11,7 +11,7 @@ Screenshots: `img/tv-ref/tv-alerts-*.png` (TradingView), `img/alerts-*.png`
 
 Code: `tt-session/src/alerts.rs` (model, evaluator, placeholders, storage),
 `tt-session/src/alert_engine.rs` (background task, feeds),
-`tt-brokers` `BinanceSource::run_mini_tickers` (lightweight feed),
+`BinanceSource::run_mini_tickers` (the watchlist's quote feed, reused for alert symbols without a tab),
 `tt-chart/src/alert_lines.rs` (on-chart levels, price-scale "+"),
 `tradeterm/src/alerts.rs` (alert center, notifications, chart glue),
 `tradeterm/src/alert_dialog.rs`, `tradeterm/src/alerts_panel.rs`.
@@ -85,7 +85,7 @@ extended line (between Settings and Lock, as on TradingView).
   data wake-up (a set lookup per tab, a channel send when the symbol has
   alerts). Symbols with alerts and no live tab get one combined Binance
   `@miniTicker` connection (about 1 update / s per symbol), restarted only
-  when that set changes.
+  when that set changes (the watchlist's quote feed, `BinanceSource::run_mini_tickers`).
 - The evaluator runs on a background task, O(1) per tick per alert: a hash
   lookup by symbol, then per alert the previous price, the current bar
   (open time, OHLC from the ticks) and a ring of the last N closes (Moving).
@@ -146,8 +146,7 @@ chart's history (they wait for N bars of live data).
 ## 7. tradeterm screenshots
 
 Release build, `scripts/alerts-tv/start.ps1` (seeded settings and alerts in
-`scripts/alerts-tv/tmp`, the panel in its own window via
-`TRADETERM_ALERTS_PANEL=1` until the right sidebar mounts it) and
+`scripts/alerts-tv/tmp`, the right sidebar open on the Alerts panel) and
 `scripts/alerts-tv/act.ps1`.
 
 | | Dark | Light |

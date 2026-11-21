@@ -32,6 +32,9 @@ const EXCHANGE_LOGO_ASSET: &str = "BNB";
 /// Binance yellow, for the letter badge until the logo is on disk.
 const EXCHANGE_COLOR: u32 = 0xF0B90B;
 
+/// What a pick does instead of switching the chart.
+type OnPick = std::rc::Rc<dyn Fn(SymbolInfo, &mut App)>;
+
 pub struct SymbolSearch {
     app: WeakEntity<TradeTerm>,
     input: Entity<InputState>,
@@ -53,6 +56,9 @@ pub struct SymbolSearch {
     /// The field shows a highlighted row's symbol (↑/↓ preview); the next
     /// change event is ours, not typing.
     previewing: bool,
+    /// Called with the chosen symbol instead of switching the chart (the
+    /// watchlist's "Add symbol").
+    on_pick: Option<OnPick>,
     _sub: Subscription,
 }
 
@@ -111,6 +117,7 @@ impl SymbolSearch {
             nav: ListNav::new(),
             enter_pending: false,
             previewing: false,
+            on_pick: None,
             _sub,
         };
         if !initial.is_empty() {
@@ -258,13 +265,24 @@ impl SymbolSearch {
         }
     }
 
+    /// Picks call `f` instead of switching the chart's symbol.
+    pub fn set_on_pick(&mut self, f: impl Fn(SymbolInfo, &mut App) + 'static) {
+        self.on_pick = Some(std::rc::Rc::new(f));
+    }
+
     fn choose(&mut self, info: SymbolInfo, cx: &mut Context<Self>) {
         let app = self.app.clone();
+        let on_pick = self.on_pick.clone();
         cx.defer(move |cx| {
-            app.update(cx, |app, cx| {
-                app.set_symbol(info.symbol.clone(), Some(info), cx)
-            })
-            .ok();
+            match on_pick {
+                Some(f) => f(info, cx),
+                None => {
+                    app.update(cx, |app, cx| {
+                        app.set_symbol(info.symbol.clone(), Some(info), cx)
+                    })
+                    .ok();
+                }
+            }
             if let Some(window) = cx.active_window() {
                 window
                     .update(cx, |_, window, cx| window.close_dialog(cx))
@@ -304,7 +322,7 @@ fn highlighted(text: String, needle: &str, accent: Hsla) -> StyledText {
 }
 
 /// A round logo of `size`, or a letter badge in `bg` until it is on disk.
-fn logo(assets: &AssetCache, code: &str, size: f32, bg: Hsla, fg: Hsla) -> AnyElement {
+pub(crate) fn logo(assets: &AssetCache, code: &str, size: f32, bg: Hsla, fg: Hsla) -> AnyElement {
     let initial = SharedString::from(code.chars().next().unwrap_or('?').to_string());
     logo_or_badge(assets.logo(code), px(size), move || {
         div()

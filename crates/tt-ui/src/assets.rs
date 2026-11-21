@@ -73,6 +73,10 @@ icons!(
     "alarm-clock",
     "alarm-clock-plus",
     "go-to-date",
+    "panel-watchlist",
+    "panel-alerts",
+    "panel-object-tree",
+    "tree-indicator",
 );
 
 /// Our icons plus gpui-kit's default asset bundle.

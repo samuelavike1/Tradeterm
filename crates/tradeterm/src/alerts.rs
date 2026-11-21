@@ -413,23 +413,6 @@ impl TradeTerm {
         self._subscriptions.push(sub);
         let obs = cx.observe(&center, |app, _, cx| app.sync_alert_lines(cx));
         self._subscriptions.push(obs);
-        // Until the right sidebar mounts the panel: `TRADETERM_ALERTS_PANEL=1`
-        // shows it in a window of its own (screenshots, testing).
-        if std::env::var_os("TRADETERM_ALERTS_PANEL").is_some() {
-            cx.defer(|cx| {
-                let opts = WindowOptions {
-                    window_bounds: Some(WindowBounds::Windowed(Bounds::new(
-                        point(px(1460.), px(40.)),
-                        size(px(tt_ui::tokens::AL_W_PANEL), px(820.)),
-                    ))),
-                    ..Default::default()
-                };
-                gpui_kit::open_window(opts, cx, |window, cx| {
-                    cx.new(|cx| crate::alerts_panel::AlertsPanel::new(window, cx))
-                })
-                .ok();
-            });
-        }
     }
 
     /// After market data was applied: tab prices into the engine, the

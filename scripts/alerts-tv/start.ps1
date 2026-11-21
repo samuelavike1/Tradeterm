@@ -1,7 +1,7 @@
 # Starts the release build for the alerts screenshots with a generated
 # settings file and alerts.json in scripts/alerts-tv/tmp (TRADETERM_SETTINGS;
-# never the user's settings) and the alerts panel in its own window
-# (TRADETERM_ALERTS_PANEL). Alerts are seeded around the live BTCUSDT /
+# never the user's settings),
+# with the right sidebar open on the Alerts panel. Alerts are seeded around the live BTCUSDT /
 # ETHUSDT prices so some trigger right away:
 #   1 BTCUSDT Greater Than (price - 1 %), Once only, toast   -> triggers
 #   2 BTCUSDT Crossing (price + 0.05 %), Once per minute
@@ -62,6 +62,7 @@ foreach ($a in $alerts) {
     theme_mode = $Theme
     tabs = @(@{ symbol = 'BTCUSDT'; timeframe = '1m'; chart_type = 'Candles' })
     active_tab = 0
+    right_panel = @{ open = 'Alerts'; width = 300 }
     # A horizontal line for "Add alert" on the floating toolbar.
     drawings = @{
         BTCUSDT = @(@{
@@ -72,13 +73,11 @@ foreach ($a in $alerts) {
 } | ConvertTo-Json -Depth 10 | Set-Content (Join-Path $Tmp 'settings.json') -Encoding utf8NoBOM
 
 $env:TRADETERM_SETTINGS = Join-Path $Tmp 'settings.json'
-$env:TRADETERM_ALERTS_PANEL = '1'
 $p = Start-Process -FilePath $Exe -PassThru -RedirectStandardOutput (Join-Path $Tmp 'app.log') -RedirectStandardError (Join-Path $Tmp 'err.log')
 $p.Id | Set-Content (Join-Path $Tmp 'pid.txt')
 $deadline = (Get-Date).AddSeconds(30)
-while (@(App-Windows).Count -lt 2 -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 300 }
+while (@(App-Windows).Count -lt 1 -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 300 }
 $ws = @(App-Windows)
-[AW]::MoveWindow($ws[0].H, 0, 0, 1400, 900, $true) | Out-Null
-if ($ws.Count -gt 1) { [AW]::MoveWindow($ws[1].H, 1404, 0, 316, 900, $true) | Out-Null }
+[AW]::MoveWindow($ws[0].H, 0, 0, 1720, 900, $true) | Out-Null
 [AW]::Front($ws[0].H)
 "started pid $($p.Id), BTC $btc, ETH $eth, windows $($ws.Count)"

@@ -2,13 +2,16 @@
 
 mod assets;
 mod parse;
+mod ticker;
 
 pub use assets::{ASSETS_URL, AssetInfo, MAX_LOGO_BYTES, is_image, parse_assets};
 
 pub use parse::{
-    KlineUpdate, MiniTick, base_timeframe, interval, parse_exchange_info, parse_mini_ticker,
-    parse_rest_klines, parse_ws_kline, rank_symbols,
+    KlineUpdate, base_timeframe, interval, parse_exchange_info, parse_rest_klines, parse_ws_kline,
+    rank_symbols,
 };
+
+pub use ticker::{Ticker24h, mini_ticker_url, parse_ticker_24h, parse_ws_mini_ticker};
 
 use crate::MarketDataSource;
 use anyhow::{Context, Result, bail};
@@ -348,78 +351,6 @@ impl BinanceSource {
                         .filter(|r| !r.is_empty());
                     return Ok(SessionEnd::ServerClosed(reason));
                 }
-                _ => {}
-            }
-        }
-    }
-}
-
-impl BinanceSource {
-    /// Streams last prices of `symbols` (one combined `@miniTicker`
-    /// connection, about one update per second per symbol) into `on_tick`
-    /// until it returns `false`. Reconnects with backoff; never fails. The
-    /// lightweight feed of alerts on symbols no chart tab shows.
-    pub async fn run_mini_tickers(
-        &self,
-        symbols: Vec<Symbol>,
-        mut on_tick: impl FnMut(MiniTick) -> bool + Send,
-    ) {
-        if symbols.is_empty() {
-            return;
-        }
-        let base = self.ws_base.strip_suffix("/ws").unwrap_or(&self.ws_base);
-        let streams: Vec<String> = symbols
-            .iter()
-            .map(|s| format!("{}@miniTicker", s.as_str().to_ascii_lowercase()))
-            .collect();
-        let url = format!("{base}/stream?streams={}", streams.join("/"));
-        let mut backoff = Backoff::new(BACKOFF_MIN, BACKOFF_MAX);
-        loop {
-            let reason = match self
-                .mini_ticker_session(&url, &mut on_tick, &mut backoff)
-                .await
-            {
-                Ok(true) => return,
-                Ok(false) => "server closed the stream".to_owned(),
-                Err(e) => format!("{e:#}"),
-            };
-            let delay = backoff.next_delay();
-            warn!(%url, %reason, ?delay, "mini-ticker stream disconnected; retrying");
-            tokio::time::sleep(delay).await;
-        }
-    }
-
-    /// One connection; `Ok(true)` when `on_tick` asked to stop.
-    async fn mini_ticker_session(
-        &self,
-        url: &str,
-        on_tick: &mut (impl FnMut(MiniTick) -> bool + Send),
-        backoff: &mut Backoff,
-    ) -> Result<bool> {
-        let (mut ws, _) = timeout(CONNECT_TIMEOUT, tokio_tungstenite::connect_async(url))
-            .await
-            .context("websocket connect timed out")?
-            .context("websocket connect failed")?;
-        debug!(%url, "mini-ticker stream attached");
-        backoff.reset();
-        loop {
-            let msg = match timeout(READ_TIMEOUT, ws.next()).await {
-                Err(_) => bail!("no data for {}s", READ_TIMEOUT.as_secs()),
-                Ok(None) => return Ok(false),
-                Ok(Some(msg)) => msg.context("websocket read failed")?,
-            };
-            match msg {
-                Message::Text(text) => match parse_mini_ticker(&text) {
-                    Ok(Some(t)) => {
-                        if !on_tick(t) {
-                            return Ok(true);
-                        }
-                    }
-                    Ok(None) => {}
-                    Err(e) => warn!("ignoring bad mini-ticker message: {e:#}"),
-                },
-                Message::Ping(_) => ws.flush().await.context("sending pong")?,
-                Message::Close(_) => return Ok(false),
                 _ => {}
             }
         }

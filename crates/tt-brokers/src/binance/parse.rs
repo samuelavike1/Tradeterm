@@ -168,60 +168,6 @@ pub fn parse_ws_kline(text: &str) -> Result<Option<KlineUpdate>> {
     }))
 }
 
-/// A last-price update from a mini-ticker stream (alerts' lightweight feed).
-#[derive(Debug, Clone, PartialEq)]
-pub struct MiniTick {
-    /// Upper-case symbol, e.g. `BTCUSDT`.
-    pub symbol: String,
-    pub price: f64,
-    /// Event time (Unix ms).
-    pub time_ms: i64,
-}
-
-#[derive(Deserialize)]
-struct MiniTickerData<'a> {
-    #[serde(rename = "e", borrow)]
-    event_type: Option<&'a str>,
-    #[serde(rename = "E", default)]
-    time: i64,
-    #[serde(rename = "s")]
-    symbol: Option<String>,
-    #[serde(rename = "c")]
-    close: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct Combined<'a> {
-    #[serde(borrow)]
-    data: Option<MiniTickerData<'a>>,
-}
-
-/// Parses a `<symbol>@miniTicker` frame, raw or wrapped by a combined
-/// stream (`{"stream":…,"data":{…}}`). `Ok(None)` for other well-formed
-/// messages (acks, other events).
-pub fn parse_mini_ticker(text: &str) -> Result<Option<MiniTick>> {
-    let v: Combined<'_> = serde_json::from_str(text).context("invalid websocket JSON")?;
-    let d = match v.data {
-        Some(d) => d,
-        None => serde_json::from_str::<MiniTickerData<'_>>(text).context("invalid ticker")?,
-    };
-    let (Some("24hrMiniTicker"), Some(symbol), Some(close)) = (d.event_type, d.symbol, d.close)
-    else {
-        return Ok(None);
-    };
-    let price: f64 = close
-        .parse()
-        .with_context(|| format!("close = {close:?}"))?;
-    if !price.is_finite() {
-        bail!("close is not finite");
-    }
-    Ok(Some(MiniTick {
-        symbol,
-        price,
-        time_ms: d.time,
-    }))
-}
-
 #[derive(Deserialize)]
 struct ExchangeInfo {
     #[serde(default)]
@@ -442,24 +388,6 @@ mod tests {
          "filters": []}
       ]
     }"#;
-
-    #[test]
-    fn parses_mini_ticker_raw_and_combined() {
-        let raw = r#"{"e":"24hrMiniTicker","E":1700000000000,"s":"BTCUSDT","c":"60123.45","o":"1","h":"2","l":"0.5","v":"10","q":"20"}"#;
-        let t = parse_mini_ticker(raw).unwrap().unwrap();
-        assert_eq!(t.symbol, "BTCUSDT");
-        assert_eq!(t.price, 60123.45);
-        assert_eq!(t.time_ms, 1_700_000_000_000);
-        let combined = format!(r#"{{"stream":"btcusdt@miniTicker","data":{raw}}}"#);
-        assert_eq!(parse_mini_ticker(&combined).unwrap(), Some(t));
-        assert_eq!(
-            parse_mini_ticker(r#"{"result":null,"id":1}"#).unwrap(),
-            None
-        );
-        assert!(parse_mini_ticker("nope").is_err());
-        let bad = r#"{"e":"24hrMiniTicker","E":1,"s":"X","c":"abc"}"#;
-        assert!(parse_mini_ticker(bad).is_err());
-    }
 
     #[test]
     fn parses_exchange_info() {

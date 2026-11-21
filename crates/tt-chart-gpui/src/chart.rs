@@ -92,9 +92,20 @@ pub struct ChartState<S: ChartSource> {
     legend_hover_button: Option<(u64, LegendButton)>,
     pub base_stats: LayerStats,
     pub overlay_stats: LayerStats,
+    /// Pointer position over the plot (`None` off the chart).
+    crosshair: Option<Pos2>,
+    /// Entity notified when the crosshair moves to another bar (the data
+    /// window), so it repaints per bar, not per mouse move.
+    pub crosshair_listener: Option<EntityId>,
+    crosshair_key: Option<i64>,
 }
 
 impl<S: ChartSource> ChartState<S> {
+    /// Where the pointer is over the chart (for the data window).
+    pub fn crosshair(&self) -> Option<Pos2> {
+        self.crosshair
+    }
+
     pub fn new(source: S, theme: Theme) -> Self {
         Self {
             source,
@@ -105,6 +116,9 @@ impl<S: ChartSource> ChartState<S> {
             legend_hover_button: None,
             base_stats: LayerStats::default(),
             overlay_stats: LayerStats::default(),
+            crosshair: None,
+            crosshair_listener: None,
+            crosshair_key: None,
         }
     }
 
@@ -341,12 +355,29 @@ impl<S: ChartSource> Chart<S> {
             Some(ChartHit::LegendButton(id, b)) => (Some(id), Some((id, b))),
             _ => (None, None),
         };
-        self.state.update(cx, |s, _| {
+        let notify = self.state.update(cx, |s, _| {
             // No crosshair over the legend, like TradingView.
             s.pointer = pointer.filter(|_| legend_hover.is_none());
             s.legend_hover = legend_hover;
             s.legend_hover_button = legend_hover_button;
+            s.crosshair = pointer;
+            // The bar slot under the pointer: the data window changes per
+            // bar, so its listener is only woken when the slot changes.
+            let bar_key = pointer.and_then(|p| {
+                let v = s.source.view();
+                v.last_layout()
+                    .panes_x_range()
+                    .contains(p.x)
+                    .then(|| v.slot_at_x(p.x))
+                    .flatten()
+            });
+            let changed = bar_key != s.crosshair_key;
+            s.crosshair_key = bar_key;
+            changed.then_some(s.crosshair_listener).flatten()
         });
+        if let Some(id) = notify {
+            cx.notify(id);
+        }
         self.overlay.update(cx, |_, cx| cx.notify());
     }
 

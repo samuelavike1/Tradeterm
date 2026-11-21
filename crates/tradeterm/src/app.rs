@@ -120,6 +120,9 @@ pub struct TradeTerm {
     /// Drawing tool and toggles (left toolbar), shared by all charts.
     pub(crate) draw: crate::drawing_toolbar::DrawMode,
     pub(crate) focus: FocusHandle,
+    /// The right sidebar (watchlist, alerts, object tree / data window).
+    pub(crate) right_sidebar: Entity<crate::right_sidebar::RightSidebar>,
+    pub(crate) sidebar_views: crate::right_sidebar::SidebarViews,
     pub(crate) _subscriptions: Vec<Subscription>,
     /// Owns the tokio thread; dropped after the tabs.
     _runtime: BackgroundRuntime,
@@ -245,6 +248,13 @@ impl TradeTerm {
             templates: settings.drawing_templates.clone(),
             toolbar_pos: settings.drawing_toolbar_pos,
         });
+        let right_sidebar = {
+            let app = cx.weak_entity();
+            cx.new(|cx| {
+                crate::right_sidebar::RightSidebar::new(app, &shared, &settings, window, cx)
+            })
+        };
+        let sidebar_views = right_sidebar.update(cx, |s, cx| s.views(cx));
         let mut app = Self {
             shared,
             tabs: Vec::new(),
@@ -275,6 +285,8 @@ impl TradeTerm {
             search_quote: 0,
             draw: Default::default(),
             focus: cx.focus_handle(),
+            right_sidebar,
+            sidebar_views,
             _subscriptions: Vec::new(),
             _runtime: runtime,
         };
@@ -351,6 +363,10 @@ impl TradeTerm {
             },
         );
         self._subscriptions.push(sub);
+        // The data window follows this chart's crosshair.
+        let tree = self.sidebar_views.tree;
+        let state = chart.read(cx).state.clone();
+        state.update(cx, |s, _| s.crosshair_listener = Some(tree));
         self.apply_draw_mode_to(&chart, cx);
         self.apply_drawing_defaults_to(&chart, cx);
         chart
@@ -415,7 +431,8 @@ impl TradeTerm {
             cx.refresh_windows();
         }
         if any {
-            // Tab strip change %, status bar.
+            // Tab strip change %, status bar, right panels.
+            self.sidebar_views.ticked(cx);
             cx.notify();
         }
         self.alerts_after_drain(cx);
@@ -450,6 +467,7 @@ impl TradeTerm {
             s.drawing_templates = p.templates.clone();
             s.drawing_toolbar_pos = p.toolbar_pos;
         }
+        self.right_sidebar.read(cx).snapshot(&mut s, cx);
         if let Ok(store) = self.shared.drawings.lock() {
             s.drawings = store
                 .iter()
@@ -477,6 +495,7 @@ impl TradeTerm {
     pub(crate) fn persist(&mut self, cx: &mut Context<Self>) {
         // Dirty-flag check per tab; keeps a closing tab's drawings.
         self.stash_drawings(cx);
+        self.sidebar_views.changed(cx);
         if let Some(wait) = self.store.mark_changed(Instant::now()) {
             self.schedule_settings_check(wait, cx);
         }
@@ -1017,7 +1036,8 @@ impl Render for TradeTerm {
                                     .children(self.perf_overlay(cx)),
                             )
                             .child(self.status_bar(window, cx)),
-                    ),
+                    )
+                    .child(self.right_sidebar.clone()),
             )
     }
 }
