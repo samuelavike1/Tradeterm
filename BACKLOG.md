@@ -111,3 +111,10 @@ Add to this list whenever something is skipped; remove an entry when it lands.
 - Trend angle: "Angle" field on the Coordinates tab.
 - Parallel channel: dim unchecked level rows like TradingView.
 
+## Indicator parity with TradingView (study metadata, slice I-5)
+- RSI: smoothing MA (RSI-based MA), divergence, overbought/oversold gradient fills.
+- MACD: oscillator / signal MA types, zero line, TradingView colour labels.
+- Bollinger Bands: basis MA type, offset. MA/EMA: offset, smoothing, timeframe; plot titled "MA"/"EMA".
+- VWAP: anchor period, bands. OBV: signal / smoothing.
+- Indicator dialog: "Dock to right" pin; TradingView's own plot-type icons.
+
