@@ -33,8 +33,9 @@ pub struct DrawMode {
     pub keep_drawing: bool,
     pub locked: bool,
     pub hidden: bool,
-    /// Tool shown on the Lines / Measure group buttons (last picked).
+    /// Tool shown on the Lines / Fib / Measure group buttons (last picked).
     pub line_tool: DrawingTool,
+    pub fib_tool: DrawingTool,
     pub measure_tool: DrawingTool,
 }
 
@@ -47,6 +48,7 @@ impl Default for DrawMode {
             locked: false,
             hidden: false,
             line_tool: DrawingTool::TrendLine,
+            fib_tool: DrawingTool::FibRetracement,
             measure_tool: DrawingTool::DateAndPriceRange,
         }
     }
@@ -121,6 +123,8 @@ impl TradeTerm {
         if let Some(t) = self.draw.tool {
             if DrawingTool::LINES.contains(&t) {
                 self.draw.line_tool = t;
+            } else if DrawingTool::FIB.contains(&t) {
+                self.draw.fib_tool = t;
             } else if DrawingTool::MEASURERS.contains(&t) {
                 self.draw.measure_tool = t;
             }
@@ -272,17 +276,7 @@ impl TradeTerm {
         };
 
         let lines = group("dt-lines", m.line_tool, &DrawingTool::LINES, "LINES", cx);
-        let fib = tool_button(
-            "dt-fib",
-            DrawingTool::FibRetracement.icon(),
-            m.tool == Some(DrawingTool::FibRetracement),
-            tip(DrawingTool::FibRetracement),
-        )
-        .on_click(cx.listener(|this, _, _, cx| {
-            let pick = (this.draw.tool != Some(DrawingTool::FibRetracement))
-                .then_some(DrawingTool::FibRetracement);
-            this.pick_tool(pick, cx)
-        }));
+        let fib = group("dt-fib", m.fib_tool, &DrawingTool::FIB, "FIBONACCI", cx);
         let rect = tool_button(
             "dt-rect",
             DrawingTool::Rectangle.icon(),

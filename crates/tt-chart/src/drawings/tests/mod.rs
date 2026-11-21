@@ -7,6 +7,7 @@ use ecolor::Color32;
 use emath::vec2;
 use serde::{Deserialize, Serialize};
 
+mod families;
 mod interaction;
 
 pub(super) const NO_MODS: Mods = Mods {
@@ -244,13 +245,16 @@ fn spans_and_serde() {
 #[test]
 fn only_current_tools_are_available() {
     let available: Vec<_> = DrawingTool::available().collect();
-    assert_eq!(available.len(), 12);
-    for t in DrawingTool::LINES.iter().chain(&DrawingTool::MEASURERS) {
+    assert_eq!(available.len(), 17);
+    for t in DrawingTool::LINES
+        .iter()
+        .chain(&DrawingTool::FIB)
+        .chain(&DrawingTool::MEASURERS)
+    {
         assert!(t.is_available(), "{t:?}");
     }
-    assert!(DrawingTool::FibRetracement.is_available());
     assert!(DrawingTool::Rectangle.is_available());
-    assert!(!DrawingTool::ParallelChannel.is_available());
+    assert!(!DrawingTool::Ellipse.is_available());
     // Every tool has defaults whose family round-trips.
     for t in DrawingTool::ALL {
         let p = Props::defaults(t);

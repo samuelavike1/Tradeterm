@@ -780,9 +780,7 @@ impl Drawings {
                     Some((c, from, from_pt)) => m.constrained(c, from, from_pt, p),
                     None => m.snapped(p, magnet.with_ctrl(mods.ctrl), series),
                 };
-                if let Some(pt) = d.points.get_mut(k) {
-                    *pt = a;
-                }
+                hit::drag_handle(d, k, a, m);
                 if let Some(s) = s {
                     m.screen_into(&d.points, &mut s.1);
                 }
