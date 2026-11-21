@@ -177,7 +177,7 @@ impl ChartSettingsPanel {
             )
             .into(),
         );
-        rows.push(check!(self, cx, "sc.plus", "Plus button", scales.plus_button).into());
+        // Plus button: hidden until the price scale has one (BACKLOG.md).
         rows.push(
             check!(
                 self,
