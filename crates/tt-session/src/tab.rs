@@ -45,8 +45,7 @@ pub struct Shared {
 }
 
 /// Drawings per symbol key (see [`ChartTab::drawings_key`]).
-pub type DrawingStore =
-    Arc<std::sync::Mutex<std::collections::BTreeMap<String, Vec<tt_chart::Drawing>>>>;
+pub type DrawingStore = Arc<std::sync::Mutex<tt_chart::DrawingMap>>;
 
 /// Loading of older history when the user scrolls back.
 #[derive(Debug, Default)]
@@ -146,7 +145,8 @@ impl ChartTab {
             let key = self.drawings_key();
             let items = self.chart.drawings.items.clone();
             if let Ok(mut store) = shared.drawings.lock() {
-                store.insert(key, items);
+                // Keeps the drawings this build can't read (`unknown`).
+                store.entry(key).or_default().items = items;
             }
         }
     }
@@ -159,7 +159,7 @@ impl ChartTab {
             .drawings
             .lock()
             .ok()
-            .and_then(|s| s.get(&self.drawings_key()).cloned())
+            .and_then(|s| s.get(&self.drawings_key()).map(|l| l.items.clone()))
             .unwrap_or_default();
         self.chart.drawings.set_items(items);
     }

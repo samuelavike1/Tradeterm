@@ -175,7 +175,10 @@ pub struct AppSettings {
     /// Chart settings (TradingView's Settings dialog), shared by all charts.
     pub chart_style: tt_chart::ChartStyle,
     /// Drawings per symbol (shown on every timeframe of that symbol).
-    pub drawings: std::collections::BTreeMap<String, Vec<tt_chart::Drawing>>,
+    /// Loaded leniently: a drawing this build can't read is skipped and
+    /// kept as raw JSON (written back on save); it never fails the file.
+    #[serde(deserialize_with = "tt_chart::drawings::deserialize_drawing_map")]
+    pub drawings: tt_chart::DrawingMap,
 }
 
 impl Default for AppSettings {

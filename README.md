@@ -81,7 +81,9 @@ with a custom chart widget built to handle a million bars.
   Delete / Backspace removes it, Escape cancels placing or releases the tool. Below:
   **magnet** (snap to bar open / high / low / close), **keep drawing**, **lock all**,
   **hide all** and **remove drawings**. Drawings are anchored in time and price,
-  saved per symbol and shown on every timeframe.
+  saved per symbol and shown on every timeframe. A drawing this build can't read
+  (e.g. a tool from a newer version) is skipped and kept as is in the settings
+  file, so it never costs the other drawings or settings.
 - **Legend:** one row per indicator with its inputs and values at the crosshair.
   Price-pane rows sit under the OHLC readout and collapse to a "⌄ N" button; each
   pane's row is at its top left. Hovering a row shows **eye** (hide), **gear**
