@@ -1,7 +1,7 @@
 //! Stochastic: %K (smoothed) and its SMA %D.
 
 use super::meta::*;
-use super::{Placement, Study, StudyKind, as_u32, ma, split2};
+use super::{Placement, Study, StudyKind, StudyState, as_u32, ma, split2};
 use crate::CandleSeries;
 
 const BLUE: u32 = 0x2962ff;
@@ -35,27 +35,46 @@ pub(super) static META: StudyMeta = StudyMeta {
     bounds: Some((0.0, 100.0)),
 };
 
-pub(super) fn compute(src: &CandleSeries, out: &mut [Vec<f64>], k: u32, k_smooth: u32, d: u32) {
+/// Checkpoint: the running sums of the %K and %D SMAs. The raw %K of the
+/// bars a tick reads (the %K smoothing window before `from` onward) is
+/// recomputed into the state's scratch buffer, O(k · k_smooth).
+pub(super) fn compute(
+    src: &CandleSeries,
+    out: &mut [Vec<f64>],
+    from: usize,
+    [k, k_smooth, d]: [u32; 3],
+    st: &mut StudyState,
+) {
     let n = src.len();
     let (h, l, c) = (src.highs(), src.lows(), src.closes());
     let kl = k.max(1) as usize;
-    let mut raw = vec![f64::NAN; n];
-    for i in 0..n {
+    let ks = k_smooth.max(1) as usize;
+    let (from, [sk, sd]) = st.resume::<[ma::MaState; 2]>(from);
+    // The %K SMA reads back to `from - ks` (the value leaving its window).
+    let start = from.saturating_sub(ks);
+    let mut raw = std::mem::take(&mut st.scratch);
+    raw.clear();
+    raw.extend((start..n).map(|i| {
         if i + 1 < kl {
-            continue;
+            return f64::NAN;
         }
         let hh = h[i + 1 - kl..=i].iter().copied().fold(f64::MIN, f64::max);
         let ll = l[i + 1 - kl..=i].iter().copied().fold(f64::MAX, f64::min);
-        raw[i] = if hh > ll {
+        if hh > ll {
             (c[i] - ll) / (hh - ll) * 100.0
         } else {
             50.0
-        };
-    }
+        }
+    }));
     let (kout, dout) = split2(out);
-    ma::sma(|i| raw[i], k_smooth.max(1) as usize, kout, 0, n);
-    let kk = kout.clone();
-    ma::sma(|i| kk[i], d.max(1) as usize, dout, 0, n);
+    let ck_k = ma::sma_from(|i| raw[i - start], ks, kout, from, n, sk);
+    let ck_d = ma::sma_from(|i| kout[i], d.max(1) as usize, dout, from, n, sd);
+    st.save(n - 1, [ck_k, ck_d]);
+    // Keep a tick-sized buffer only: a full pass must not pin n floats.
+    if raw.capacity() > 4 * (ks + 64) {
+        raw = Vec::with_capacity(ks + 64);
+    }
+    st.scratch = raw;
 }
 
 pub(super) fn get(s: &Study, id: &str) -> Option<InputValue> {
