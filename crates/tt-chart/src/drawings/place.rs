@@ -2,10 +2,12 @@
 //! dragged out), open-ended (click to add points; double-click, Enter or
 //! Escape finishes) and freehand (press, drag, release).
 //!
-//! Shift constraints (45° lines, squares, circles) go here (slice H).
+//! Shift constrains the point being placed (45° lines, squares); Ctrl
+//! inverts the magnet for the gesture.
 
 use super::{
-    DRAG_TO_PLACE, Drawing, DrawingPress, DrawingTool, Drawings, Mapper, Mods, Placement, Repaint,
+    Anchor, DRAG_TO_PLACE, Drawing, DrawingPress, DrawingTool, Drawings, MagnetMode, Mapper, Mods,
+    Placement, Repaint, constrain,
 };
 use emath::Pos2;
 use tt_core::CandleSeries;
@@ -28,6 +30,28 @@ pub(super) struct Placing {
 }
 
 impl Placing {
+    /// Where point `placed` goes for pointer `p`: Shift constrains it
+    /// relative to an earlier point (no magnet then); otherwise the magnet
+    /// applies (Ctrl inverts it).
+    fn target(
+        &self,
+        p: Pos2,
+        mods: Mods,
+        magnet: MagnetMode,
+        m: &Mapper<'_>,
+        series: &CandleSeries,
+    ) -> Anchor {
+        let d = &self.drawing;
+        if mods.shift
+            && let Some((c, r)) = constrain::constraint(d.tool, self.placed, d.points.len())
+            && r < self.placed
+            && let (Some(&from_pt), Some(&from)) = (self.screen.get(r), d.points.get(r))
+        {
+            return m.constrained(c, from, from_pt, p);
+        }
+        m.snapped(p, magnet.with_ctrl(mods.ctrl), series)
+    }
+
     fn placement(&self) -> Placement {
         self.drawing.tool.placement()
     }
@@ -38,12 +62,16 @@ impl Drawings {
         &mut self,
         tool: DrawingTool,
         p: Pos2,
-        _mods: Mods,
+        mods: Mods,
         double: bool,
         m: &Mapper<'_>,
         series: &CandleSeries,
     ) -> DrawingPress {
-        let a = m.snapped(p, self.magnet, series);
+        let magnet = self.magnet;
+        let a = match &self.placing {
+            Some(pl) => pl.target(p, mods, magnet, m, series),
+            None => m.snapped(p, magnet.with_ctrl(mods.ctrl), series),
+        };
         let Some(pl) = &mut self.placing else {
             let points = match tool.placement() {
                 Placement::Points(n) => vec![a; n.max(1)],
@@ -98,7 +126,7 @@ impl Drawings {
     pub(super) fn place_motion(
         &mut self,
         p: Pos2,
-        _mods: Mods,
+        mods: Mods,
         m: &Mapper<'_>,
         series: &CandleSeries,
     ) -> Repaint {
@@ -108,7 +136,7 @@ impl Drawings {
         };
         match pl.placement() {
             Placement::Points(_) | Placement::OpenEnded => {
-                let a = m.snapped(p, magnet, series);
+                let a = pl.target(p, mods, magnet, m, series);
                 for slot in &mut pl.drawing.points[pl.placed..] {
                     *slot = a;
                 }

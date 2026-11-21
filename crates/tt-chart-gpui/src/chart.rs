@@ -9,6 +9,7 @@
 use crate::canvas::{CanvasFonts, GpuiCanvas};
 use crate::motion::{DragVelocity, ViewMotion};
 use emath::{Pos2, Rect, pos2, vec2};
+use gpui_kit::component::menu::ContextMenuExt as _;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use std::rc::Rc;
@@ -182,6 +183,9 @@ pub enum ChartEvent {
     /// Drawings changed (save them), or the drawing tool was released after
     /// placing a drawing (update the toolbar).
     DrawingsChanged,
+    /// "Settings…" in a drawing's context menu (the drawing settings
+    /// dialog; the drawing is selected).
+    OpenDrawingSettings(u64),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -213,11 +217,13 @@ pub struct Chart<S: ChartSource> {
     /// move / delete / collapse / maximize buttons.
     hover_pane: Option<usize>,
     last_frame: Option<Instant>,
+    /// What the last right-click was on (the drawing context menu reads it).
+    pub(crate) menu_target: tt_chart::DrawingMenuTarget,
 }
 
 impl<S: ChartSource> EventEmitter<ChartEvent> for Chart<S> {}
 
-fn pos(p: Point<Pixels>) -> Pos2 {
+pub(crate) fn pos(p: Point<Pixels>) -> Pos2 {
     pos2(f32::from(p.x), f32::from(p.y))
 }
 
@@ -261,6 +267,7 @@ impl<S: ChartSource> Chart<S> {
             last_frame: None,
             axis_hover: false,
             hover_pane: None,
+            menu_target: tt_chart::DrawingMenuTarget::None,
         }
     }
 
@@ -353,7 +360,7 @@ impl<S: ChartSource> Chart<S> {
     pub(crate) fn edit_drawing(
         &self,
         cx: &mut Context<Self>,
-        f: impl FnOnce(&mut tt_chart::Drawing),
+        f: impl FnMut(&mut tt_chart::Drawing),
     ) {
         if self.view_mut(cx, |v| v.drawings.edit_selected(f)) {
             cx.emit(ChartEvent::DrawingsChanged);
@@ -441,7 +448,7 @@ impl<S: ChartSource> Chart<S> {
         self.repaint(r, cx);
         let view = self.state.read(cx).source.view();
         let ds = &view.drawings;
-        let cursor = if ds.tool.is_some() && view.hit_test(p) == ChartHit::Plot {
+        let cursor = if (ds.tool.is_some() && view.hit_test(p) == ChartHit::Plot) || ds.banding() {
             CursorStyle::Crosshair
         } else if ds.busy() {
             CursorStyle::ClosedHand
@@ -587,6 +594,10 @@ impl<S: ChartSource> Render for Chart<S> {
                 MouseButton::Left,
                 cx.listener(|this, e: &MouseUpEvent, window, cx| this.mouse_up(e, window, cx)),
             )
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, e: &MouseDownEvent, _, cx| this.right_mouse_down(e, cx)),
+            )
             .on_scroll(cx.listener(|this, e: &ScrollEvent, window, cx| this.scroll(e, window, cx)))
             .child(
                 self.base
@@ -604,6 +615,7 @@ impl<S: ChartSource> Render for Chart<S> {
             .children(self.corner_controls(window, cx))
             .children(self.pane_controls(window, cx))
             .children(self.drawing_toolbar(cx))
+            .context_menu(self.drawing_menu(cx))
     }
 }
 
