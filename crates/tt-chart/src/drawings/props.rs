@@ -239,13 +239,16 @@ pub struct HLineProps {
 }
 
 impl Default for HLineProps {
+    /// TradingView's horizontal line / ray: 1 px, text 12 centered on the
+    /// line (which breaks behind it).
     fn default() -> Self {
         Self {
-            line: Stroke::default(),
+            line: Stroke::solid(BLUE, 1),
             price_label: true,
             text_style: TextStyle::new(BLUE, 12),
             text: TextLayout {
-                v: VAlign::Top,
+                h: HAlign::Center,
+                v: VAlign::Middle,
                 ..TextLayout::default()
             },
         }
@@ -1090,6 +1093,8 @@ pub(crate) struct DrawingRepr {
     locked: bool,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     text: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    name: String,
     #[serde(default, skip_serializing_if = "is_false")]
     hidden: bool,
     #[serde(default, skip_serializing_if = "Visibility::is_all")]
@@ -1129,6 +1134,7 @@ impl TryFrom<DrawingRepr> for Drawing {
             points: r.points,
             props,
             text: r.text,
+            name: r.name,
             locked: r.locked,
             hidden: r.hidden,
             visibility: r.visibility,
@@ -1148,6 +1154,7 @@ impl From<Drawing> for DrawingRepr {
             style: Some(stroke.style),
             locked: d.locked,
             text: d.text,
+            name: d.name,
             hidden: d.hidden,
             visibility: d.visibility,
         }

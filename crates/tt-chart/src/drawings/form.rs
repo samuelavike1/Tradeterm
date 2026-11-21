@@ -12,6 +12,7 @@
 
 use super::model::{Anchor, DrawingTool, Rgba};
 use super::props::{Level, Props, Stroke};
+use crate::time_axis::SlotTimes;
 use serde_json::Value;
 use tt_core::{TimeUnit, civil_from_days, days_from_civil};
 
@@ -382,6 +383,27 @@ pub fn has_text_content(tool: DrawingTool, props: &Props) -> bool {
     tool != DrawingTool::TrendAngle && !text_fields(tool, props).is_empty()
 }
 
+/// Which layout the settings dialog uses for a tool.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DialogLayout {
+    /// The field list (every tool until it opts in).
+    Generic,
+    /// TradingView-measured (docs/specs/ui-guidelines.md §2.10): one line
+    /// picker per line, text bar / text / alignment row, price + bar
+    /// coordinates, visibility with ticks, ranges and range sliders.
+    Comfortable,
+}
+
+/// The dialog layout of `tool`. The horizontal ray is the reference; a
+/// tool opts in by returning `Comfortable` here (its generic fields keep
+/// working inside the new layout).
+pub fn dialog_layout(tool: DrawingTool) -> DialogLayout {
+    match tool {
+        DrawingTool::HorizontalRay | DrawingTool::HorizontalLine => DialogLayout::Comfortable,
+        _ => DialogLayout::Generic,
+    }
+}
+
 /// The props as JSON (read fields from it with [`get`]).
 pub fn props_value(props: &Props) -> Value {
     serde_json::to_value(props).unwrap_or(Value::Null)
@@ -616,6 +638,25 @@ pub fn set_point(
         a.price = p;
     }
     *a != before
+}
+
+/// TradingView's "bar" coordinate of an anchor time: its slot on the
+/// chart's x axis, rounded (0 = the first loaded bar; negative before it,
+/// past the last bar beyond it). `None` without data.
+pub fn bar_of_time(slots: &SlotTimes<'_>, time_ms: i64) -> Option<i64> {
+    slots.slot_of(time_ms).map(|s| s.round() as i64)
+}
+
+/// The anchor time of bar number `bar` (inverse of [`bar_of_time`] on bar
+/// times; extrapolated by the interval outside the data). Anchors stay
+/// stored as times.
+pub fn time_of_bar(slots: &SlotTimes<'_>, bar: i64) -> Option<i64> {
+    slots.time_at(bar)
+}
+
+/// "#1 (price, bar)": the Coordinates row label of point `k`.
+pub fn point_label_price_bar(k: usize) -> String {
+    format!("#{} (price, bar)", k + 1)
 }
 
 /// Visibility tab row label.

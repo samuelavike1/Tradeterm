@@ -405,22 +405,30 @@ impl VisibilityPreset {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Visibility {
+    /// Tick charts (TradingView's first row; tradeterm has no tick charts
+    /// yet, so this only persists). Missing in older files: on.
+    pub ticks: bool,
     pub seconds: Span,
     pub minutes: Span,
     pub hours: Span,
     pub days: Span,
     pub weeks: Span,
     pub months: Span,
+    /// Range-based intervals (TradingView's last row; persists only, like
+    /// `ticks`).
+    pub ranges: bool,
 }
 
 impl Visibility {
     pub const ALL: Visibility = Visibility {
+        ticks: true,
         seconds: Span::full(59),
         minutes: Span::full(59),
         hours: Span::full(24),
         days: Span::full(366),
         weeks: Span::full(52),
         months: Span::full(12),
+        ranges: true,
     };
 
     /// Shown on every interval (the default).
@@ -505,6 +513,10 @@ impl Visibility {
                 _ => {}
             }
         }
+        // Tick charts sit below every time interval, range charts beside
+        // them: only "and below" keeps ticks, only "all" keeps ranges.
+        v.ticks = p == VisibilityPreset::CurrentAndBelow;
+        v.ranges = false;
         v
     }
 }
@@ -528,6 +540,9 @@ pub struct Drawing {
     pub props: Props,
     /// Text content (not part of templates).
     pub text: String,
+    /// The user's name for the drawing (the settings dialog's title);
+    /// empty: the tool's label.
+    pub name: String,
     pub locked: bool,
     pub hidden: bool,
     pub visibility: Visibility,
@@ -542,9 +557,19 @@ impl Drawing {
             points,
             props: Props::defaults(tool),
             text: String::new(),
+            name: String::new(),
             locked: false,
             hidden: false,
             visibility: Visibility::ALL,
+        }
+    }
+
+    /// The name shown for the drawing: its own name, else the tool's label.
+    pub fn title(&self) -> &str {
+        if self.name.trim().is_empty() {
+            self.tool.label()
+        } else {
+            &self.name
         }
     }
 
