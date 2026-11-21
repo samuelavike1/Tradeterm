@@ -95,16 +95,16 @@ function Fg {
     $f = [W]::GetForegroundWindow()
     if ($f -ne $script:h) { throw "app window lost the foreground" }
 }
-function Move([int]$x, [int]$y) { Fg; [W]::SetCursorPos($ox + $x, $oy + $y) | Out-Null; Start-Sleep -Milliseconds 120 }
+function MoveTo([int]$x, [int]$y) { Fg; [W]::SetCursorPos($ox + $x, $oy + $y) | Out-Null; Start-Sleep -Milliseconds 120 }
 function Click([int]$x, [int]$y) {
-    Move $x $y
+    MoveTo $x $y
     [W]::mouse_event(2, 0, 0, 0, [UIntPtr]::Zero); Start-Sleep -Milliseconds 60
     [W]::mouse_event(4, 0, 0, 0, [UIntPtr]::Zero); Start-Sleep -Milliseconds 300
 }
 function Drag([int]$x, [int]$y, [int]$dx, [int]$dy) {
-    Move $x $y
+    MoveTo $x $y
     [W]::mouse_event(2, 0, 0, 0, [UIntPtr]::Zero); Start-Sleep -Milliseconds 80
-    for ($i = 1; $i -le 10; $i++) { Move ($x + $dx * $i / 10) ($y + $dy * $i / 10) }
+    for ($i = 1; $i -le 10; $i++) { MoveTo ($x + $dx * $i / 10) ($y + $dy * $i / 10) }
     [W]::mouse_event(4, 0, 0, 0, [UIntPtr]::Zero); Start-Sleep -Milliseconds 300
 }
 function Grab {
@@ -123,17 +123,22 @@ function Shot([string]$name) {
 # The blue rectangle's bounds: bluish pixels inside the plot.
 function FindRect {
     $bmp = Grab
-    $minx = 1e9; $miny = 1e9; $maxx = -1; $maxy = -1
-    for ($y = 90; $y -lt $script:ch - 80; $y += 2) {
-        for ($x = 70; $x -lt $script:cw - 160; $x += 2) {
+    # Rows / columns with many bluish pixels (the fill), so small blue
+    # bits elsewhere (icons, the crosshair tag) don't count.
+    $rows = @{}; $cols = @{}
+    for ($y = 120; $y -lt $script:ch - 80; $y += 2) {
+        for ($x = 70; $x -lt $script:cw - 120; $x += 2) {
             $c = $bmp.GetPixel($x, $y)
-            if ($c.B -gt $c.R + 40 -and $c.B -gt $c.G + 25) {
-                if ($x -lt $minx) { $minx = $x }; if ($x -gt $maxx) { $maxx = $x }
-                if ($y -lt $miny) { $miny = $y }; if ($y -gt $maxy) { $maxy = $y }
+            if ($c.B -gt $c.R + 30 -and $c.B -gt $c.G + 20) {
+                $rows[$y] = 1 + ($rows[$y] ?? 0); $cols[$x] = 1 + ($cols[$x] ?? 0)
             }
         }
     }
     $bmp.Dispose()
+    $ys = @($rows.Keys | Where-Object { $rows[$_] -ge 12 } | Sort-Object)
+    $xs = @($cols.Keys | Where-Object { $cols[$_] -ge 12 } | Sort-Object)
+    $minx = if ($xs.Count) { $xs[0] } else { 1e9 }; $maxx = if ($xs.Count) { $xs[-1] } else { -1 }
+    $miny = if ($ys.Count) { $ys[0] } else { 1e9 }; $maxy = if ($ys.Count) { $ys[-1] } else { -1 }
     if ($maxx -lt 0) { throw 'rectangle not found' }
     @{ L = $minx; T = $miny; R = $maxx; B = $maxy }
 }
@@ -158,7 +163,7 @@ try {
     $r = New-Object W+RECT; [W]::GetClientRect($h, [ref]$r) | Out-Null
     $pt = New-Object W+POINT; [W]::ClientToScreen($h, [ref]$pt) | Out-Null
     $script:ox = $pt.X; $script:oy = $pt.Y; $script:cw = $r.Right; $script:ch = $r.Bottom
-    Move 300 ($script:ch - 120)
+    MoveTo 300 ($script:ch - 120)
     Start-Sleep -Milliseconds 500
     $b = FindRect
     "rect at $($b.L),$($b.T) - $($b.R),$($b.B)"
@@ -166,7 +171,7 @@ try {
     $cx = [int](($b.L + $b.R) / 2); $cy = [int](($b.T + $b.B) / 2)
     # Select on the border (TradingView selects by the outline).
     Click $b.L ($b.T + 10)
-    Move 300 ($script:ch - 120)
+    MoveTo 300 ($script:ch - 120)
     Start-Sleep -Milliseconds 400
     Shot 'selected'
     $handles = [ordered]@{
@@ -177,21 +182,23 @@ try {
     }
     foreach ($n in $handles.Keys) {
         $q = $handles[$n]
-        Move $q[0] $q[1]
+        # gpui sets the pointer on the move after the hover repaint.
+        MoveTo ($q[0] + 1) $q[1]
+        MoveTo $q[0] $q[1]
         Start-Sleep -Milliseconds 250
         $c = [W]::Cursor()
         "cursor over $n handle: $($cursors[$c] ?? $c)"
     }
-    Move $b.R $cy
+    MoveTo $b.R $cy
     Start-Sleep -Milliseconds 250
     Shot 'hover-edge'
     # Resize via the right edge, then the top-left corner.
     Drag $b.R $cy 120 40
-    Move 300 ($script:ch - 120)
+    MoveTo 300 ($script:ch - 120)
     Start-Sleep -Milliseconds 400
     Shot 'edge-resized'
     Drag $b.L $b.T -80 -50
-    Move 300 ($script:ch - 120)
+    MoveTo 300 ($script:ch - 120)
     Start-Sleep -Milliseconds 400
     Shot 'corner-resized'
 }
