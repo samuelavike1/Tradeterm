@@ -158,10 +158,10 @@ Release build, `scripts/alerts-tv/start.ps1` (seeded settings and alerts in
 | Message tab | ![](img/alerts-dark-dialog-message.png) | ![](img/alerts-light-dialog-message.png) |
 | Notifications tab | ![](img/alerts-dark-dialog-notifications.png) | ![](img/alerts-light-dialog-notifications.png) |
 
-Dark only: operators ![](img/alerts-dark-dialog-operators.png), channel
+Dark only (the dialog shots predate the sidebar merge): operators ![](img/alerts-dark-dialog-operators.png), channel
 ![](img/alerts-dark-dialog-channel.png), moving
 ![](img/alerts-dark-dialog-moving.png), a live toast
 ![](img/alerts-dark-toast.png), the floating toolbar's "Add alert"
 ![](img/alerts-dark-drawing-toolbar.png) ![](img/alerts-dark-drawing-alert-tip.png)
 and its dialog ![](img/alerts-dark-drawing-alert-dialog.png). Light only:
-the panel's options menu ![](img/alerts-light-options.png).
+the panel's options menu ![](img/alerts-light-options.png) ![](img/alerts-dark-options.png).
