@@ -18,7 +18,7 @@ use gpui_kit::component::{Icon, IconName, Sizable, WindowExt as _, h_flex, v_fle
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use tt_chart::Indicator;
-use tt_chart::indicators::default_colors;
+use tt_chart::IndicatorStyle;
 use tt_chart_gpui::hsla;
 use tt_core::{Source, Study, StudyKind};
 use tt_theme::Theme;
@@ -345,7 +345,7 @@ struct NumberField {
 struct Original {
     study: Study,
     visible: bool,
-    colors: Vec<Color32>,
+    style: IndicatorStyle,
 }
 
 pub struct IndicatorSettingsPanel {
@@ -506,7 +506,7 @@ impl IndicatorSettingsPanel {
         let original = Original {
             study: ind.study.clone(),
             visible: ind.visible,
-            colors: ind.colors.clone(),
+            style: ind.style.clone(),
         };
         let mut subs = Vec::new();
         let mut numbers = Vec::new();
@@ -543,12 +543,7 @@ impl IndicatorSettingsPanel {
                         return;
                     };
                     let c = color32(*c);
-                    this.edit(cx, |ind| {
-                        if ind.colors.len() <= k {
-                            ind.colors.resize(k + 1, c);
-                        }
-                        ind.colors[k] = c;
-                    });
+                    this.edit(cx, |ind| ind.set_color(k, c));
                 }),
             );
             colors.push((name, picker));
@@ -623,7 +618,7 @@ impl IndicatorSettingsPanel {
                 if let Some(ind) = s.source.tab.chart.indicator_mut(id) {
                     ind.study = o.study;
                     ind.visible = o.visible;
-                    ind.colors = o.colors;
+                    ind.style = o.style;
                 }
             })
         });
@@ -631,7 +626,6 @@ impl IndicatorSettingsPanel {
 
     fn reset(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let study = self.original.study.kind().default_study();
-        let colors = default_colors(&study);
         let values: Vec<f64> = number_fields(&study).iter().map(|f| f.1).collect();
         for (field, v) in self.numbers.iter().zip(values) {
             field
@@ -640,7 +634,7 @@ impl IndicatorSettingsPanel {
         }
         self.edit(cx, |ind| {
             ind.study = study;
-            ind.colors = colors;
+            ind.style = IndicatorStyle::default();
         });
     }
 

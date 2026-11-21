@@ -1,29 +1,89 @@
-//! TradingView's left drawing toolbar: cursor, line tools (flyout), Fib
-//! retracement, rectangle, measurers (flyout), then magnet, keep drawing,
-//! lock all, hide all and remove all.
+//! TradingView's left drawing toolbar: cursor, then one button per tool
+//! group (a flyout when the group has more than one implemented tool), then
+//! magnet, keep drawing, lock all, hide all and remove all.
+//!
+//! Groups and their tools come from `DrawingTool` (the `LINES` / `FIB` /
+//! `MEASURERS` lists, else `available()` by `group()`), so a newly
+//! implemented tool shows up here (and a one-tool group becomes a flyout)
+//! without touching this file.
 //!
 //! The tool and the toggles are app-wide (like TradingView) and pushed into
 //! every chart; a chart reports back when placing a drawing released the
 //! tool.
 
-use crate::app::{TabChart, TradeTerm};
-use crate::ui::lucide;
-use gpui_kit::base::PopoverState;
-use gpui_kit::component::Sizable as _;
-use gpui_kit::component::button::*;
+use crate::app::{KEY_CONTEXT, TabChart, TradeTerm};
 use gpui_kit::component::popover::Popover;
-use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{WindowExt as _, v_flex};
-use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::component::{Placement, Selectable, WindowExt as _, v_flex};
 use gpui_kit::*;
-use lucide_icons::Icon;
-use tt_chart::DrawingTool;
-use tt_chart_gpui::hsla;
+use tt_chart::{DrawingTool, ToolGroup};
+use tt_ui::menu::MenuNav;
+use tt_ui::prelude::*;
+use tt_ui::tokens::*;
+use tt_ui::{Menu, hsla};
 
-/// Width of the toolbar.
-pub const WIDTH: f32 = 46.0;
-/// Icon color of the active tool (TradingView's blue).
-const ACTIVE: ecolor::Color32 = ecolor::Color32::from_rgb(0x29, 0x62, 0xff);
+/// The toolbar's groups, top to bottom (TradingView's order).
+const GROUPS: [ToolGroup; 6] = [
+    ToolGroup::Lines,
+    ToolGroup::Fib,
+    ToolGroup::Shapes,
+    ToolGroup::Annotation,
+    ToolGroup::Forecasting,
+    ToolGroup::Measurers,
+];
+
+fn group_index(g: ToolGroup) -> usize {
+    GROUPS.iter().position(|x| *x == g).unwrap_or(0)
+}
+
+/// Flyout section title.
+fn group_title(g: ToolGroup) -> &'static str {
+    match g {
+        ToolGroup::Lines => "Lines",
+        ToolGroup::Fib => "Fibonacci",
+        ToolGroup::Shapes => "Shapes",
+        ToolGroup::Annotation => "Annotation",
+        ToolGroup::Forecasting => "Forecasting",
+        ToolGroup::Measurers => "Measurers",
+    }
+}
+
+/// The toolbar group a tool sits in: the explicit flyout lists
+/// (`DrawingTool::LINES`, `FIB`, `MEASURERS`) win over `DrawingTool::group`,
+/// so a tool can live in another flyout until its own group has one (the
+/// arrow in Lines).
+fn toolbar_group(t: DrawingTool) -> ToolGroup {
+    if DrawingTool::LINES.contains(&t) {
+        ToolGroup::Lines
+    } else if DrawingTool::FIB.contains(&t) {
+        ToolGroup::Fib
+    } else if DrawingTool::MEASURERS.contains(&t) {
+        ToolGroup::Measurers
+    } else {
+        t.group()
+    }
+}
+
+/// The implemented tools of a group: the group's list where it has one,
+/// in that order, otherwise in `DrawingTool::ALL` order.
+fn group_tools(g: ToolGroup) -> Vec<DrawingTool> {
+    let listed: &[DrawingTool] = match g {
+        ToolGroup::Lines => &DrawingTool::LINES,
+        ToolGroup::Fib => &DrawingTool::FIB,
+        ToolGroup::Measurers => &DrawingTool::MEASURERS,
+        _ => &[],
+    };
+    if listed.is_empty() {
+        DrawingTool::available()
+            .filter(|t| toolbar_group(*t) == g)
+            .collect()
+    } else {
+        listed
+            .iter()
+            .copied()
+            .filter(|t| t.is_available())
+            .collect()
+    }
+}
 
 /// Drawing tool and toggles, shared by all charts.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -33,10 +93,24 @@ pub struct DrawMode {
     pub keep_drawing: bool,
     pub locked: bool,
     pub hidden: bool,
-    /// Tool shown on the Lines / Fib / Measure group buttons (last picked).
-    pub line_tool: DrawingTool,
-    pub fib_tool: DrawingTool,
-    pub measure_tool: DrawingTool,
+    /// Tool shown on each group button (last picked), by `GROUPS` index.
+    pub shown: [Option<DrawingTool>; GROUPS.len()],
+}
+
+impl DrawMode {
+    /// The tool a group button shows: the last one picked from it, else the
+    /// group's default (the date-and-price ruler for measurers, like
+    /// TradingView; the first tool otherwise).
+    fn shown_tool(&self, g: ToolGroup, tools: &[DrawingTool]) -> DrawingTool {
+        self.shown[group_index(g)]
+            .filter(|t| tools.contains(t))
+            .or_else(|| {
+                (g == ToolGroup::Measurers)
+                    .then_some(DrawingTool::DateAndPriceRange)
+                    .filter(|t| tools.contains(t))
+            })
+            .unwrap_or(tools[0])
+    }
 }
 
 impl Default for DrawMode {
@@ -47,9 +121,7 @@ impl Default for DrawMode {
             keep_drawing: false,
             locked: false,
             hidden: false,
-            line_tool: DrawingTool::TrendLine,
-            fib_tool: DrawingTool::FibRetracement,
-            measure_tool: DrawingTool::DateAndPriceRange,
+            shown: [None; GROUPS.len()],
         }
     }
 }
@@ -70,7 +142,7 @@ actions!(
 /// TradingView's drawing shortcuts (`Alt + key`, `Alt + Shift + R`), bound
 /// in the app's key context so tooltips can show them.
 pub fn key_bindings() -> Vec<KeyBinding> {
-    let ctx = Some(crate::app::KEY_CONTEXT);
+    let ctx = Some(KEY_CONTEXT);
     vec![
         KeyBinding::new("alt-t", PickTrendLine, ctx),
         KeyBinding::new("alt-h", PickHorizontalLine, ctx),
@@ -121,13 +193,7 @@ impl TradeTerm {
     pub fn set_draw_mode(&mut self, f: impl FnOnce(&mut DrawMode), cx: &mut Context<Self>) {
         f(&mut self.draw);
         if let Some(t) = self.draw.tool {
-            if DrawingTool::LINES.contains(&t) {
-                self.draw.line_tool = t;
-            } else if DrawingTool::FIB.contains(&t) {
-                self.draw.fib_tool = t;
-            } else if DrawingTool::MEASURERS.contains(&t) {
-                self.draw.measure_tool = t;
-            }
+            self.draw.shown[group_index(toolbar_group(t))] = Some(t);
         }
         self.apply_draw_mode(cx);
         cx.notify();
@@ -221,282 +287,258 @@ impl TradeTerm {
     }
 
     pub(crate) fn drawing_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let t = self.theme().clone();
         let m = self.draw;
-        let count = self.drawing_count(cx);
+        let border = hsla(cx.ui().border);
+        let app = cx.entity().downgrade();
 
-        let tool_button = |id: &'static str, icon: Icon, active: bool, tip: Tip| {
-            let (bg, fg) = (hsla(t.selection), hsla(t.text));
-            div()
-                .id(id)
-                .size(px(34.))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(6.))
-                .cursor_pointer()
-                .text_color(fg)
-                .when(active, |d| d.bg(bg).text_color(hsla(ACTIVE)))
-                .hover(move |d| d.bg(bg))
-                .child(lucide(icon, 19.))
-                .tooltip(move |window, cx| tip.build(window, cx))
-        };
-        let tip = |tool: DrawingTool| Tip::Tool(tool);
+        let mut bar = v_flex()
+            .id("drawing-toolbar")
+            .w(W_DRAWING_TOOLBAR.px())
+            .h_full()
+            .flex_none()
+            .items_center()
+            .gap(S1.px())
+            .pt(S1.px())
+            .border_r_1()
+            .border_color(border)
+            .child(
+                tool_button("dt-cursor", Glyph::CROSSHAIR, m.tool.is_none())
+                    .tooltip("Cross")
+                    .on_click(cx.listener(|this, _, _, cx| this.pick_tool(None, cx))),
+            )
+            .child(separator());
 
-        let cursor = tool_button(
-            "dt-cursor",
-            Icon::Crosshair,
-            m.tool.is_none(),
-            Tip::Text("Cross"),
-        )
-        .on_click(cx.listener(|this, _, _, cx| this.pick_tool(None, cx)));
-
-        let group = |id: &'static str,
-                     shown: DrawingTool,
-                     tools: &'static [DrawingTool],
-                     title: &'static str,
-                     cx: &mut Context<Self>| {
-            let active = m.tool.is_some_and(|x| tools.contains(&x));
-            let main = tool_button(id, shown.icon(), active, tip(shown)).on_click(cx.listener(
-                move |this, _, _, cx| {
+        for g in GROUPS {
+            let tools = group_tools(g);
+            if tools.is_empty() {
+                continue;
+            }
+            let shown = m.shown_tool(g, &tools);
+            let active = m.tool.is_some_and(|t| tools.contains(&t));
+            let id = SharedString::from(format!("dt-group-{g:?}"));
+            let mut button = with_tool_tooltip(tool_button(id, shown.icon(), active), shown)
+                .on_click(cx.listener(move |this, _, _, cx| {
                     let pick = (this.draw.tool != Some(shown)).then_some(shown);
                     this.pick_tool(pick, cx)
-                },
-            ));
-            div()
-                .relative()
-                .child(main)
-                .child(div().absolute().right(px(-6.)).top(px(9.)).child(flyout(
-                    SharedString::from(format!("{id}-fly")),
-                    title,
-                    tools,
-                    m.tool,
-                    cx,
-                )))
-        };
-
-        let lines = group("dt-lines", m.line_tool, &DrawingTool::LINES, "LINES", cx);
-        let fib = group("dt-fib", m.fib_tool, &DrawingTool::FIB, "FIBONACCI", cx);
-        let rect = tool_button(
-            "dt-rect",
-            DrawingTool::Rectangle.icon(),
-            m.tool == Some(DrawingTool::Rectangle),
-            tip(DrawingTool::Rectangle),
-        )
-        .on_click(cx.listener(|this, _, _, cx| {
-            let pick =
-                (this.draw.tool != Some(DrawingTool::Rectangle)).then_some(DrawingTool::Rectangle);
-            this.pick_tool(pick, cx)
-        }));
-        let measure = group(
-            "dt-measure",
-            m.measure_tool,
-            &DrawingTool::MEASURERS,
-            "MEASURERS",
-            cx,
-        );
-
-        let magnet = tool_button(
-            "dt-magnet",
-            Icon::Magnet,
-            m.magnet,
-            Tip::Text("Magnet: snap to bar open / high / low / close"),
-        )
-        .on_click(cx.listener(|this, _, _, cx| this.set_draw_mode(|m| m.magnet = !m.magnet, cx)));
-        let keep = tool_button(
-            "dt-keep",
-            Icon::PencilLine,
-            m.keep_drawing,
-            Tip::Text("Keep drawing"),
-        )
-        .on_click(cx.listener(|this, _, _, cx| {
-            this.set_draw_mode(|m| m.keep_drawing = !m.keep_drawing, cx)
-        }));
-        let lock = tool_button(
-            "dt-lock",
-            if m.locked { Icon::Lock } else { Icon::LockOpen },
-            m.locked,
-            Tip::Text(if m.locked {
-                "Unlock all drawings"
-            } else {
-                "Lock all drawings"
-            }),
-        )
-        .on_click(cx.listener(|this, _, _, cx| this.set_draw_mode(|m| m.locked = !m.locked, cx)));
-        let hide = tool_button(
-            "dt-hide",
-            if m.hidden { Icon::EyeOff } else { Icon::Eye },
-            m.hidden,
-            Tip::Text(if m.hidden {
-                "Show all drawings"
-            } else {
-                "Hide all drawings"
-            }),
-        )
-        .on_click(cx.listener(|this, _, _, cx| this.set_draw_mode(|m| m.hidden = !m.hidden, cx)));
-
-        // Remove all: the popover's single item is the confirmation.
-        let app = cx.entity().downgrade();
-        let theme = t.clone();
-        let remove = Popover::new("dt-remove-pop")
-            .anchor(Anchor::LeftCenter)
-            .trigger(
-                Button::new("dt-remove")
-                    .ghost()
-                    .child(lucide(Icon::Trash2, 19.))
-                    .tooltip("Remove drawings"),
-            )
-            .content(move |_, _, cx| {
-                let pop = cx.entity();
+                }));
+            if tools.len() > 1 {
                 let app = app.clone();
+                button = button.with_flyout(move |menu, window, cx| {
+                    group_menu(menu, g, &tools, &app, window, cx)
+                });
+            }
+            bar = bar.child(button);
+        }
+
+        bar.child(separator())
+            .child(
+                tool_button("dt-magnet", Glyph::MAGNET, m.magnet)
+                    .tooltip("Magnet: snap to bar open, high, low, close")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.set_draw_mode(|m| m.magnet = !m.magnet, cx)
+                    })),
+            )
+            .child(
+                tool_button("dt-keep", Glyph::PENCIL_LINE, m.keep_drawing)
+                    .tooltip("Keep drawing")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.set_draw_mode(|m| m.keep_drawing = !m.keep_drawing, cx)
+                    })),
+            )
+            .child(
+                tool_button(
+                    "dt-lock",
+                    if m.locked {
+                        Glyph::LOCK
+                    } else {
+                        Glyph::LOCK_OPEN
+                    },
+                    m.locked,
+                )
+                .tooltip(if m.locked {
+                    "Unlock all drawings"
+                } else {
+                    "Lock all drawings"
+                })
+                .on_click(
+                    cx.listener(|this, _, _, cx| this.set_draw_mode(|m| m.locked = !m.locked, cx)),
+                ),
+            )
+            .child(
+                tool_button(
+                    "dt-hide",
+                    if m.hidden { Glyph::EYE_OFF } else { Glyph::EYE },
+                    m.hidden,
+                )
+                .tooltip(if m.hidden {
+                    "Show all drawings"
+                } else {
+                    "Hide all drawings"
+                })
+                .on_click(
+                    cx.listener(|this, _, _, cx| this.set_draw_mode(|m| m.hidden = !m.hidden, cx)),
+                ),
+            )
+            .child(separator())
+            .child(RemoveAll { app })
+    }
+}
+
+/// A 36 px toolbar button (toggled = on), tooltip to the right (§2.7).
+fn tool_button(id: impl Into<ElementId>, glyph: impl Into<Glyph>, on: bool) -> IconButton {
+    IconButton::new(id, glyph)
+        .size(ControlSize::Lg)
+        .toggled(on)
+        .tooltip_placement(Placement::Right)
+}
+
+/// The tool's label, with its bound key as a Kbd chip when it has one.
+fn with_tool_tooltip(b: IconButton, tool: DrawingTool) -> IconButton {
+    match pick_action(tool) {
+        Some(a) => b.tooltip_action(tool.label(), a.as_ref(), Some(KEY_CONTEXT)),
+        None => b.tooltip(tool.label()),
+    }
+}
+
+/// Divider between toolbar sections, inset `S2` from the toolbar edges.
+fn separator() -> impl IntoElement {
+    v_flex().w_full().child(Divider::horizontal().inset(S2))
+}
+
+/// A group's flyout: section header, then one row per tool (icon, label,
+/// shortcut, check on the active one).
+fn group_menu(
+    menu: Menu,
+    g: ToolGroup,
+    tools: &[DrawingTool],
+    app: &WeakEntity<TradeTerm>,
+    window: &mut Window,
+    cx: &mut App,
+) -> Menu {
+    let current = app.upgrade().and_then(|a| a.read(cx).draw.tool);
+    let has_keys = tools.iter().any(|t| pick_action(*t).is_some());
+    let rows: Vec<MenuRow> = tools
+        .iter()
+        .map(|&tool| {
+            let app = app.clone();
+            let row = MenuRow::new(
+                SharedString::from(format!("dt-item-{tool:?}")),
+                tool.label(),
+            )
+            .icon(Glyph::from(tool.icon()))
+            .checked(current == Some(tool))
+            .on_select(move |_, cx| {
+                app.update(cx, |a, cx| a.pick_tool(Some(tool), cx)).ok();
+            });
+            match pick_action(tool) {
+                Some(a) => row.shortcut_action(a.as_ref(), Some(KEY_CONTEXT), window),
+                None => row,
+            }
+        })
+        .collect();
+    menu.id(SharedString::from(format!("dt-menu-{g:?}")))
+        .width(if has_keys {
+            MenuWidth::Lg
+        } else {
+            MenuWidth::Md
+        })
+        .section(group_title(g))
+        .rows(rows)
+}
+
+/// Remove all: a trash button whose click opens a one-row menu (the
+/// destructive confirmation), to the right and top-aligned like the flyouts.
+#[derive(IntoElement)]
+struct RemoveAll {
+    app: WeakEntity<TradeTerm>,
+}
+
+fn set_open(st: &Entity<bool>, v: bool, cx: &mut App) {
+    st.update(cx, |o, cx| {
+        if *o != v {
+            *o = v;
+            cx.notify();
+        }
+    })
+}
+
+impl RenderOnce for RemoveAll {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let s = CONTROL_LG;
+        let open_state = window.use_keyed_state("dt-remove-open", cx, |_, _| false);
+        let nav = MenuNav::keyed("dt-remove-nav", window, cx);
+        let focus = nav.read(cx).focus.clone();
+        let open = *open_state.read(cx);
+        let (toggle_st, change_st, dismiss_st) =
+            (open_state.clone(), open_state.clone(), open_state);
+        let app = self.app;
+        let popover = Popover::new("dt-remove-pop")
+            .anchor(Anchor::TopLeft)
+            .offset(px(0.))
+            .appearance(false)
+            .open(open)
+            .track_focus(&focus)
+            .on_open_change(move |o, _, cx| set_open(&change_st, *o, cx))
+            .trigger(AnchorPoint)
+            .content(move |_, _, cx| {
+                let count = app
+                    .upgrade()
+                    .map(|a| a.read(cx).drawing_count(cx))
+                    .unwrap_or(0);
                 let label = match count {
                     0 => "No drawings to remove".to_owned(),
                     1 => "Remove 1 drawing".to_owned(),
                     n => format!("Remove {n} drawings"),
                 };
-                div()
-                    .id("dt-remove-all")
-                    .px_2()
-                    .py_1p5()
-                    .rounded(px(5.))
-                    .when(count > 0, |d| {
-                        d.cursor_pointer()
-                            .hover(|s| s.bg(hsla(theme.selection)))
-                            .on_click(move |_, window, cx| {
+                let app = app.clone();
+                let dismiss_st = dismiss_st.clone();
+                Menu::new()
+                    .id("dt-remove-menu")
+                    .row(
+                        MenuRow::danger("dt-remove-all", label)
+                            .icon(Glyph::TRASH)
+                            .disabled(count == 0)
+                            .on_select(move |_, cx| {
                                 app.update(cx, |a, cx| a.remove_all_drawings(cx)).ok();
-                                dismiss(&pop, window, cx);
-                            })
-                    })
-                    .when(count == 0, |d| d.text_color(hsla(theme.text_muted)))
-                    .child(label)
-                    .into_any_element()
+                            }),
+                    )
+                    .nav(nav.clone())
+                    .on_dismiss(move |_, cx| set_open(&dismiss_st, false, cx))
             });
-
-        let sep = || div().w(px(26.)).h(px(1.)).my_1().bg(hsla(t.border));
-        v_flex()
-            .id("drawing-toolbar")
-            .w(px(WIDTH))
-            .h_full()
+        div()
+            .relative()
             .flex_none()
-            .items_center()
-            .gap_1()
-            .pt_1()
-            .border_r_1()
-            .border_color(hsla(t.border))
-            .child(cursor)
-            .child(sep())
-            .child(lines)
-            .child(fib)
-            .child(rect)
-            .child(measure)
-            .child(sep())
-            .child(magnet)
-            .child(keep)
-            .child(lock)
-            .child(hide)
-            .child(sep())
-            .child(remove)
+            .size(s.px())
+            // Mouse-down like the flyouts: an outside click closing the menu
+            // lands first, so a click on the open trigger just closes it.
+            .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                set_open(&toggle_st, !open, cx)
+            })
+            .child(
+                tool_button("dt-remove", Glyph::TRASH, false)
+                    .tooltip("Remove drawings")
+                    .open(open),
+            )
+            .child(div().absolute().top_0().left((s + S1).px()).child(popover))
     }
 }
 
-/// A tool button tooltip: plain text, or a tool's label with its bound key
-/// as a Kbd chip (from the action, so it always matches the binding).
-#[derive(Clone, Copy)]
-enum Tip {
-    Text(&'static str),
-    Tool(DrawingTool),
-}
+/// Zero-size popover trigger that places a menu at a point.
+#[derive(IntoElement)]
+struct AnchorPoint;
 
-impl Tip {
-    fn build(self, window: &mut Window, cx: &mut App) -> AnyView {
-        match self {
-            Tip::Text(t) => Tooltip::new(t).build(window, cx),
-            Tip::Tool(tool) => {
-                let tooltip = Tooltip::new(tool.label());
-                match pick_action(tool) {
-                    Some(a) => tooltip.action(a.as_ref(), Some(crate::app::KEY_CONTEXT)),
-                    None => tooltip,
-                }
-                .build(window, cx)
-            }
-        }
+impl Selectable for AnchorPoint {
+    fn selected(self, _: bool) -> Self {
+        self
+    }
+
+    fn is_selected(&self) -> bool {
+        false
     }
 }
 
-/// "MEASURERS" → "Measurers".
-fn title_case(s: &str) -> String {
-    let lower = s.to_lowercase();
-    let mut c = lower.chars();
-    c.next()
-        .map(|f| f.to_uppercase().collect::<String>() + c.as_str())
-        .unwrap_or_default()
-}
-
-fn dismiss(pop: &Entity<PopoverState>, window: &mut Window, cx: &mut App) {
-    pop.update(cx, |s, cx| s.dismiss(window, cx));
-}
-
-/// The small chevron on a group button and its flyout menu (opens to the
-/// right, like TradingView's).
-fn flyout(
-    id: SharedString,
-    title: &'static str,
-    tools: &'static [DrawingTool],
-    current: Option<DrawingTool>,
-    cx: &mut Context<TradeTerm>,
-) -> impl IntoElement {
-    let app = cx.entity().downgrade();
-    Popover::new(id.clone())
-        .anchor(Anchor::LeftCenter)
-        .trigger(
-            Button::new(SharedString::from(format!("{id}-chev")))
-                .ghost()
-                .xsmall()
-                .child(lucide(Icon::ChevronRight, 10.))
-                .tooltip(title_case(title)),
-        )
-        .content(move |_, _, cx| {
-            let pop = cx.entity();
-            let Some(app_e) = app.upgrade() else {
-                return div().into_any_element();
-            };
-            let theme = app_e.read(cx).theme().clone();
-            let mut list = v_flex().w(px(250.)).child(
-                div()
-                    .px_2()
-                    .py_1()
-                    .text_size(px(11.))
-                    .text_color(hsla(theme.text_muted))
-                    .child(title),
-            );
-            for &tool in tools {
-                let (app, pop) = (app.clone(), pop.clone());
-                list = list.child(
-                    div()
-                        .id(SharedString::from(format!("dt-item-{tool:?}")))
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .h(px(32.))
-                        .px_2()
-                        .rounded(px(5.))
-                        .cursor_pointer()
-                        .hover(|s| s.bg(hsla(theme.selection)))
-                        .when(current == Some(tool), |d| d.bg(hsla(theme.selection)))
-                        .child(lucide(tool.icon(), 17.))
-                        .child(div().flex_1().child(tool.label()))
-                        .children(tool.shortcut().map(|k| {
-                            div()
-                                .text_size(px(11.))
-                                .text_color(hsla(theme.text_muted))
-                                .child(k)
-                        }))
-                        .on_click(move |_, window, cx| {
-                            app.update(cx, |a, cx| a.pick_tool(Some(tool), cx)).ok();
-                            dismiss(&pop, window, cx);
-                        }),
-                );
-            }
-            list.into_any_element()
-        })
+impl RenderOnce for AnchorPoint {
+    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
+        div().size_0()
+    }
 }

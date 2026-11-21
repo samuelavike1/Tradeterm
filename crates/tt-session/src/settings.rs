@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tracing::warn;
-use tt_chart::{ChartType, Indicator, ScaleMode};
+use tt_chart::{ChartType, Indicator, IndicatorStyle, Rgba, ScaleMode};
 use tt_core::{Study, StudyKind, Timeframe};
 use tt_theme::{ThemeMode, ThemeOverrides};
 
@@ -36,19 +36,123 @@ pub struct RecentSymbol {
 pub const MAX_RECENT: usize = 12;
 
 /// One indicator on a chart.
+///
+/// Files written before per-plot styles stored `colors`, one `[r, g, b, a]`
+/// (straight alpha) per output position. They are migrated into `style` on
+/// load (see [`legacy_style`]) and never written again.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, from = "IndicatorConfigWire")]
 pub struct IndicatorConfig {
     pub study: Study,
     pub visible: bool,
-    /// One `[r, g, b, a]` per output; empty = defaults. (Field-level default:
-    /// the struct default is a Volume indicator with Volume's colors.)
-    #[serde(default)]
-    pub colors: Vec<[u8; 4]>,
+    /// Per-plot / level / fill style; sparse (only what differs from the
+    /// study's defaults is written).
+    pub style: IndicatorStyle,
     /// Relative pane height (pane indicators).
     pub pane_weight: f32,
     /// Pane collapsed to a strip.
     pub pane_collapsed: bool,
+}
+
+/// What an [`IndicatorConfig`] is read from: the current fields plus the
+/// legacy `colors`.
+#[derive(Deserialize)]
+#[serde(default)]
+struct IndicatorConfigWire {
+    study: Study,
+    visible: bool,
+    colors: Vec<[u8; 4]>,
+    style: IndicatorStyle,
+    pane_weight: f32,
+    pane_collapsed: bool,
+}
+
+impl Default for IndicatorConfigWire {
+    fn default() -> Self {
+        let d = IndicatorConfig::default();
+        Self {
+            study: d.study,
+            visible: d.visible,
+            colors: Vec::new(),
+            style: d.style,
+            pane_weight: d.pane_weight,
+            pane_collapsed: d.pane_collapsed,
+        }
+    }
+}
+
+impl From<IndicatorConfigWire> for IndicatorConfig {
+    fn from(w: IndicatorConfigWire) -> Self {
+        let mut style = w.style;
+        if !w.colors.is_empty() && style.plots.is_empty() {
+            let legacy = legacy_style(&w.study, &w.colors);
+            style.plots = legacy.plots;
+            for (id, f) in legacy.fills {
+                style.fills.entry(id).or_insert(f);
+            }
+        }
+        style.prune(w.study.meta());
+        Self {
+            study: w.study,
+            visible: w.visible,
+            style,
+            pane_weight: w.pane_weight,
+            pane_collapsed: w.pane_collapsed,
+        }
+    }
+}
+
+/// Plot ids of the legacy `colors` list by output position. **Frozen**: it
+/// describes files already written, so it must never follow later changes
+/// to the study metadata. `None`: never user-editable (Volume columns
+/// followed the theme). Kinds added later never wrote `colors`.
+fn legacy_color_ids(kind: StudyKind) -> &'static [Option<&'static str>] {
+    match kind {
+        StudyKind::Volume => &[None, Some("vol_ma")],
+        StudyKind::Sma | StudyKind::Ema => &[Some("plot")],
+        StudyKind::BollingerBands => &[Some("basis"), Some("upper"), Some("lower")],
+        StudyKind::Vwap => &[Some("vwap")],
+        StudyKind::Rsi => &[Some("rsi")],
+        StudyKind::Macd => &[Some("hist"), Some("macd"), Some("signal")],
+        StudyKind::Stochastic => &[Some("k"), Some("d")],
+        StudyKind::Atr => &[Some("atr")],
+        StudyKind::Obv => &[Some("obv")],
+        #[allow(unreachable_patterns)]
+        _ => &[],
+    }
+}
+
+/// Fills the legacy renderer drew in output 0's color at 8 % opacity
+/// (frozen like [`legacy_color_ids`]).
+fn legacy_tinted_fill(kind: StudyKind) -> Option<&'static str> {
+    match kind {
+        StudyKind::BollingerBands | StudyKind::Rsi | StudyKind::Stochastic => Some("bg"),
+        _ => None,
+    }
+}
+
+/// The style that reproduces a legacy `colors` list: each color on its
+/// plot id; the fill tinted by output 0 follows it; the MACD histogram's
+/// faded "fall above" column is its color at 45 % (the legacy rule). The
+/// caller prunes entries equal to the defaults.
+pub fn legacy_style(study: &Study, colors: &[[u8; 4]]) -> IndicatorStyle {
+    let kind = study.kind();
+    let mut style = IndicatorStyle::default();
+    for (id, c) in legacy_color_ids(kind).iter().zip(colors) {
+        if let Some(id) = id {
+            style.set_plot_color(id, 0, Rgba(*c));
+        }
+    }
+    if let Some(&[r, g, b, _]) = colors.first() {
+        let alpha = |a: f32| (a * 255.0).round() as u8;
+        if let Some(fill) = legacy_tinted_fill(kind) {
+            style.fill_mut(fill).color = Some(Rgba::new(r, g, b, alpha(0.08)));
+        }
+        if kind == StudyKind::Macd {
+            style.set_plot_color("hist", 1, Rgba::new(r, g, b, alpha(0.45)));
+        }
+    }
+    style
 }
 
 impl Default for IndicatorConfig {
@@ -62,11 +166,7 @@ impl IndicatorConfig {
         Self {
             study: ind.study.clone(),
             visible: ind.visible,
-            colors: ind
-                .colors
-                .iter()
-                .map(|c| c.to_srgba_unmultiplied())
-                .collect(),
+            style: ind.style.pruned(ind.study.meta()),
             pane_weight: ind.pane_weight,
             pane_collapsed: ind.pane_collapsed,
         }
@@ -76,9 +176,7 @@ impl IndicatorConfig {
         let mut ind = Indicator::new(self.study.clone());
         ind.visible = self.visible;
         ind.pane_collapsed = self.pane_collapsed;
-        for (slot, [r, g, b, a]) in ind.colors.iter_mut().zip(&self.colors) {
-            *slot = Color32::from_rgba_unmultiplied(*r, *g, *b, *a);
-        }
+        ind.style = self.style.clone();
         if self.pane_weight.is_finite() && self.pane_weight > 0.0 {
             ind.pane_weight = self.pane_weight.clamp(0.05, 20.0);
         }
@@ -454,15 +552,31 @@ mod tests {
     #[test]
     fn indicators_round_trip_and_volume_migration() {
         let mut rsi = Indicator::new(StudyKind::Rsi.default_study());
-        rsi.colors[0] = Color32::from_rgb(1, 2, 3);
+        rsi.set_color(0, Color32::from_rgb(1, 2, 3));
+        rsi.style.hline_mut("upper").value = Some(80.0);
+        rsi.style.precision = Some(1);
         rsi.visible = false;
         let cfg = IndicatorConfig::from_indicator(&rsi);
-        let back = serde_json::from_str::<IndicatorConfig>(&serde_json::to_string(&cfg).unwrap())
+        let json = serde_json::to_string(&cfg).unwrap();
+        assert!(
+            !json.contains("[[1,2,3"),
+            "no legacy colors written: {json}"
+        );
+        let back = serde_json::from_str::<IndicatorConfig>(&json)
             .unwrap()
             .to_indicator();
         assert_eq!(back.study, rsi.study);
-        assert_eq!(back.colors[0], Color32::from_rgb(1, 2, 3));
+        assert_eq!(back.color(0), Color32::from_rgb(1, 2, 3));
+        assert_eq!(back.style, rsi.style);
         assert!(!back.visible);
+        // Default styles are not written at all.
+        let plain =
+            IndicatorConfig::from_indicator(&Indicator::new(StudyKind::Macd.default_study()));
+        let json = serde_json::to_string(&plain).unwrap();
+        assert!(
+            !json.contains("plots") && !json.contains("colors"),
+            "{json}"
+        );
 
         // Old files: no indicator list. Volume on → Volume indicator; off → none.
         let old: AppSettings = serde_json::from_str(
@@ -486,7 +600,7 @@ mod tests {
         assert!(empty.normalized().tabs[0].indicators.is_empty());
     }
 
-    /// A tab's indicator list as written by the current version.
+    /// A tab's indicator list as written before per-plot styles (default colors).
     const CURRENT_INDICATORS: &str = r#"[
         {"study":{"type":"Volume","ma_length":20,"color_by_prev_close":false,"show_ma":true},
          "visible":true,"colors":[[8,153,129,255],[33,150,243,255]],
@@ -498,7 +612,7 @@ mod tests {
     ]"#;
 
     #[test]
-    fn current_indicator_format_loads_unchanged() {
+    fn legacy_indicator_format_loads_unchanged() {
         let json = format!(r#"{{"tabs":[{{"symbol":"A","indicators":{CURRENT_INDICATORS}}}]}}"#);
         let s: AppSettings = serde_json::from_str(&json).unwrap();
         let ind = &s.tabs[0].indicators;
@@ -512,7 +626,7 @@ mod tests {
                         show_ma: true,
                     },
                     visible: true,
-                    colors: vec![[8, 153, 129, 255], [33, 150, 243, 255]],
+                    style: IndicatorStyle::default(),
                     pane_weight: 1.0,
                     pane_collapsed: false,
                 },
@@ -522,26 +636,95 @@ mod tests {
                         source: tt_core::Source::Hlc3,
                     },
                     visible: false,
-                    colors: vec![[126, 87, 194, 255]],
+                    style: IndicatorStyle::default(),
                     pane_weight: 2.5,
                     pane_collapsed: true,
                 },
                 IndicatorConfig {
                     study: Study::Vwap,
                     visible: true,
-                    colors: vec![],
+                    style: IndicatorStyle::default(),
                     pane_weight: 1.0,
                     pane_collapsed: false,
                 },
             ]
         );
         let rsi = ind[1].to_indicator();
-        assert_eq!(rsi.colors[0], Color32::from_rgb(126, 87, 194));
+        assert_eq!(rsi.color(0), Color32::from_rgb(126, 87, 194));
         assert_eq!(rsi.pane_weight, 2.5);
         // Writing it back gives the same file content.
         let back: Vec<IndicatorConfig> =
             serde_json::from_str(&serde_json::to_string(ind).unwrap()).unwrap();
         assert_eq!(&back, ind);
+    }
+
+    /// Every kind with customized legacy `colors` (as the old version wrote
+    /// them: the full list per indicator) draws the same colors after the
+    /// migration, and is written back without `colors`.
+    #[test]
+    fn legacy_custom_colors_migrate_by_plot_id() {
+        let s: AppSettings =
+            serde_json::from_str(include_str!("fixtures/indicators_v1_custom.json")).unwrap();
+        let inds: Vec<Indicator> = s.tabs[0]
+            .indicators
+            .iter()
+            .map(IndicatorConfig::to_indicator)
+            .collect();
+        assert_eq!(inds.len(), 10);
+        let color = |k: StudyKind, id: &str, i: usize| {
+            let ind = inds.iter().find(|x| x.study.kind() == k).unwrap();
+            let def = ind.study.meta().plot(id).unwrap();
+            ind.style.plot(def).palette(i).0
+        };
+        let fill = |k: StudyKind, id: &str| {
+            let ind = inds.iter().find(|x| x.study.kind() == k).unwrap();
+            ind.style.fill(ind.study.meta().fill(id).unwrap()).color.0
+        };
+        let overridden = |k: StudyKind| {
+            let ind = inds.iter().find(|x| x.study.kind() == k).unwrap();
+            ind.style.plots.keys().cloned().collect::<Vec<_>>()
+        };
+        use StudyKind::*;
+        // Volume: columns keep the theme (output 0 was never editable).
+        assert_eq!(overridden(Volume), ["vol_ma"]);
+        assert_eq!(color(Volume, "vol_ma", 0), [10, 20, 30, 255]);
+        assert_eq!(color(Sma, "plot", 0), [200, 100, 0, 128], "opacity kept");
+        assert!(overridden(Ema).is_empty(), "default colors store nothing");
+        assert!(!inds[2].visible);
+        assert_eq!(color(BollingerBands, "basis", 0), [255, 0, 0, 255]);
+        assert_eq!(color(BollingerBands, "upper", 0), [0, 255, 0, 255]);
+        assert_eq!(color(BollingerBands, "lower", 0), [0, 0, 255, 255]);
+        assert_eq!(fill(BollingerBands, "bg"), [255, 0, 0, 20], "basis at 8 %");
+        assert_eq!(color(Vwap, "vwap", 0), [9, 9, 9, 255]);
+        assert_eq!(color(Rsi, "rsi", 0), [255, 235, 59, 255]);
+        assert_eq!(fill(Rsi, "bg"), [255, 235, 59, 20]);
+        assert_eq!(color(Macd, "hist", 0), [0, 200, 0, 255]);
+        assert_eq!(color(Macd, "hist", 1), [0, 200, 0, 115], "faded at 45 %");
+        let hist = StudyKind::Macd.meta().plot("hist").unwrap();
+        assert_eq!(
+            color(Macd, "hist", 2),
+            hist.palette[2].1,
+            "negative side unchanged"
+        );
+        assert_eq!(color(Macd, "hist", 3), hist.palette[3].1);
+        assert_eq!(color(Macd, "macd", 0), [1, 2, 3, 255]);
+        assert_eq!(color(Macd, "signal", 0), [4, 5, 6, 255]);
+        assert_eq!(color(Stochastic, "k", 0), [7, 8, 9, 255]);
+        assert_eq!(overridden(Stochastic), ["k"]);
+        assert_eq!(fill(Stochastic, "bg"), [7, 8, 9, 20]);
+        assert_eq!(color(Atr, "atr", 0), [100, 100, 100, 255]);
+        assert!(overridden(Obv).is_empty());
+        assert!(inds[6].pane_collapsed);
+        assert_eq!(inds[5].pane_weight, 2.0);
+
+        // Written back: no legacy colors, and it reloads to the same thing.
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(!json.contains(r#""colors":[["#), "{json}");
+        let again: AppSettings = serde_json::from_str(&json).unwrap();
+        assert_eq!(again.tabs[0].indicators, s.tabs[0].indicators);
+        // A file written now and read by the old version: it ignores
+        // `style` (unknown field) and uses its default colors.
+        assert!(json.contains(r#""style":{"#));
     }
 
     #[test]

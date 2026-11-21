@@ -1,7 +1,7 @@
 //! Chart scene drawing. Uses only the [`Canvas`] trait, never a UI toolkit directly.
 
 use crate::bars::{DrawBar, max_volume};
-use crate::indicators::{Indicator, format_value, histogram_down};
+use crate::indicators::Indicator;
 use crate::render::Canvas;
 use crate::scale::{self, format_countdown, format_full_time, format_percent, format_price};
 use crate::style::LineKind;
@@ -11,14 +11,16 @@ use crate::{ChartStyle, ChartType, ScaleMode};
 use ecolor::Color32;
 use emath::{Align2, Pos2, Rect, pos2, vec2};
 use std::ops::Range;
-use tt_core::{Candle, CandleSeries, Placement, Plot, Study};
-use tt_theme::{Theme, with_alpha};
+use tt_core::{Candle, CandleSeries, Placement};
+use tt_theme::Theme;
 
 mod legend;
 mod series;
+mod study;
 
 use legend::{legends, readout};
-use series::{BarGeom, series};
+use series::series;
+use study::{study_plots, study_tags, volume};
 
 /// Everything needed to draw one frame.
 pub(crate) struct Scene<'a> {
@@ -201,7 +203,6 @@ pub(crate) fn draw_base(c: &mut dyn Canvas, s: &Scene<'_>) {
         c.set_clip(pane.rect());
         let ind = &s.indicators[pane.index];
         if ind.visible && !pane.collapsed {
-            pane_guides(c, s, pane, ind);
             study_plots(c, s, &pane.vp, ind);
         }
     }
@@ -344,252 +345,13 @@ fn volume_vp(s: &Scene<'_>, rect: Rect) -> Viewport {
     }
 }
 
-/// Whether a bar's volume counts as rising.
-fn volume_rising(ind: &Indicator, close: f64, open: f64, prev_close: f64) -> bool {
-    match ind.study {
-        Study::Volume {
-            color_by_prev_close: true,
-            ..
-        } => close >= prev_close,
-        _ => close >= open,
-    }
-}
-
-/// [`volume_rising`] for bar `i` of the displayed series.
-fn volume_rising_at(s: &Scene<'_>, ind: &Indicator, i: usize) -> bool {
-    let Some(b) = s.display.get(i) else {
-        return true;
-    };
-    let prev = i.checked_sub(1).map_or(b.open, |j| s.display.closes()[j]);
-    volume_rising(ind, b.close, b.open, prev)
-}
-
-/// Volume indicator: columns in the bottom of the price pane (behind the
-/// bars, like TradingView), plus the optional MA line.
-fn volume(c: &mut dyn Canvas, s: &Scene<'_>, rect: Rect, ind: &Indicator) {
-    let vvp = volume_vp(s, rect);
-    let g = BarGeom::new(s.vp.bar_spacing, c.pixels_per_point());
-    let width = if s.decimated { 1.0 } else { g.body_px };
-    for b in s.bars {
-        let color = if volume_rising(ind, b.close, b.open, b.prev_close) {
-            s.theme.volume_up
-        } else {
-            s.theme.volume_down
-        };
-        let top = vvp.y_of(b.volume);
-        c.fill_rect(g.column(g.center_px(b.x), width, top, rect.bottom()), color);
-    }
-    if ind.output_enabled(1)
-        && let Some(ma) = ind.outputs().get(1)
-    {
-        study_line(c, s, &vvp, ma, 1.0, ind.color(1));
-    }
-}
-
-/// Indices to sample when drawing a study: every bar when zoomed in, about
-/// one per pixel column when zoomed out; one extra bar on each side so lines
-/// reach the plot edges.
-fn sample_indices(s: &Scene<'_>, ppp: f32) -> impl Iterator<Item = usize> + use<> {
-    let stride = (1.0 / (s.vp.bar_spacing * ppp)).ceil().max(1.0) as usize;
-    let start = s.range.start.saturating_sub(1) / stride * stride;
-    let end = (s.range.end + 1).min(s.display.len()).max(start);
-    let last = end
-        .checked_sub(1)
-        .filter(|l| *l >= start && !(l - start).is_multiple_of(stride));
-    (start..end).step_by(stride).chain(last)
-}
-
-/// A study output as a line, broken where it is undefined.
-fn study_line(
-    c: &mut dyn Canvas,
-    s: &Scene<'_>,
-    vp: &Viewport,
-    values: &[f64],
-    width: f32,
-    color: Color32,
-) {
-    let mut pts: Vec<Pos2> = Vec::new();
-    for i in sample_indices(s, c.pixels_per_point()) {
-        match values.get(i) {
-            Some(v) if v.is_finite() => pts.push(pos2(vp.x_of(i as f32), vp.y_of(*v))),
-            _ => {
-                if pts.len() > 1 {
-                    c.polyline(&pts, width, color);
-                }
-                pts.clear();
-            }
-        }
-    }
-    if pts.len() > 1 {
-        c.polyline(&pts, width, color);
-    }
-}
-
-/// Draws every enabled output of a study (lines, histograms, band fills).
-fn study_plots(c: &mut dyn Canvas, s: &Scene<'_>, vp: &Viewport, ind: &Indicator) {
-    let outs = ind.outputs();
-    if let Study::BollingerBands { .. } = ind.study
-        && outs.len() == 3
-    {
-        // Light fill between the bands.
-        let (mut top, mut bot) = (Vec::new(), Vec::new());
-        for i in sample_indices(s, c.pixels_per_point()) {
-            if let (Some(&u), Some(&l)) = (outs[1].get(i), outs[2].get(i))
-                && u.is_finite()
-                && l.is_finite()
-            {
-                let x = vp.x_of(i as f32);
-                top.push(pos2(x, vp.y_of(u)));
-                bot.push(pos2(x, vp.y_of(l)));
-            }
-        }
-        c.fill_between(&top, &bot, with_alpha(ind.color(0), 0.08));
-    }
-    for (k, (_, plot)) in ind.study.outputs().iter().enumerate() {
-        if !ind.output_enabled(k) {
-            continue;
-        }
-        let Some(values) = outs.get(k) else { continue };
-        match plot {
-            Plot::Line => study_line(c, s, vp, values, 1.0, ind.color(k)),
-            Plot::Histogram => histogram(c, s, vp, values, ind.color(k)),
-            Plot::VolumeColumns => {}
-        }
-    }
-}
-
-/// Columns from zero with TradingView's MACD coloring: strong while growing
-/// away from zero, faded while shrinking.
-fn histogram(c: &mut dyn Canvas, s: &Scene<'_>, vp: &Viewport, values: &[f64], up: Color32) {
-    let ppp = c.pixels_per_point();
-    let g = BarGeom::new(s.vp.bar_spacing, ppp);
-    let width = if s.decimated { 1.0 } else { g.body_px };
-    let y0 = vp.y_of(0.0);
-    for i in sample_indices(s, ppp) {
-        let Some(&v) = values.get(i) else { continue };
-        if !v.is_finite() {
-            continue;
-        }
-        let prev = i
-            .checked_sub(1)
-            .and_then(|j| values.get(j))
-            .copied()
-            .filter(|p| p.is_finite())
-            .unwrap_or(v);
-        let base = if v >= 0.0 { up } else { histogram_down() };
-        let color = if v.abs() >= prev.abs() {
-            base
-        } else {
-            with_alpha(base, 0.45)
-        };
-        let (a, b) = g.span(y0, vp.y_of(v));
-        c.fill_rect(g.column(g.center_px(vp.x_of(i as f32)), width, a, b), color);
-    }
-}
-
-/// Guide levels of bounded oscillators (RSI 30/50/70…) with a band fill.
-fn pane_guides(c: &mut dyn Canvas, s: &Scene<'_>, pane: &Pane, ind: &Indicator) {
-    let Some((_, _, levels)) = ind.study.bounds() else {
-        return;
-    };
-    let r = pane.rect();
-    let ppp = c.pixels_per_point();
-    if let (Some(lo), Some(hi)) = (levels.first(), levels.last()) {
-        let band = Rect::from_x_y_ranges(r.x_range(), pane.vp.y_of(*hi)..=pane.vp.y_of(*lo));
-        c.fill_rect(band, with_alpha(ind.color(0), 0.08));
-    }
-    for (i, l) in levels.iter().enumerate() {
-        let y = crisp(pane.vp.y_of(*l), ppp);
-        let middle = i > 0 && i + 1 < levels.len();
-        let color = with_alpha(s.theme.text_muted, if middle { 0.35 } else { 0.6 });
-        c.dashed_line(
-            pos2(r.left(), y),
-            pos2(r.right(), y),
-            1.0 / ppp,
-            color,
-            if middle { 1.0 } else { 4.0 },
-            4.0,
-        );
-    }
-}
-
 /// Price-axis labels of an indicator pane.
 fn pane_ticks(s: &Scene<'_>, pane: &Pane) -> Vec<(f32, String)> {
     let ind = &s.indicators[pane.index];
     scale::price_ticks(&pane.vp, s.style.price_label_spacing, None)
         .into_iter()
-        .map(|v| (pane.vp.y_of(v), format_value(&ind.study, v, s.precision)))
+        .map(|v| (pane.vp.y_of(v), ind.format(v, s.precision)))
         .collect()
-}
-
-/// Value at the last bar, if defined.
-fn last_value(values: &[f64]) -> Option<f64> {
-    values.last().copied().filter(|v| v.is_finite())
-}
-
-/// Value tags on the price axis for every visible indicator output
-/// (TradingView's "Labels on price scale").
-fn study_tags(s: &Scene<'_>) -> Vec<(usize, Tag)> {
-    let mut tags = Vec::new();
-    let mut push = |pane: usize, vp: &Viewport, ind: &Indicator, v: f64, bg: Color32| {
-        let y = vp.y_of(v);
-        if y >= vp.plot.top && y <= vp.plot.bottom {
-            tags.push((
-                pane,
-                price_axis_tag(s, y, vec![format_value(&ind.study, v, s.precision)], bg),
-            ));
-        }
-    };
-    let last = s.display.len().checked_sub(1);
-    for (idx, ind) in s.indicators.iter().enumerate() {
-        if !ind.visible {
-            continue;
-        }
-        let outs = ind.outputs();
-        let enabled = |k: usize| ind.output_enabled(k);
-        match ind.placement() {
-            Placement::Overlay => {
-                for (k, v) in outs.iter().enumerate() {
-                    if let Some(v) = last_value(v) {
-                        push(0, &s.vp, ind, v, ind.color(k));
-                    }
-                }
-            }
-            Placement::VolumeOverlay => {
-                let (Some(vr), Some(i)) = (s.volume_rect, last) else {
-                    continue;
-                };
-                let bg = if volume_rising_at(s, ind, i) {
-                    s.theme.up
-                } else {
-                    s.theme.down
-                };
-                if let Some(v) = outs.first().and_then(|o| last_value(o)) {
-                    push(0, &volume_vp(s, vr), ind, v, bg);
-                }
-            }
-            Placement::Pane => {
-                let Some((pane_no, pane)) =
-                    s.panes.iter().enumerate().find(|(_, p)| p.index == idx)
-                else {
-                    continue;
-                };
-                for (k, ((_, plot), v)) in ind.study.outputs().iter().zip(outs).enumerate() {
-                    if !enabled(k) {
-                        continue;
-                    }
-                    if let Some(v) = last_value(v) {
-                        let bg = match plot {
-                            Plot::Histogram if v < 0.0 => histogram_down(),
-                            _ => ind.color(k),
-                        };
-                        push(pane_no + 1, &pane.vp, ind, v, bg);
-                    }
-                }
-            }
-        }
-    }
-    tags
 }
 
 /// One grid line: dotted (1 px on, 3 px off) or solid, per the style.
@@ -840,11 +602,7 @@ fn crosshair(c: &mut dyn Canvas, s: &Scene<'_>, p: Pos2, slot: Option<i64>) -> (
 
     // Inside an indicator pane the axis shows the indicator's value.
     let label = match s.panes.iter().find(|pane| pane.rect().contains(p)) {
-        Some(pane) => format_value(
-            &s.indicators[pane.index].study,
-            pane.vp.price_at(p.y),
-            s.precision,
-        ),
+        Some(pane) => s.indicators[pane.index].format(pane.vp.price_at(p.y), s.precision),
         None => axis_value_label(s, s.vp.price_at(p.y)),
     };
     let price_tag = price_axis_tag(s, y, vec![label], s.theme.crosshair_label_bg);
@@ -881,10 +639,13 @@ mod tests {
     use crate::viewport::{PlotRect, PriceScale};
     use emath::Vec2;
 
-    /// Records drawn text; geometry primitives are ignored.
+    /// Records drawn text, filled rects, dashed lines and polylines.
     #[derive(Default)]
     struct Recorder {
         texts: Vec<String>,
+        fills: Vec<(Rect, Color32)>,
+        dashes: Vec<(f32, f32, f32)>,
+        polylines: Vec<(usize, f32, Color32)>,
     }
 
     impl Canvas for Recorder {
@@ -892,12 +653,18 @@ mod tests {
             1.0
         }
         fn set_clip(&mut self, _: Rect) {}
-        fn fill_rect(&mut self, _: Rect, _: Color32) {}
+        fn fill_rect(&mut self, r: Rect, c: Color32) {
+            self.fills.push((r, c));
+        }
         fn fill_rounded_rect(&mut self, _: Rect, _: f32, _: Color32) {}
         fn stroke_rect(&mut self, _: Rect, _: f32, _: Color32) {}
         fn line(&mut self, _: Pos2, _: Pos2, _: f32, _: Color32) {}
-        fn dashed_line(&mut self, _: Pos2, _: Pos2, _: f32, _: Color32, _: f32, _: f32) {}
-        fn polyline(&mut self, _: &[Pos2], _: f32, _: Color32) {}
+        fn dashed_line(&mut self, a: Pos2, _: Pos2, _: f32, _: Color32, dash: f32, gap: f32) {
+            self.dashes.push((a.y, dash, gap));
+        }
+        fn polyline(&mut self, p: &[Pos2], w: f32, c: Color32) {
+            self.polylines.push((p.len(), w, c));
+        }
         fn fill_area(&mut self, _: &[Pos2], _: f32, _: f32, _: Color32, _: Color32) {}
         fn fill_between(&mut self, _: &[Pos2], _: &[Pos2], _: Color32) {}
         fn fill_circle(&mut self, _: Pos2, _: f32, _: Color32) {}
@@ -1101,5 +868,132 @@ mod tests {
         );
         assert!(c.texts.iter().any(|t| t == "98.00"), "{:?}", c.texts);
         assert!(c.texts.iter().any(|t| t == "102.00"), "{:?}", c.texts);
+    }
+
+    /// A scene with one RSI pane at 400..500 showing values 0..75, so the 70
+    /// level runs through the pane's legend row.
+    fn rsi_scene<'a>(
+        s: &'a CandleSeries,
+        theme: &'a Theme,
+        style: &'a ChartStyle,
+        inds: &'a [Indicator],
+    ) -> Scene<'a> {
+        let mut scene = scene_with(s, theme, style, None);
+        scene.indicators = inds;
+        scene.vp.plot.bottom = 400.0;
+        scene.panes = vec![Pane {
+            index: 0,
+            vp: Viewport {
+                price_min: 0.0,
+                price_max: 75.0,
+                plot: PlotRect {
+                    left: 0.0,
+                    top: 400.0,
+                    right: 800.0,
+                    bottom: 500.0,
+                },
+                scale: PriceScale::linear(),
+                ..scene.vp
+            },
+            collapsed: false,
+        }];
+        scene
+    }
+
+    fn rsi(s: &CandleSeries) -> Indicator {
+        let mut ind = Indicator::new(tt_core::StudyKind::Rsi.default_study());
+        ind.sync(s);
+        ind
+    }
+
+    #[test]
+    fn levels_come_from_the_style_and_stay_behind_the_legend() {
+        let (s, theme) = (series(), Theme::dark());
+        let mut style = ChartStyle::default();
+        let mut inds = [rsi(&s)];
+        let scene = rsi_scene(&s, &theme, &style, &inds);
+        let y70 = crisp(scene.panes[0].vp.y_of(70.0), 1.0);
+        let y50 = crisp(scene.panes[0].vp.y_of(50.0), 1.0);
+        let mut c = Recorder::default();
+        draw_base(&mut c, &scene);
+        // 70 / 30 dashed, 50 dotted.
+        assert!(c.dashes.contains(&(y70, 4.0, 4.0)), "{:?}", c.dashes);
+        assert!(c.dashes.contains(&(y50, 1.0, 4.0)), "{:?}", c.dashes);
+
+        // The legend row is backed so the level does not run through it.
+        let backed = |c: &Recorder| {
+            c.fills
+                .iter()
+                .any(|(r, _)| r.contains(pos2(12.0, y70)) && r.top() >= 400.0)
+        };
+        let mut c = Recorder::default();
+        draw_overlay(&mut c, &scene);
+        assert!(backed(&c), "{:?}", c.fills);
+        style.status_line.indicator_background = false;
+        let scene = rsi_scene(&s, &theme, &style, &inds);
+        let mut c = Recorder::default();
+        draw_overlay(&mut c, &scene);
+        assert!(!backed(&c), "no background when it is off");
+
+        // Edited levels: moved, restyled, hidden.
+        inds[0].style.hline_mut("upper").value = Some(60.0);
+        inds[0].style.hline_mut("upper").style = Some(tt_core::LineStyle::Solid);
+        inds[0].style.hline_mut("middle").visible = Some(false);
+        let scene = rsi_scene(&s, &theme, &style, &inds);
+        let mut c = Recorder::default();
+        draw_base(&mut c, &scene);
+        assert!(
+            !c.dashes.contains(&(y70, 4.0, 4.0)) && !c.dashes.contains(&(y50, 1.0, 4.0)),
+            "{:?}",
+            c.dashes
+        );
+    }
+
+    #[test]
+    fn plot_style_and_status_line_switches() {
+        let (s, theme, style) = (series(), Theme::dark(), ChartStyle::default());
+        let mut inds = [rsi(&s)];
+        let purple = inds[0].color(0);
+        let scene = rsi_scene(&s, &theme, &style, &inds);
+        let mut c = Recorder::default();
+        draw(&mut c, &scene);
+        assert!(c.polylines.iter().any(|p| p.1 == 1.0 && p.2 == purple));
+        assert!(c.texts.iter().any(|t| t == "RSI 14 close"));
+        let count = |c: &Recorder, t: &str| c.texts.iter().filter(|x| *x == t).count();
+        // Readout open + legend value (100 is above the pane: no tag).
+        assert_eq!(count(&c, "100.00"), 2, "{:?}", c.texts);
+
+        let red = Color32::from_rgb(200, 0, 0);
+        inds[0].set_color(0, red);
+        inds[0].style.plot_mut("rsi").width = Some(3);
+        inds[0].style.precision = Some(1);
+        let scene = rsi_scene(&s, &theme, &style, &inds);
+        let mut c = Recorder::default();
+        draw(&mut c, &scene);
+        assert!(c.polylines.iter().any(|p| p.1 == 3.0 && p.2 == red));
+        assert_eq!(count(&c, "100.0"), 1, "{:?}", c.texts);
+
+        // Per-indicator switches: no tag, no values, no inputs.
+        inds[0].style.labels_on_price_scale = false;
+        inds[0].style.values_in_status_line = false;
+        inds[0].style.inputs_in_status_line = false;
+        let scene = rsi_scene(&s, &theme, &style, &inds);
+        let mut c = Recorder::default();
+        draw(&mut c, &scene);
+        assert_eq!(count(&c, "100.0"), 0, "{:?}", c.texts);
+        assert_eq!(count(&c, "RSI"), 1);
+
+        // Columns instead of a line; hidden plots are not drawn.
+        inds[0].style.plot_mut("rsi").plot_type = Some(tt_core::PlotType::Columns);
+        let scene = rsi_scene(&s, &theme, &style, &inds);
+        let mut c = Recorder::default();
+        draw_base(&mut c, &scene);
+        assert!(!c.polylines.iter().any(|p| p.2 == red));
+        assert!(c.fills.iter().filter(|f| f.1 == red).count() >= 5);
+        inds[0].style.plot_mut("rsi").visible = Some(false);
+        let scene = rsi_scene(&s, &theme, &style, &inds);
+        let mut c = Recorder::default();
+        draw_base(&mut c, &scene);
+        assert!(!c.fills.iter().any(|f| f.1 == red));
     }
 }

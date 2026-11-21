@@ -14,8 +14,8 @@ use ecolor::Color32;
 use emath::{Align2, Pos2, Rect, Vec2, pos2, vec2};
 use std::time::{Duration, Instant};
 use tt_chart::render::Canvas;
-use tt_chart::{ChartData, ChartType, ChartView, RenderInput};
-use tt_core::{Candle, CandleSeries};
+use tt_chart::{ChartData, ChartType, ChartView, Indicator, RenderInput};
+use tt_core::{Candle, CandleSeries, StudyKind};
 use tt_theme::Theme;
 
 const FRAMES: usize = 60;
@@ -113,10 +113,24 @@ fn run(
     series: &mut CandleSeries,
     chart_type: ChartType,
     visible: usize,
+    indicators: bool,
 ) -> (Vec<Duration>, Vec<Duration>, usize) {
     let theme = Theme::dark();
     let mut view = ChartView::default();
     view.chart_type = chart_type;
+    if indicators {
+        // A typical layout: Volume, an MA and bands on price, two oscillator panes.
+        view.indicators = [
+            StudyKind::Volume,
+            StudyKind::Ema,
+            StudyKind::BollingerBands,
+            StudyKind::Rsi,
+            StudyKind::Macd,
+        ]
+        .into_iter()
+        .map(|k| Indicator::new(k.default_study()))
+        .collect();
+    }
     view.zoom_to_bars(visible);
     let full = Rect::from_min_size(pos2(0.0, 0.0), vec2(1600.0, 900.0));
     let input = RenderInput {
@@ -125,12 +139,15 @@ fn run(
     };
     let (mut base, mut overlay, mut prims) = (Vec::new(), Vec::new(), 0);
     for frame in 0..(FRAMES + 5) {
-        // Live forming-bar update.
-        let mut last = series.last().expect("non-empty");
-        last.close *= 1.0 + if frame % 2 == 0 { 1e-4 } else { -1e-4 };
-        last.high = last.high.max(last.close);
-        last.low = last.low.min(last.close);
-        series.upsert(last);
+        // Live forming-bar update. (Not with indicators: RSI and MACD
+        // recompute fully on every tick, which would hide the drawing cost.)
+        if !indicators || frame < 5 {
+            let mut last = series.last().expect("non-empty");
+            last.close *= 1.0 + if frame % 2 == 0 { 1e-4 } else { -1e-4 };
+            last.high = last.high.max(last.close);
+            last.low = last.low.min(last.close);
+            series.upsert(last);
+        }
         let data = ChartData {
             series,
             title: "BENCH · 1m",
@@ -170,21 +187,26 @@ fn main() {
         "{:<15} {:>10}  {:>17}  {:>19}  {:>8}",
         "type", "visible", "base avg/max ms", "overlay avg/max ms", "prims"
     );
-    for (ty, visible) in [
-        (ChartType::Candles, n),
-        (ChartType::Candles, 200_000),
-        (ChartType::Candles, 20_000),
-        (ChartType::Candles, 1_000),
-        (ChartType::Candles, 150),
-        (ChartType::HeikinAshi, n),
-        (ChartType::Area, n),
-        (ChartType::Area, 1_000),
+    for (ty, visible, ind) in [
+        (ChartType::Candles, n, false),
+        (ChartType::Candles, 200_000, false),
+        (ChartType::Candles, 20_000, false),
+        (ChartType::Candles, 1_000, false),
+        (ChartType::Candles, 150, false),
+        (ChartType::HeikinAshi, n, false),
+        (ChartType::Area, n, false),
+        (ChartType::Area, 1_000, false),
+        // `+ind`: Volume, EMA, Bollinger Bands, RSI and MACD.
+        (ChartType::Candles, n, true),
+        (ChartType::Candles, 20_000, true),
+        (ChartType::Candles, 1_000, true),
+        (ChartType::Candles, 150, true),
     ] {
-        let (base, overlay, prims) = run(&mut series, ty, visible);
+        let (base, overlay, prims) = run(&mut series, ty, visible, ind);
         let ((ba, bm), (oa, om)) = (ms(&base), ms(&overlay));
         println!(
             "{:<15} {:>10}  {:>8.2} / {:<6.2}  {:>9.2} / {:<6.2}  {:>8}",
-            format!("{ty:?}"),
+            format!("{ty:?}{}", if ind { "+ind" } else { "" }),
             visible.min(n),
             ba,
             bm,
