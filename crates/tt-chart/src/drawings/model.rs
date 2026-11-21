@@ -9,6 +9,7 @@ use super::props::{DrawingRepr, Props};
 use ecolor::Color32;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::sync::atomic::{AtomicU64, Ordering};
+use tt_core::{TimeUnit, Timeframe};
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -365,6 +366,38 @@ impl Span {
             max,
         }
     }
+
+    /// Whether a multiplier of this row's unit is shown.
+    pub fn contains(self, n: u32) -> bool {
+        self.on && (self.min as u32..=self.max as u32).contains(&n)
+    }
+}
+
+/// Quick presets of the Visibility tab ("Visibility on intervals ▸").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VisibilityPreset {
+    CurrentAndAbove,
+    CurrentAndBelow,
+    CurrentOnly,
+    All,
+}
+
+impl VisibilityPreset {
+    pub const ALL: [VisibilityPreset; 4] = [
+        VisibilityPreset::CurrentAndAbove,
+        VisibilityPreset::CurrentAndBelow,
+        VisibilityPreset::CurrentOnly,
+        VisibilityPreset::All,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            VisibilityPreset::CurrentAndAbove => "Current interval and above",
+            VisibilityPreset::CurrentAndBelow => "Current interval and below",
+            VisibilityPreset::CurrentOnly => "Current interval only",
+            VisibilityPreset::All => "All intervals",
+        }
+    }
 }
 
 /// On which intervals a drawing shows (TradingView's Visibility tab).
@@ -393,6 +426,86 @@ impl Visibility {
     /// Shown on every interval (the default).
     pub fn is_all(&self) -> bool {
         *self == Self::ALL
+    }
+
+    /// The rows in tab order.
+    pub const UNITS: [TimeUnit; 6] = TimeUnit::ALL;
+
+    /// The row of an interval unit.
+    pub fn span(&self, unit: TimeUnit) -> Span {
+        match unit {
+            TimeUnit::Second => self.seconds,
+            TimeUnit::Minute => self.minutes,
+            TimeUnit::Hour => self.hours,
+            TimeUnit::Day => self.days,
+            TimeUnit::Week => self.weeks,
+            TimeUnit::Month => self.months,
+        }
+    }
+
+    pub fn span_mut(&mut self, unit: TimeUnit) -> &mut Span {
+        match unit {
+            TimeUnit::Second => &mut self.seconds,
+            TimeUnit::Minute => &mut self.minutes,
+            TimeUnit::Hour => &mut self.hours,
+            TimeUnit::Day => &mut self.days,
+            TimeUnit::Week => &mut self.weeks,
+            TimeUnit::Month => &mut self.months,
+        }
+    }
+
+    /// Largest multiplier of a row (the end of its range).
+    pub fn row_max(unit: TimeUnit) -> u16 {
+        Self::ALL.span(unit).max
+    }
+
+    /// The row and multiplier an interval is tested against. Minute counts
+    /// of an hour or more (90m, 120m) count as hours (TradingView's rows
+    /// stop at 59 minutes), so no interval falls outside every row.
+    pub fn row_of(tf: Timeframe) -> (TimeUnit, u32) {
+        match (tf.unit(), tf.count()) {
+            (TimeUnit::Minute, n) if n >= 60 => (TimeUnit::Hour, n / 60),
+            (u, n) => (u, n),
+        }
+    }
+
+    /// Whether a drawing with this visibility shows on interval `tf`: the
+    /// interval's row is on and its multiplier is within the row's range.
+    pub fn shows(&self, tf: Timeframe) -> bool {
+        let (unit, n) = Self::row_of(tf);
+        self.span(unit).contains(n)
+    }
+
+    /// A preset relative to the current interval `tf`.
+    pub fn preset(p: VisibilityPreset, tf: Timeframe) -> Visibility {
+        use std::cmp::Ordering::*;
+        let (cur, n) = Self::row_of(tf);
+        let n = n.min(u16::MAX as u32) as u16;
+        let mut v = Self::ALL;
+        if p == VisibilityPreset::All {
+            return v;
+        }
+        for unit in Self::UNITS {
+            let s = v.span_mut(unit);
+            match (p, unit.cmp(&cur)) {
+                (_, Equal) => {
+                    let n = n.clamp(1, s.max);
+                    match p {
+                        VisibilityPreset::CurrentAndAbove => s.min = n,
+                        VisibilityPreset::CurrentAndBelow => s.max = n,
+                        _ => {
+                            s.min = n;
+                            s.max = n;
+                        }
+                    }
+                }
+                (VisibilityPreset::CurrentAndAbove, Less)
+                | (VisibilityPreset::CurrentAndBelow, Greater)
+                | (VisibilityPreset::CurrentOnly, _) => s.on = false,
+                _ => {}
+            }
+        }
+        v
     }
 }
 
@@ -460,6 +573,22 @@ impl Drawing {
 
     pub fn set_style(&mut self, s: LineStyle) {
         self.props.set_line_style(s);
+    }
+
+    /// Applies a template or default style: only `props` change; points,
+    /// text, lock, hidden and visibility stay. A style of another tool
+    /// family is ignored (returns false).
+    pub fn apply_style(&mut self, props: &Props) -> bool {
+        if props.kind() != self.props.kind() {
+            return false;
+        }
+        self.props = props.clone();
+        true
+    }
+
+    /// Whether the drawing shows on interval `tf` (`None`: unknown, shown).
+    pub fn shown_on(&self, tf: Option<Timeframe>) -> bool {
+        !self.hidden && tf.is_none_or(|tf| self.visibility.shows(tf))
     }
 }
 

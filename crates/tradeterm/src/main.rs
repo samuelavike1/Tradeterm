@@ -4,6 +4,7 @@ mod app;
 mod chart_settings;
 mod custom_interval;
 mod dialogs;
+mod drawing_settings;
 mod drawing_toolbar;
 mod indicator_settings;
 mod indicators;

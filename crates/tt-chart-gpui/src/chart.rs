@@ -372,18 +372,6 @@ impl<S: ChartSource> Chart<S> {
         done
     }
 
-    /// Edits the selected drawing (floating toolbar).
-    pub(crate) fn edit_drawing(
-        &self,
-        cx: &mut Context<Self>,
-        f: impl FnMut(&mut tt_chart::Drawing),
-    ) {
-        if self.view_mut(cx, |v| v.drawings.edit_selected(f)) {
-            cx.emit(ChartEvent::DrawingsChanged);
-            cx.notify();
-        }
-    }
-
     fn mouse_down(&mut self, e: &MouseDownEvent, cx: &mut Context<Self>) {
         let p = pos(e.position);
         self.motion.stop_momentum();
@@ -404,6 +392,12 @@ impl<S: ChartSource> Chart<S> {
                 DrawingPress::Placed => {
                     self.invalidate(cx);
                     cx.emit(ChartEvent::DrawingsChanged);
+                    cx.notify();
+                    return;
+                }
+                DrawingPress::Open(id) => {
+                    self.invalidate(cx);
+                    cx.emit(ChartEvent::OpenDrawingSettings(id));
                     cx.notify();
                     return;
                 }
@@ -645,7 +639,7 @@ impl<S: ChartSource> Render for Chart<S> {
             .children(self.legend_tooltip(cx))
             .children(self.corner_controls(window, cx))
             .children(self.pane_controls(window, cx))
-            .children(self.drawing_toolbar(cx))
+            .children(self.drawing_toolbar(window, cx))
             .context_menu(self.drawing_menu(cx))
     }
 }

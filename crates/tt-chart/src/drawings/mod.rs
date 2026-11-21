@@ -20,6 +20,7 @@
 mod channel;
 mod constrain;
 mod fib;
+pub mod form;
 mod freehand;
 mod history;
 mod hit;
@@ -33,6 +34,7 @@ mod render;
 mod select;
 mod shapes;
 mod stats;
+pub mod templates;
 mod text;
 
 #[cfg(test)]
@@ -40,18 +42,19 @@ mod tests;
 
 pub use model::{
     Anchor, Drawing, DrawingList, DrawingMap, DrawingTool, FIB_LEVELS, LineStyle, PALETTE,
-    Placement, Rgba, Span, ToolGroup, Visibility, deserialize_drawing_map,
+    Placement, Rgba, Span, ToolGroup, Visibility, VisibilityPreset, deserialize_drawing_map,
 };
 pub use props::{Caps, Props, Stroke};
 pub(crate) use render::{axis_tags, draw_base, draw_overlay};
+pub use templates::{DrawingTemplates, NamedTemplate, ToolTemplates};
 
 use crate::time_axis::SlotTimes;
 use crate::viewport::Viewport;
 use constrain::{Axis, constraint, pick_axis};
 use emath::{Pos2, Rect, pos2};
-use history::{Change, Edit, History};
+use history::{Change, Edit, EditKind, History};
 use place::Placing;
-use tt_core::CandleSeries;
+use tt_core::{CandleSeries, Timeframe};
 
 /// Pointer distance (points) that counts as touching a line or handle.
 const HIT_DISTANCE: f32 = 5.0;
@@ -235,6 +238,8 @@ pub enum DrawingPress {
     Handled,
     /// A drawing was completed (and the tool may have been released).
     Placed,
+    /// Double-click on a drawing (now selected): open its settings.
+    Open(u64),
 }
 
 /// What needs repainting after pointer motion.
@@ -348,6 +353,12 @@ pub struct Drawings {
     plot: Rect,
     /// Changed since [`Self::take_dirty`].
     dirty: bool,
+    /// The chart's interval: drawings whose Visibility excludes it are not
+    /// drawn or hit (`None`: shown on every interval).
+    timeframe: Option<Timeframe>,
+    /// Style new drawings start from, per tool (the tool's saved default
+    /// template); tools not listed use `Props::defaults`.
+    tool_defaults: Vec<(DrawingTool, Props)>,
 }
 
 impl Default for Drawings {
@@ -375,7 +386,91 @@ impl Drawings {
             pane: Rect::NOTHING,
             plot: Rect::NOTHING,
             dirty: false,
+            timeframe: None,
+            tool_defaults: Vec::new(),
         }
+    }
+
+    /// Sets the chart's interval (Visibility tab). Drawings that no longer
+    /// show leave the selection and hover.
+    pub fn set_timeframe(&mut self, tf: Option<Timeframe>) {
+        if self.timeframe == tf {
+            return;
+        }
+        self.timeframe = tf;
+        let items = &self.items;
+        let shown = |id: &u64| items.iter().any(|d| d.id == *id && d.shown_on(tf));
+        self.selection.retain(shown);
+        if self.hovered.is_some_and(|h| !shown(&h)) {
+            self.hovered = None;
+        }
+    }
+
+    pub fn timeframe(&self) -> Option<Timeframe> {
+        self.timeframe
+    }
+
+    /// Whether `d` is drawn and can be hit: not hidden and visible on the
+    /// chart's interval.
+    pub fn is_shown(&self, d: &Drawing) -> bool {
+        d.shown_on(self.timeframe)
+    }
+
+    /// Sets the style new drawings of each tool start from.
+    pub fn set_tool_defaults(&mut self, defaults: Vec<(DrawingTool, Props)>) {
+        self.tool_defaults = defaults;
+    }
+
+    /// The style a new drawing of `tool` starts from.
+    pub fn new_props(&self, tool: DrawingTool) -> Props {
+        self.tool_defaults
+            .iter()
+            .find(|(t, p)| *t == tool && p.kind() == Props::defaults(tool).kind())
+            .map(|(_, p)| p.clone())
+            .unwrap_or_else(|| Props::defaults(tool))
+    }
+
+    /// Edits the selected drawings' style from the floating toolbar.
+    /// Consecutive edits of the same `slot` (e.g. dragging a color slider)
+    /// on the same drawings are one undo step.
+    pub fn edit_selected_style(&mut self, slot: u8, f: impl FnMut(&mut Drawing)) -> bool {
+        self.edit_selected_kind(EditKind::Style(slot), f)
+    }
+
+    /// Changes drawings without recording undo steps (the settings
+    /// dialog's live preview); [`Self::commit_preview`] records the result.
+    pub fn preview(&mut self, ids: &[u64], mut f: impl FnMut(&mut Drawing)) -> bool {
+        let mut any = false;
+        for d in self.items.iter_mut().filter(|d| ids.contains(&d.id)) {
+            f(d);
+            any = true;
+        }
+        any
+    }
+
+    /// Puts drawings back as they were (the settings dialog's Cancel); not
+    /// an undo step.
+    pub fn restore(&mut self, before: &[Drawing]) {
+        for b in before {
+            if let Some(i) = self.index_of(b.id) {
+                self.items[i] = b.clone();
+            }
+        }
+    }
+
+    /// The settings dialog's Ok: records the drawings' changes since
+    /// `before` (their state at open) as one undo step.
+    pub fn commit_preview(&mut self, before: &[Drawing]) -> bool {
+        let after: Vec<Drawing> = before
+            .iter()
+            .filter_map(|b| self.items.iter().find(|d| d.id == b.id).cloned())
+            .filter(|a| before.iter().any(|b| b.id == a.id && b != a))
+            .collect();
+        if after.is_empty() {
+            return false;
+        }
+        self.restore(before);
+        self.replace_drawings(after)
     }
 
     /// Replaces the drawings (e.g. another symbol's), keeping the tool. The
@@ -408,7 +503,11 @@ impl Drawings {
     }
 
     /// Edits the selected drawings (color, width, style, lock, hide).
-    pub fn edit_selected(&mut self, mut f: impl FnMut(&mut Drawing)) -> bool {
+    pub fn edit_selected(&mut self, f: impl FnMut(&mut Drawing)) -> bool {
+        self.edit_selected_kind(EditKind::Other, f)
+    }
+
+    fn edit_selected_kind(&mut self, kind: EditKind, mut f: impl FnMut(&mut Drawing)) -> bool {
         let mut changes = Vec::new();
         for (i, d) in self.items.iter_mut().enumerate() {
             if !self.selection.contains(&d.id) {
@@ -425,22 +524,38 @@ impl Drawings {
         if changes.is_empty() {
             return false;
         }
-        self.record(Edit::new(changes));
+        self.record(Edit {
+            kind,
+            changes,
+            order: None,
+        });
         true
     }
 
     /// Replaces the drawing with `d`'s id (the settings dialog's Ok), as
     /// one undo step.
     pub fn replace_drawing(&mut self, d: Drawing) -> bool {
-        let Some(i) = self.index_of(d.id) else {
+        self.replace_drawings(vec![d])
+    }
+
+    /// Replaces the drawings with these ids, as one undo step.
+    pub fn replace_drawings(&mut self, ds: Vec<Drawing>) -> bool {
+        let mut changes = Vec::new();
+        for d in ds {
+            let Some(i) = self.index_of(d.id) else {
+                continue;
+            };
+            let before = std::mem::replace(&mut self.items[i], d.clone());
+            changes.push(Change {
+                id: d.id,
+                before: Some((i, before)),
+                after: Some((i, d)),
+            });
+        }
+        if changes.is_empty() {
             return false;
-        };
-        let before = std::mem::replace(&mut self.items[i], d.clone());
-        self.record(Edit::new(vec![Change {
-            id: d.id,
-            before: Some((i, before)),
-            after: Some((i, d)),
-        }]));
+        }
+        self.record(Edit::new(changes));
         true
     }
 
@@ -632,6 +747,14 @@ impl Drawings {
             return DrawingPress::Ignored;
         };
         let was_selected = self.is_selected(id);
+        if double && !mods.ctrl {
+            // The first press selected it; keep a multi-selection of the
+            // same drawing (the dialog edits them all).
+            if !was_selected {
+                self.select_only(id);
+            }
+            return DrawingPress::Open(id);
+        }
         let mode = if mods.ctrl && part == DrawingPart::Body {
             DragMode::CtrlPress
         } else if was_selected && self.selection.len() > 1 && part == DrawingPart::Body {

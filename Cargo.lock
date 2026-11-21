@@ -6881,6 +6881,7 @@ dependencies = [
  "futures",
  "gpui-kit",
  "lucide-icons",
+ "serde_json",
  "tokio",
  "tracing",
  "tracing-subscriber",

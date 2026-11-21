@@ -58,7 +58,7 @@ impl Drawings {
     pub(super) fn select_in(&mut self, r: Rect) {
         self.selection.clear();
         for d in &self.items {
-            if d.hidden {
+            if !self.is_shown(d) {
                 continue;
             }
             if let Some((_, pts)) = self.screen.iter().find(|(i, _)| *i == d.id)

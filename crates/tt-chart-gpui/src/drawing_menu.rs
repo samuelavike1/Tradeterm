@@ -3,10 +3,90 @@
 //! gpui-component's context menu for now (a later UI pass restyles it).
 
 use crate::chart::{Chart, ChartEvent, ChartSource};
+use crate::drawing_prefs::{DrawingPrefs, prompt_template_name};
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 use gpui_kit::*;
 use std::rc::Rc;
-use tt_chart::{ChartData, ChartView, Drawing, DrawingMenuTarget, VisualOrder};
+use tt_chart::{
+    ChartData, ChartView, Drawing, DrawingMenuTarget, DrawingTool, Props, VisibilityPreset,
+    VisualOrder,
+};
+
+/// The context menu's "Template ▸" (spec 4.2 / 5.1); deleting named
+/// templates is in the toolbar's and the dialog's template menus.
+fn template_submenu<S: ChartSource>(
+    mut m: PopupMenu,
+    tool: DrawingTool,
+    t: WeakEntity<Chart<S>>,
+    cx: &App,
+) -> PopupMenu {
+    let current = {
+        let t = t.clone();
+        move |cx: &App| {
+            let c = t.upgrade()?;
+            let ds = &c.read(cx).state.read(cx).source.view().drawings;
+            ds.selected_drawing().map(|d| d.props.clone())
+        }
+    };
+    let apply = |t: WeakEntity<Chart<S>>, props: Props, cx: &mut App| {
+        t.update(cx, |c, cx| {
+            c.toolbar_edit(
+                0,
+                |d| {
+                    d.apply_style(&props);
+                },
+                cx,
+            )
+        })
+        .ok();
+    };
+    let cur = current.clone();
+    m = m.item(
+        PopupMenuItem::new("Save drawing template as…").on_click(move |_, w, cx| {
+            if let Some(p) = cur(cx) {
+                prompt_template_name(tool, p, w, cx);
+            }
+        }),
+    );
+    let cur = current.clone();
+    m = m.item(
+        PopupMenuItem::new("Save as default").on_click(move |_, _, cx| {
+            if let Some(p) = cur(cx) {
+                DrawingPrefs::update(cx, |pr| pr.templates.set_default(tool, &p));
+            }
+        }),
+    );
+    let tt = t.clone();
+    m = m.item(
+        PopupMenuItem::new("Apply default drawing template").on_click(move |_, _, cx| {
+            let p = DrawingPrefs::get(cx).templates.new_drawing_props(tool);
+            apply(tt.clone(), p, cx);
+        }),
+    );
+    let tt = t.clone();
+    m = m.item(
+        PopupMenuItem::new("Reset to factory defaults").on_click(move |_, _, cx| {
+            DrawingPrefs::update(cx, |pr| pr.templates.clear_default(tool));
+            apply(tt.clone(), Props::defaults(tool), cx);
+        }),
+    );
+    let prefs = DrawingPrefs::get(cx);
+    let named = prefs.templates.named(tool);
+    if !named.is_empty() {
+        m = m.separator();
+        for n in named {
+            let (tt, name) = (t.clone(), n.name.clone());
+            m = m.item(
+                PopupMenuItem::new(n.name.clone()).on_click(move |_, _, cx| {
+                    if let Some(p) = DrawingPrefs::get(cx).templates.named_props(tool, &name) {
+                        apply(tt.clone(), p, cx);
+                    }
+                }),
+            );
+        }
+    }
+    m
+}
 
 /// The app-wide drawing clipboard (Ctrl + C / Ctrl + V), shared by every
 /// chart, tab and symbol.
@@ -144,13 +224,15 @@ impl<S: ChartSource> Chart<S> {
             let Some(chart) = this.upgrade() else {
                 return menu;
             };
-            let (target, locked, has_items) = {
+            let (target, locked, has_items, same_tool) = {
                 let c = chart.read(cx);
                 let ds = &c.state.read(cx).source.view().drawings;
+                let first = ds.selected_drawing().map(|d| d.tool);
                 (
                     c.menu_target,
                     ds.selected_drawings().all(|d| d.locked),
                     !ds.items.is_empty(),
+                    first.filter(|t| ds.selected_drawings().all(|d| d.tool == *t)),
                 )
             };
             let item = |label: &'static str, f: Command<S>| {
@@ -163,55 +245,70 @@ impl<S: ChartSource> Chart<S> {
             match target {
                 DrawingMenuTarget::Drawing(id) => {
                     let t = this.clone();
-                    menu.min_w(px(220.))
+                    let mut menu = menu
+                        .min_w(px(220.))
                         .item(item(
                             "Settings…",
                             Rc::new(move |_, cx| cx.emit(ChartEvent::OpenDrawingSettings(id))),
                         ))
-                        .separator()
-                        .submenu("Visual order", window, cx, move |mut m, _, _| {
-                            for op in VisualOrder::ALL {
-                                let t = t.clone();
-                                m = m.item(PopupMenuItem::new(op.label()).on_click(
-                                    move |_, _, cx| {
-                                        t.update(cx, |c, cx| c.reorder_drawings(op, cx)).ok();
-                                    },
-                                ));
-                            }
-                            m
-                        })
-                        .separator()
-                        .item(item(
-                            "Clone",
-                            Rc::new(|c, cx| {
-                                c.clone_drawings(cx);
-                            }),
-                        ))
-                        .item(item(
-                            "Copy",
-                            Rc::new(|c, cx| {
-                                c.copy_drawings(cx);
-                            }),
-                        ))
-                        .separator()
-                        .item(item(
-                            if locked { "Unlock" } else { "Lock" },
-                            Rc::new(|c, cx| {
-                                c.toggle_drawings_locked(cx);
-                            }),
-                        ))
-                        .item(item(
-                            "Hide",
-                            Rc::new(|c, cx| {
-                                c.hide_drawings(cx);
-                            }),
-                        ))
-                        .item(item(
-                            "Remove",
-                            Rc::new(|c, cx| {
-                                c.delete_selected_drawing(cx);
-                            }),
-                        ))
+                        .separator();
+                    if let Some(tool) = same_tool {
+                        let t = this.clone();
+                        menu = menu.submenu("Template", window, cx, move |m, _, cx| {
+                            template_submenu(m, tool, t.clone(), cx)
+                        });
+                    }
+                    let tv = this.clone();
+                    menu.submenu("Visibility on intervals", window, cx, move |mut m, _, _| {
+                        for p in VisibilityPreset::ALL {
+                            let t = tv.clone();
+                            m = m.item(PopupMenuItem::new(p.label()).on_click(move |_, _, cx| {
+                                t.update(cx, |c, cx| c.set_drawings_visibility(p, cx)).ok();
+                            }));
+                        }
+                        m
+                    })
+                    .submenu("Visual order", window, cx, move |mut m, _, _| {
+                        for op in VisualOrder::ALL {
+                            let t = t.clone();
+                            m = m.item(PopupMenuItem::new(op.label()).on_click(move |_, _, cx| {
+                                t.update(cx, |c, cx| c.reorder_drawings(op, cx)).ok();
+                            }));
+                        }
+                        m
+                    })
+                    .separator()
+                    .item(item(
+                        "Clone",
+                        Rc::new(|c, cx| {
+                            c.clone_drawings(cx);
+                        }),
+                    ))
+                    .item(item(
+                        "Copy",
+                        Rc::new(|c, cx| {
+                            c.copy_drawings(cx);
+                        }),
+                    ))
+                    .separator()
+                    .item(item(
+                        if locked { "Unlock" } else { "Lock" },
+                        Rc::new(|c, cx| {
+                            c.toggle_drawings_locked(cx);
+                        }),
+                    ))
+                    .item(item(
+                        "Hide",
+                        Rc::new(|c, cx| {
+                            c.hide_drawings(cx);
+                        }),
+                    ))
+                    .item(item(
+                        "Remove",
+                        Rc::new(|c, cx| {
+                            c.delete_selected_drawing(cx);
+                        }),
+                    ))
                 }
                 DrawingMenuTarget::Empty => {
                     let mut menu = menu.min_w(px(220.));

@@ -114,6 +114,7 @@ impl ChartTab {
         chart.main_collapsed = s.main_collapsed;
         chart.indicators = s.indicators.iter().map(|i| i.to_indicator()).collect();
         chart.legend_collapsed = s.legend_collapsed;
+        chart.drawings.set_timeframe(Some(s.timeframe));
         let (_, rx) = crossbeam_channel::unbounded();
         let mut tab = Self {
             id,
@@ -265,6 +266,7 @@ impl ChartTab {
     pub fn set_timeframe(&mut self, tf: Timeframe, shared: &Shared) {
         if tf != self.timeframe {
             self.timeframe = tf;
+            self.chart.drawings.set_timeframe(Some(tf));
             self.restart(shared);
         }
     }
