@@ -10,7 +10,6 @@ use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use lucide_icons::Icon as Lucide;
 use tt_core::StudyKind;
 use tt_ui::hsla;
 use tt_ui::prelude::*;
@@ -385,12 +384,7 @@ impl Render for IndicatorsPanel {
             .child(self.nav_item(Section::Favorites, "Favorites", Glyph::STAR, cx))
             .child(div().h(px(S2)))
             .child(caption("Built-in", H_PICKER_CAPTION, muted).pl(px(S3)))
-            .child(self.nav_item(
-                Section::Technicals,
-                "Technicals",
-                Glyph::Lucide(Lucide::ChartLine),
-                cx,
-            ));
+            .child(self.nav_item(Section::Technicals, "Technicals", Glyph::CHART_LINE, cx));
         v_flex()
             .id("indicators")
             .w_full()
