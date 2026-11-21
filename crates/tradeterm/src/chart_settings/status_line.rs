@@ -1,65 +1,126 @@
 //! The Status line page: instrument readout and indicator legends.
 
 use super::*;
+use tt_chart::style::TitleFormat;
 
 impl ChartSettingsPanel {
-    pub(super) fn status_line_page(
-        &self,
-        body: Div,
-        d: &ChartStyle,
-        muted: Hsla,
-        cx: &mut Context<Self>,
-    ) -> Div {
-        body.child(section("INSTRUMENT", muted))
-            .child(row(self.check(
-                "st-title",
-                "Title",
-                d.status_line.title,
-                |s, v| s.status_line.title = v,
+    pub(super) fn status_line_page(&mut self, cx: &mut Context<Self>) -> Rows {
+        let sl = self.draft.status_line;
+        let format = self
+            .select(
+                "st.title_format",
+                TitleFormat::ALL.iter().map(|v| (*v, v.label())),
+                sl.title_format,
+                |s, v| s.status_line.title_format = v,
                 cx,
-            )))
-            .child(row(self.check(
-                "st-values",
+            )
+            .width(tokens::W_FIELD_SELECT + tokens::S6 * 2.0);
+        let mut rows = vec![
+            section("Symbol"),
+            check!(self, cx, "st.logo", "Logo", status_line.logo).into_any_element(),
+            check!(self, cx, "st.title", "Title", status_line.title)
+                .control(format)
+                .into_any_element(),
+            check!(
+                self,
+                cx,
+                "st.interval",
+                "Interval",
+                status_line.show_interval
+            )
+            .indent()
+            .into_any_element(),
+            check!(
+                self,
+                cx,
+                "st.exchange",
+                "Exchange",
+                status_line.show_exchange
+            )
+            .indent()
+            .into_any_element(),
+            check!(
+                self,
+                cx,
+                "st.market",
+                "Open market status",
+                status_line.market_status
+            )
+            .into_any_element(),
+            check!(
+                self,
+                cx,
+                "st.values",
                 "Chart values",
-                d.status_line.chart_values,
-                |s, v| s.status_line.chart_values = v,
+                status_line.chart_values
+            )
+            .into_any_element(),
+            check!(
+                self,
                 cx,
-            )))
-            .child(row(self.check(
-                "st-change",
+                "st.change",
                 "Bar change values",
-                d.status_line.bar_change,
-                |s, v| s.status_line.bar_change = v,
+                status_line.bar_change
+            )
+            .into_any_element(),
+            check!(
+                self,
                 cx,
-            )))
-            .child(row(self.check(
-                "st-volume",
-                "Volume",
-                d.status_line.volume,
-                |s, v| s.status_line.volume = v,
+                "st.day_change",
+                "Last day change values",
+                status_line.last_day_change
+            )
+            .into_any_element(),
+            check!(self, cx, "st.volume", "Volume", status_line.volume).into_any_element(),
+            section("Indicators"),
+            check!(
+                self,
                 cx,
-            )))
-            .child(section("INDICATORS", muted))
-            .child(row(self.check(
-                "lg-titles",
+                "lg.titles",
                 "Titles",
-                d.status_line.indicator_titles,
-                |s, v| s.status_line.indicator_titles = v,
+                status_line.indicator_titles
+            )
+            .into_any_element(),
+            check!(
+                self,
                 cx,
-            )))
-            .child(row(self.check(
-                "lg-inputs",
+                "lg.inputs",
                 "Inputs",
-                d.status_line.indicator_inputs,
-                |s, v| s.status_line.indicator_inputs = v,
+                status_line.indicator_inputs
+            )
+            .into_any_element(),
+            check!(
+                self,
                 cx,
-            )))
-            .child(row(self.check(
-                "lg-values",
+                "lg.values",
                 "Values",
-                d.status_line.indicator_values,
-                |s, v| s.status_line.indicator_values = v,
+                status_line.indicator_values
+            )
+            .into_any_element(),
+        ];
+        // Transparency in 10 % steps, shown as opacity (TradingView's slider).
+        let opacity = 100 - sl.indicator_background_transparency.min(100);
+        let sel = self
+            .select(
+                "lg.bg_opacity",
+                (0..=10u8).map(|i| (i * 10, format!("{}%", i * 10))),
+                (opacity / 10) * 10,
+                |s, v| s.status_line.indicator_background_transparency = 100 - v,
                 cx,
-            )))
+            )
+            .width(W_SELECT_SM);
+        rows.push(
+            check!(
+                self,
+                cx,
+                "lg.bg",
+                "Background",
+                status_line.indicator_background
+            )
+            .control(sel)
+            .unit("opacity")
+            .into_any_element(),
+        );
+        rows
     }
 }
