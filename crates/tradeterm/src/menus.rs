@@ -108,7 +108,7 @@ pub fn section_rows(section: Section, custom: &[Timeframe]) -> Vec<Timeframe> {
 /// Menu height cap: the window minus the chrome rows and a margin, so a long
 /// interval list scrolls instead of running off screen.
 fn menu_max_h(window: &Window) -> Pixels {
-    let reserved = H_TITLE_BAR + H_TOOLBAR + H_STATUS_BAR + S4;
+    let reserved = H_TITLE_BAR + H_TOOLBAR + H_BOTTOM_BAR + S4;
     (window.viewport_size().height - reserved.px()).max((H_MENU_ROW * 6.).px())
 }
 

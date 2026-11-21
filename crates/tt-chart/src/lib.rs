@@ -22,6 +22,7 @@ pub mod indicator_style;
 pub mod indicators;
 mod kind;
 pub mod lod;
+pub mod range;
 pub mod render;
 pub mod scale;
 pub mod style;

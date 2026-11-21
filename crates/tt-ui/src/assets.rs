@@ -70,6 +70,7 @@ icons!(
     "draw-eye",
     "draw-eye-off",
     "draw-trash",
+    "go-to-date",
 );
 
 /// Our icons plus gpui-kit's default asset bundle.
