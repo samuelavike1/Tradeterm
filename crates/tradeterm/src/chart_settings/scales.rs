@@ -177,7 +177,8 @@ impl ChartSettingsPanel {
             )
             .into(),
         );
-        // Plus button: hidden until the price scale has one (BACKLOG.md).
+        // The "+" at the crosshair on the price scale: add an alert there.
+        rows.push(check!(self, cx, "sc.plus", "Plus button", scales.plus_button).into());
         rows.push(
             check!(
                 self,

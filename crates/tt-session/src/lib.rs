@@ -4,6 +4,8 @@
 //! synthetic stress-test data ([`synthetic`]), asset names and logos
 //! ([`assets`]).
 
+pub mod alert_engine;
+pub mod alerts;
 pub mod assets;
 pub mod fsutil;
 pub mod indicator_templates;

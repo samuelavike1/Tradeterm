@@ -236,7 +236,7 @@ impl Default for ScalesStyle {
             lock_ratio: None,
             placement: ScalePlacement::Auto,
             no_overlapping_labels: true,
-            plus_button: false,
+            plus_button: true,
             countdown: true,
             symbol_label: LabelMode::ValueLine,
             symbol_value_mode: LastValueMode::AccordingToScale,

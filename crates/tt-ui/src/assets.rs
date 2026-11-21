@@ -70,6 +70,8 @@ icons!(
     "draw-eye",
     "draw-eye-off",
     "draw-trash",
+    "alarm-clock",
+    "alarm-clock-plus",
 );
 
 /// Our icons plus gpui-kit's default asset bundle.

@@ -257,6 +257,9 @@ pub struct ChartView {
     applied_right_margin: f32,
     /// Ticker, currency and description for labels and the watermark.
     labels: SymbolLabels,
+    /// Alert levels of this symbol (set by the app, not saved), see
+    /// [`crate::alert_lines`].
+    pub alert_lines: Vec<crate::alert_lines::AlertLine>,
 }
 
 impl Default for ChartView {
@@ -297,6 +300,7 @@ impl ChartView {
             applied_right_margin: DEFAULT_RIGHT_OFFSET,
             labels: SymbolLabels::default(),
             tz: crate::TzOffsets::utc(),
+            alert_lines: Vec::new(),
         }
     }
 
@@ -827,9 +831,55 @@ impl ChartView {
         theme: &Theme,
         input: RenderInput,
     ) {
-        if let Some(hits) = self.with_scene(data, theme, input, |s| draw::draw_overlay(canvas, s)) {
+        let alert_lines = std::mem::take(&mut self.alert_lines);
+        let hits = self.with_scene(data, theme, input, |s| {
+            let hits = draw::draw_overlay(canvas, s);
+            crate::alert_lines::draw_plus(canvas, s, &alert_lines);
+            hits
+        });
+        self.alert_lines = alert_lines;
+        if let Some(hits) = hits {
             self.legend_hits = hits;
         }
+    }
+
+    /// The alert line (id, price) under `p` in the last frame: its line, axis tag
+    /// or alarm-clock tag.
+    pub fn alert_line_at(&self, p: Pos2) -> Option<(u64, f64)> {
+        let fr = self.frame.as_ref()?;
+        if self.main_collapsed || !self.style.alerts.lines {
+            return None;
+        }
+        let price_pane = Rect::from_min_max(
+            pos2(fr.vp.plot.left, fr.plot.top()),
+            pos2(fr.vp.plot.right, fr.vp.plot.bottom),
+        );
+        let only_active = self.style.alerts.only_active;
+        let lines: Vec<_> = self
+            .alert_lines
+            .iter()
+            .filter(|l| l.active || !only_active)
+            .cloned()
+            .collect();
+        crate::alert_lines::hit(&lines, p, price_pane, fr.price_axis, |v| fr.vp.y_of(v))
+    }
+
+    /// The price at screen `y` on the price pane (last frame).
+    pub fn price_at_y(&self, y: f32) -> Option<f64> {
+        let fr = self.frame.as_ref()?;
+        Some(fr.vp.price_at(y))
+    }
+
+    /// The price scale's "+" button is under `p` (it follows the pointer
+    /// along the axis): the price there.
+    pub fn plus_button_at(&self, p: Pos2) -> Option<f64> {
+        let fr = self.frame.as_ref()?;
+        if !self.style.scales.plus_button || self.main_collapsed {
+            return None;
+        }
+        let r = crate::alert_lines::plus_rect(fr.vp.plot.right, p.y);
+        let pane = fr.plot.top()..=fr.vp.plot.bottom;
+        (r.x_range().contains(p.x) && pane.contains(&p.y)).then(|| fr.vp.price_at(p.y))
     }
 
     /// Builds the [`Scene`] for the stored frame and runs `f` on it.
@@ -1098,9 +1148,12 @@ impl ChartView {
         );
         self.derived = derived;
         self.frame = Some(frame);
+        let alert_lines = std::mem::take(&mut self.alert_lines);
         self.with_scene(data, theme, RenderInput::default(), |s| {
-            draw::draw_base(canvas, s)
+            draw::draw_base(canvas, s);
+            crate::alert_lines::draw(canvas, s, &alert_lines);
         });
+        self.alert_lines = alert_lines;
         self.last_layout = ChartLayout {
             plot,
             price_axis,

@@ -36,6 +36,8 @@ actions!(
         CopySnapshot,
         /// The chart Settings dialog (gear on the app bar).
         OpenChartSettings,
+        /// "Create alert" (Alt+A).
+        CreateAlert,
     ]
 );
 
@@ -51,6 +53,7 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-s", SaveLayout, None),
         KeyBinding::new("ctrl-alt-s", DownloadSnapshot, None),
         KeyBinding::new("ctrl-shift-s", CopySnapshot, None),
+        KeyBinding::new("alt-a", CreateAlert, chart),
     ]
 }
 
@@ -83,6 +86,12 @@ pub fn on_app_bar_actions(root: Stateful<Div>, cx: &mut Context<TradeTerm>) -> S
     .on_action(
         cx.listener(|this, _: &OpenChartSettings, window, cx| this.open_chart_settings(window, cx)),
     )
+    .on_action(cx.listener(|this, _: &CreateAlert, window, cx| {
+        if !this.chart_has_keyboard(window, cx) {
+            return cx.propagate();
+        }
+        this.open_create_alert(window, cx);
+    }))
 }
 
 impl TradeTerm {
@@ -174,7 +183,15 @@ impl TradeTerm {
                     )
                     .on_click(cx.listener(|this, _, window, cx| this.open_indicators(window, cx))),
             )
-            .child(crate::indicator_templates::templates_menu(cx));
+            .child(crate::indicator_templates::templates_menu(cx))
+            .child(
+                ToolbarButton::text("create-alert", "Alert")
+                    .leading(Glyph::ALARM_PLUS)
+                    .tooltip_action("Create alert", &CreateAlert, Some(KEY_CONTEXT))
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.open_create_alert(window, cx)),
+                    ),
+            );
 
         let (can_undo, can_redo) = self.undo_state(cx);
         let history = h_flex()

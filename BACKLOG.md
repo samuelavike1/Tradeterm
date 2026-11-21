@@ -9,11 +9,13 @@ Add to this list whenever something is skipped; remove an entry when it lands.
 - Scale price chart only (indicators keep their own range).
 - Labels › / Lines › submenus in full (high/low labels, bid/ask, pre/post market,
   previous day close, symbol name label).
-- Plus button on the price scale (quick alert / order at a price).
+- Plus button menu: TradingView offers orders next to "Add alert" (we open the
+  alert dialog directly).
 
 ## Chart settings dialog
 - Trading tab (order/position lines, execution marks, buy/sell buttons).
-- Alerts tab.
+- Alerts tab (alert line color, only active alerts, volume, auto-hide toasts:
+  the model exists and the chart reads lines / only active; no dialog page yet).
 - Events tab (dividends, splits, earnings, economic events).
 - Template menu (save / load / apply default settings) in the dialog footer.
 - Timezone setting (time axis is UTC today).
@@ -55,9 +57,6 @@ Add to this list whenever something is skipped; remove an entry when it lands.
 - Remember magnet / keep drawing / lock / hide across restarts.
 - Flyout menus open centered on their button (TradingView aligns their top).
 - Object tree (list of drawings and indicators).
-- Floating drawing toolbar "Add alert" button (TradingView's clock-plus
-  between settings and lock): needs the alert engine (see the app bar's
-  "Create alert").
 - Ticks and Ranges visibility rows only persist: tradeterm has no tick or
   range-based charts yet.
 - TradingView-measured settings dialog layout (docs/specs/ui-guidelines.md
@@ -77,8 +76,6 @@ Add to this list whenever something is skipped; remove an entry when it lands.
 ## Top app bar (docs/specs/appbar.md)
 - Compare / add symbol (+): needs a second live series per chart, a percent
   overlay on the price pane (or its own scale / pane) and a legend row for it.
-- Create alert (Alt + A): needs an alert engine evaluating conditions on live
-  data, an alert list and notifications.
 - Bar replay: needs a replay source (history cut at a bar, timed feed, step /
   speed) and the replay toolbar on the chart.
 - Layout setup: several charts per layout (1–16 grids) with symbol / interval /
@@ -103,7 +100,7 @@ Add to this list whenever something is skipped; remove an entry when it lands.
   throttled repaints). The model fields exist; the dialog rows are hidden.
 - Navigation buttons on the chart (zoom / scroll / reset at the bottom): setting
   exists in the model, dialog row hidden.
-- Pre/post market and Plus button on the price scale (n/a for crypto / blocked).
+- Pre/post market on the price scale (n/a for crypto / blocked).
 
 ## Drawing settings (TradingView parity follow-ups)
 - Rotated text on the chart canvas (vertical line text is stacked upright today).
@@ -118,3 +115,18 @@ Add to this list whenever something is skipped; remove an entry when it lands.
 - VWAP: anchor period, bands. OBV: signal / smoothing.
 - Indicator dialog: "Dock to right" pin; TradingView's own plot-type icons.
 
+
+## Alerts (docs/specs/alerts.md §6)
+- Multi-condition alerts ("+ Add condition"), indicator / technical and
+  watchlist alerts, alerts on indicator panes.
+- Dialog header: symbol switcher and the template button; TradingView's
+  sub-pages (we use top tabs) and the calendar for a custom expiration (we
+  take `YYYY-MM-DD HH:MM`).
+- Notifications: email, webhook, mobile push, plain-text email, notification
+  schedule, sound choice / duration, OS (desktop) toasts; the Settings ›
+  Alerts volume is not applied (one system sound).
+- Panel: "Customize list" options, "Current time interval" filter, alerts by
+  type, "Alerts settings…".
+- "Moving" alerts wait for N bars of live data (no seeding from history);
+  `{{volume}}` prints NaN (the feeds carry no bar volume).
+- Alerts run only while the app is open (no server).

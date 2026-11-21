@@ -157,9 +157,13 @@ impl Glyph {
     pub const DRAW_EYE: Glyph = Glyph::Svg("tt-icons/draw-eye.svg");
     pub const DRAW_EYE_OFF: Glyph = Glyph::Svg("tt-icons/draw-eye-off.svg");
     pub const DRAW_TRASH: Glyph = Glyph::Svg("tt-icons/draw-trash.svg");
+    /// Alarm clock (alerts: app bar, panel, alert tags).
+    pub const ALARM: Glyph = Glyph::Svg("tt-icons/alarm-clock.svg");
+    /// Alarm clock with a plus ("Create alert", "Add alert").
+    pub const ALARM_PLUS: Glyph = Glyph::Svg("tt-icons/alarm-clock-plus.svg");
 
     /// Every SVG glyph with a name (gallery contact sheet).
-    pub const SVG_SET: [(&'static str, Glyph); 40] = [
+    pub const SVG_SET: [(&'static str, Glyph); 42] = [
         ("Bars", Glyph::CHART_BARS),
         ("Candles", Glyph::CHART_CANDLES),
         ("Hollow candles", Glyph::CHART_HOLLOW_CANDLES),
@@ -200,6 +204,8 @@ impl Glyph {
         ("Show", Glyph::DRAW_EYE),
         ("Hide", Glyph::DRAW_EYE_OFF),
         ("Remove", Glyph::DRAW_TRASH),
+        ("Alert", Glyph::ALARM),
+        ("Add alert", Glyph::ALARM_PLUS),
     ];
 
     /// The font character (`None` for [`Glyph::StarFilled`] and SVGs).

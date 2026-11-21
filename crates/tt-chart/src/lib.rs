@@ -14,6 +14,7 @@
 //!   ([`ChartView::render_base`], [`ChartView::render_overlay`]), hit testing
 //!   and input (pan, zoom, axis and divider drags, legend buttons).
 
+pub mod alert_lines;
 pub mod bars;
 mod derived;
 mod draw;

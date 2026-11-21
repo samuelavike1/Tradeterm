@@ -192,6 +192,25 @@ pub enum ChartEvent {
     /// "Settings…" in a drawing's context menu (the drawing settings
     /// dialog; the drawing is selected).
     OpenDrawingSettings(u64),
+    /// A click on an alert line or its tag (edit the alert).
+    AlertClicked(u64),
+    /// An alert line at `from` was dragged to `price` (unrounded).
+    AlertMoved { id: u64, from: f64, price: f64 },
+    /// The price scale's "+" at `price` (unrounded): add an alert there.
+    AddAlertAt(f64),
+    /// "Add alert" on the floating toolbar of a line drawing.
+    AddDrawingAlert(u64),
+}
+
+/// An alert line being dragged.
+#[derive(Debug, Clone, Copy)]
+struct AlertDrag {
+    id: u64,
+    from_y: f32,
+    /// The line's price when the drag started, and now.
+    from: f64,
+    price: f64,
+    moved: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -231,6 +250,7 @@ pub struct Chart<S: ChartSource> {
     last_frame: Option<Instant>,
     /// What the last right-click was on (the drawing context menu reads it).
     pub(crate) menu_target: tt_chart::DrawingMenuTarget,
+    alert_drag: Option<AlertDrag>,
 }
 
 impl<S: ChartSource> EventEmitter<ChartEvent> for Chart<S> {}
@@ -282,6 +302,21 @@ impl<S: ChartSource> Chart<S> {
             last_pane: None,
             legend_tip: None,
             menu_target: tt_chart::DrawingMenuTarget::None,
+            alert_drag: None,
+        }
+    }
+
+    /// The price-scale "+" or an alert line under `p` (no drawing tool in
+    /// use): `(plus price, alert id)`.
+    fn alert_hit(&self, p: Pos2, cx: &App) -> (Option<f64>, Option<(u64, f64)>) {
+        let view = self.state.read(cx).source.view();
+        if view.drawings.tool.is_some() {
+            return (None, None);
+        }
+        // An alert's tag sits where the "+" would: the alert wins.
+        match view.alert_line_at(p) {
+            Some(line) => (None, Some(line)),
+            None => (view.plus_button_at(p), None),
         }
     }
 
@@ -378,6 +413,24 @@ impl<S: ChartSource> Chart<S> {
         self.drag_velocity.reset();
         let hit = self.state.read(cx).source.view().hit_test(p);
         let double = e.click_count >= 2;
+        // The price scale's "+" and alert lines (click: edit, drag: move).
+        match self.alert_hit(p, cx) {
+            (Some(price), _) => {
+                cx.emit(ChartEvent::AddAlertAt(price));
+                return;
+            }
+            (None, Some((id, price))) => {
+                self.alert_drag = Some(AlertDrag {
+                    id,
+                    from_y: p.y,
+                    from: price,
+                    price,
+                    moved: false,
+                });
+                return;
+            }
+            _ => {}
+        }
         // Drawings first: the active tool places points; otherwise a press on
         // a drawing selects it and starts dragging it.
         if hit == ChartHit::Plot && !(double && e.modifiers.control) {
@@ -441,6 +494,29 @@ impl<S: ChartSource> Chart<S> {
 
     fn mouse_move(&mut self, e: &MouseMoveEvent, cx: &mut Context<Self>) {
         let p = pos(e.position);
+        if let Some(mut d) = self.alert_drag {
+            d.moved |= (p.y - d.from_y).abs() > 2.0;
+            if d.moved {
+                let price = self.state.read(cx).source.view().price_at_y(p.y);
+                if let Some(price) = price {
+                    let old = d.price;
+                    d.price = price;
+                    self.view_mut(cx, |v| {
+                        // A channel has two lines with one id: the dragged one.
+                        if let Some(l) = v
+                            .alert_lines
+                            .iter_mut()
+                            .find(|l| l.id == d.id && l.price == old)
+                        {
+                            l.price = price;
+                        }
+                    });
+                }
+            }
+            self.alert_drag = Some(d);
+            self.set_pointer(Some(p), cx);
+            return;
+        }
         if let Some((drag, from)) = self.drag {
             let d = p - from;
             self.drag = Some((drag, p));
@@ -479,8 +555,13 @@ impl<S: ChartSource> Chart<S> {
         } else if ds.hovered.is_some() {
             CursorStyle::PointingHand
         } else {
-            cursor_for(hit)
+            match self.alert_hit(p, cx) {
+                (Some(_), _) => CursorStyle::PointingHand,
+                (None, Some(_)) => CursorStyle::ResizeUpDown,
+                _ => cursor_for(hit),
+            }
         };
+        let view = self.state.read(cx).source.view();
         let l = view.last_layout();
         let axis_hover = l.price_axis.x_range().contains(p.x)
             && p.y >= l.price_axis.top()
@@ -509,6 +590,18 @@ impl<S: ChartSource> Chart<S> {
     }
 
     fn mouse_up(&mut self, e: &MouseUpEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(d) = self.alert_drag.take() {
+            if d.moved && d.price.is_finite() {
+                cx.emit(ChartEvent::AlertMoved {
+                    id: d.id,
+                    from: d.from,
+                    price: d.price,
+                });
+            } else if !d.moved {
+                cx.emit(ChartEvent::AlertClicked(d.id));
+            }
+            return;
+        }
         if let Some((Drag::Divider(_), _)) = self.drag {
             cx.emit(ChartEvent::Changed);
         }

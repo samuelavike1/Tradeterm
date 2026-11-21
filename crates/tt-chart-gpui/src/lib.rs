@@ -15,6 +15,7 @@ pub use canvas::{CanvasFonts, GpuiCanvas, hsla};
 pub use chart::{Chart, ChartEvent, ChartSource, ChartState, LayerStats, SeriesSource};
 pub use drawing_menu::DrawingClipboard;
 pub use drawing_prefs::{DrawingPrefs, TemplateTarget, prompt_template_name, template_menu};
+pub use drawing_toolbar::supports_alert;
 
 /// Font family of the Lucide icon font: the kit's (ui-guidelines G1).
 pub use tt_ui::ICON_FONT;
