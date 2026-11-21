@@ -278,11 +278,7 @@ impl Render for IndicatorsPanel {
         };
         let this = cx.entity().downgrade();
         let nav = NavTabs::vertical()
-            .item(
-                Section::Favorites.id(),
-                "Favorites",
-                Some(Glyph::STAR),
-            )
+            .item(Section::Favorites.id(), "Favorites", Some(Glyph::STAR))
             .item(
                 Section::Technicals.id(),
                 "Technicals",

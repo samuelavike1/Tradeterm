@@ -252,7 +252,9 @@ fn slots(study: &Study) -> (Vec<NumberSlot>, Vec<ColorSlot>) {
     let mut colors = Vec::new();
     for d in meta.inputs {
         match d.kind {
-            InputKind::Int { .. } | InputKind::Float { .. } => numbers.push(NumberSlot::Input(d.id)),
+            InputKind::Int { .. } | InputKind::Float { .. } => {
+                numbers.push(NumberSlot::Input(d.id))
+            }
             InputKind::Color => colors.push(ColorSlot::Input(d.id)),
             _ => {}
         }
@@ -378,14 +380,16 @@ impl IndicatorSettingsPanel {
                     .max(max)
                     .default_value(text)
             });
-            subs.push(
-                cx.subscribe_in(&input, window, move |this, input, ev: &InputEvent, w, cx| {
+            subs.push(cx.subscribe_in(
+                &input,
+                window,
+                move |this, input, ev: &InputEvent, w, cx| {
                     if let InputEvent::Change = ev {
                         let text = input.read(cx).value().to_string();
                         this.number_changed(slot, &text, w, cx);
                     }
-                }),
-            );
+                },
+            ));
             numbers.push((slot, input));
         }
         let mut colors = Vec::new();
@@ -413,16 +417,14 @@ impl IndicatorSettingsPanel {
                     .step(1.0)
                     .default_value(SliderValue::Range(a as f32, b as f32))
             });
-            subs.push(cx.subscribe_in(
-                &slider,
-                window,
-                move |this, _, ev: &SliderEvent, w, cx| {
+            subs.push(
+                cx.subscribe_in(&slider, window, move |this, _, ev: &SliderEvent, w, cx| {
                     let (SliderEvent::Change(v) | SliderEvent::Release(v)) = ev;
                     if let SliderValue::Range(a, b) = *v {
                         this.slider_changed(u, a.round() as u16, b.round() as u16, w, cx);
                     }
-                },
-            ));
+                }),
+            );
             sliders.push((u, slider));
         }
         // The dialog dropped this panel: closing any way but Ok (×, Esc,
@@ -583,7 +585,10 @@ impl IndicatorSettingsPanel {
             .update(cx, |a, cx| a.save_indicator_default(p, cx))
             .ok();
         let short = self.kind.meta().short;
-        window.push_notification(format!("Saved as the default for new {short} indicators"), cx);
+        window.push_notification(
+            format!("Saved as the default for new {short} indicators"),
+            cx,
+        );
     }
 
     fn remove_default(&mut self, cx: &mut Context<Self>) {
@@ -696,7 +701,10 @@ impl IndicatorSettingsPanel {
     }
 
     fn number(&self, slot: NumberSlot) -> Option<&Entity<InputState>> {
-        self.numbers.iter().find(|(s, _)| *s == slot).map(|(_, e)| e)
+        self.numbers
+            .iter()
+            .find(|(s, _)| *s == slot)
+            .map(|(_, e)| e)
     }
 
     fn color(&self, slot: ColorSlot) -> Option<&Entity<ColorPickerState>> {
@@ -795,24 +803,21 @@ impl IndicatorSettingsPanel {
         let panel = cx.new(|cx| SavePresetPanel::new(existing, window, cx));
         let (focus, read) = (panel.clone(), panel.clone());
         let this = cx.entity().downgrade();
-        let footer = DialogFooter::new()
-            .cancel()
-            .ok("Save")
-            .on_ok(move |_, cx| {
-                let name = read.read(cx).input.read(cx).value().to_string();
-                if tt_session::settings::preset_name(&name).is_none() {
-                    return false;
+        let footer = DialogFooter::new().cancel().ok("Save").on_ok(move |_, cx| {
+            let name = read.read(cx).input.read(cx).value().to_string();
+            if tt_session::settings::preset_name(&name).is_none() {
+                return false;
+            }
+            this.update(cx, |p, cx| {
+                if let Some(preset) = p.preset(cx) {
+                    p.app
+                        .update(cx, |a, cx| a.save_indicator_preset(&name, preset, cx))
+                        .ok();
                 }
-                this.update(cx, |p, cx| {
-                    if let Some(preset) = p.preset(cx) {
-                        p.app
-                            .update(cx, |a, cx| a.save_indicator_preset(&name, preset, cx))
-                            .ok();
-                    }
-                })
-                .ok();
-                true
-            });
+            })
+            .ok();
+            true
+        });
         let opts = DialogOpts::new("Save preset", DialogSize::Sm)
             .footer(footer)
             .on_open(move |window, cx| {
@@ -836,13 +841,20 @@ impl IndicatorSettingsPanel {
         }
     }
 
-    fn input_control(&self, def: &'static InputDef, study: &Study, cx: &Context<Self>) -> AnyElement {
+    fn input_control(
+        &self,
+        def: &'static InputDef,
+        study: &Study,
+        cx: &Context<Self>,
+    ) -> AnyElement {
         let id = def.id;
         match (def.kind, study.get(id)) {
-            (InputKind::Int { .. } | InputKind::Float { .. }, _) => match self.number(NumberSlot::Input(id)) {
-                Some(s) => NumberField::new(s).into_any_element(),
-                None => div().into_any_element(),
-            },
+            (InputKind::Int { .. } | InputKind::Float { .. }, _) => {
+                match self.number(NumberSlot::Input(id)) {
+                    Some(s) => NumberField::new(s).into_any_element(),
+                    None => div().into_any_element(),
+                }
+            }
             (InputKind::Bool, Some(InputValue::Bool(b))) => {
                 let f = self.setter(cx, move |ind, v: bool| {
                     ind.study.set(id, InputValue::Bool(v));
@@ -924,7 +936,12 @@ impl IndicatorSettingsPanel {
         dim(row, enabled)
     }
 
-    fn inputs_tab(&self, study: &Study, style: &IndicatorStyle, cx: &Context<Self>) -> Vec<AnyElement> {
+    fn inputs_tab(
+        &self,
+        study: &Study,
+        style: &IndicatorStyle,
+        cx: &Context<Self>,
+    ) -> Vec<AnyElement> {
         let meta = study.meta();
         let mut out = Vec::new();
         let mut group = None;
@@ -978,7 +995,12 @@ impl IndicatorSettingsPanel {
             .into_any_element()
     }
 
-    fn style_tab(&self, study: &Study, style: &IndicatorStyle, cx: &Context<Self>) -> Vec<AnyElement> {
+    fn style_tab(
+        &self,
+        study: &Study,
+        style: &IndicatorStyle,
+        cx: &Context<Self>,
+    ) -> Vec<AnyElement> {
         let meta = study.meta();
         let lw = SIZE.label_width();
         let mut out = Vec::new();
@@ -1011,13 +1033,17 @@ impl IndicatorSettingsPanel {
                     p.width,
                     p.line_style,
                     self.setter(cx, move |ind, w| ind.style.plot_mut(id).width = Some(w)),
-                    self.setter(cx, move |ind, s| ind.style.plot_mut(id).line_style = Some(s)),
+                    self.setter(cx, move |ind, s| {
+                        ind.style.plot_mut(id).line_style = Some(s)
+                    }),
                 ))
                 .control(
                     Select::new(eid("plot-type", id), PLOT_TYPES, p.plot_type)
                         .width(W_TYPE_FIELD)
                         .on_change(
-                            self.setter(cx, move |ind, t| ind.style.plot_mut(id).plot_type = Some(t)),
+                            self.setter(cx, move |ind, t| {
+                                ind.style.plot_mut(id).plot_type = Some(t)
+                            }),
                         ),
                 );
             let mut rows = vec![row.into_any_element()];
@@ -1036,7 +1062,9 @@ impl IndicatorSettingsPanel {
                     eid("plot-price-line", id),
                     "Price line",
                     p.price_line,
-                    self.setter(cx, move |ind, v| ind.style.plot_mut(id).price_line = Some(v)),
+                    self.setter(cx, move |ind, v| {
+                        ind.style.plot_mut(id).price_line = Some(v)
+                    }),
                 )
                 .indent()
                 .label_width(lw)
@@ -1131,15 +1159,23 @@ impl IndicatorSettingsPanel {
             .map(|&u| {
                 let on = style.visibility.get(u).is_some();
                 let this = this.clone();
-                let mut row = FormRow::check(eid("vis", unit_title(u)), unit_title(u), on, move |v, _, cx| {
-                    this.update(cx, |p, cx| {
-                        let r = p.vis_fields(u, cx);
-                        p.edit(cx, |ind| ind.style.visibility.set(u, v.then_some(r)));
-                    })
-                    .ok();
-                })
+                let mut row = FormRow::check(
+                    eid("vis", unit_title(u)),
+                    unit_title(u),
+                    on,
+                    move |v, _, cx| {
+                        this.update(cx, |p, cx| {
+                            let r = p.vis_fields(u, cx);
+                            p.edit(cx, |ind| ind.style.visibility.set(u, v.then_some(r)));
+                        })
+                        .ok();
+                    },
+                )
                 .label_width(SIZE.label_width() * 0.6);
-                let field = |slot| self.number(slot).map(|s| NumberField::new(s).width(W_RANGE_FIELD));
+                let field = |slot| {
+                    self.number(slot)
+                        .map(|s| NumberField::new(s).width(W_RANGE_FIELD))
+                };
                 if let Some(f) = field(NumberSlot::VisFrom(u)) {
                     row = row.control(f);
                 }
@@ -1360,27 +1396,33 @@ impl RenderOnce for LineField {
             cx,
         );
         let focus = nav.read(cx).focus.clone();
-        let trigger = Button::new(ElementId::Name(SharedString::from(format!("{key}-trigger"))))
-            .outline()
-            .with_size(Size::Size(px(H_FIELD)))
-            .h(px(H_FIELD))
-            .w(px(W_LINE_FIELD))
-            .px(px(S2))
-            .py_0()
-            .tooltip(format!("{} px, {}", self.width, match self.style {
+        let trigger = Button::new(ElementId::Name(SharedString::from(format!(
+            "{key}-trigger"
+        ))))
+        .outline()
+        .with_size(Size::Size(px(H_FIELD)))
+        .h(px(H_FIELD))
+        .w(px(W_LINE_FIELD))
+        .px(px(S2))
+        .py_0()
+        .tooltip(format!(
+            "{} px, {}",
+            self.width,
+            match self.style {
                 LineStyle::Solid => "solid",
                 LineStyle::Dashed => "dashed",
                 LineStyle::Dotted => "dotted",
-            }))
-            .child(
-                h_flex()
-                    .w_full()
-                    .items_center()
-                    .justify_between()
-                    .gap(px(S1))
-                    .child(line_sample(self.width, self.style, tt_ui::hsla(t.text)))
-                    .child(glyph(Glyph::CHEVRON_DOWN, ICON_XS).color(tt_ui::hsla(t.text_muted))),
-            );
+            }
+        ))
+        .child(
+            h_flex()
+                .w_full()
+                .items_center()
+                .justify_between()
+                .gap(px(S1))
+                .child(line_sample(self.width, self.style, tt_ui::hsla(t.text)))
+                .child(glyph(Glyph::CHEVRON_DOWN, ICON_XS).color(tt_ui::hsla(t.text_muted))),
+        );
         let (width, style) = (self.width, self.style);
         let (on_width, on_style) = (self.on_width, self.on_style);
         Popover::new(ElementId::Name(SharedString::from(format!("{key}-pop"))))
@@ -1438,7 +1480,11 @@ mod tests {
         assert_eq!(rsi.get("length"), Some(InputValue::Int(1)));
 
         let mut bb = StudyKind::BollingerBands.default_study();
-        let mult = bb.meta().inputs.iter().find(|d| matches!(d.kind, InputKind::Float { .. }));
+        let mult = bb
+            .meta()
+            .inputs
+            .iter()
+            .find(|d| matches!(d.kind, InputKind::Float { .. }));
         let mult = mult.expect("BB has a float input").id;
         assert!(apply_number_input(&mut bb, mult, "2.5"));
         assert_eq!(bb.get(mult), Some(InputValue::Float(2.5)));
@@ -1449,7 +1495,11 @@ mod tests {
                 if matches!(def.kind, InputKind::Int { .. } | InputKind::Float { .. }) {
                     let ind = Indicator::new(s.clone());
                     let text = slot_text(&ind, NumberSlot::Input(def.id));
-                    assert!(apply_number_input(&mut s, def.id, &text), "{kind:?} {}", def.id);
+                    assert!(
+                        apply_number_input(&mut s, def.id, &text),
+                        "{kind:?} {}",
+                        def.id
+                    );
                     assert_eq!(s.get(def.id), Some(def.default), "{kind:?} {}", def.id);
                 }
             }
@@ -1504,7 +1554,8 @@ mod tests {
             ind.visible = false;
 
             let (numbers, colors) = slots(&ind.study);
-            let texts = |i: &Indicator| numbers.iter().map(|s| slot_text(i, *s)).collect::<Vec<_>>();
+            let texts =
+                |i: &Indicator| numbers.iter().map(|s| slot_text(i, *s)).collect::<Vec<_>>();
             let swatches = |i: &Indicator| {
                 colors
                     .iter()

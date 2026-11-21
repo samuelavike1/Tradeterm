@@ -341,12 +341,7 @@ impl ChartView {
     /// indicator ids of the indicator panes.
     pub fn pane_ids(&self) -> Vec<u64> {
         std::iter::once(0)
-            .chain(
-                self.indicators
-                    .iter()
-                    .filter(|i| i.in_pane())
-                    .map(|i| i.id),
-            )
+            .chain(self.indicators.iter().filter(|i| i.in_pane()).map(|i| i.id))
             .collect()
     }
 

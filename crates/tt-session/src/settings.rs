@@ -388,6 +388,11 @@ pub struct TabSettings {
     pub invert_scale: bool,
     /// Price pane collapsed to a strip.
     pub main_collapsed: bool,
+    /// This chart's own settings (TradingView keeps settings per chart).
+    /// `None` = follows the user default, [`AppSettings::chart_style`]; old
+    /// files have no `style`, so every tab follows the global style.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub style: Option<tt_chart::ChartStyle>,
     /// Pre-indicator volume toggle; only read, to migrate old files.
     #[serde(skip_serializing)]
     pub show_volume: Option<bool>,
@@ -404,9 +409,29 @@ impl Default for TabSettings {
             legend_collapsed: false,
             invert_scale: false,
             main_collapsed: false,
+            style: None,
             show_volume: None,
         }
     }
+}
+
+impl TabSettings {
+    /// The style this tab draws with: its own, or the user default.
+    pub fn effective_style<'a>(
+        &'a self,
+        default: &'a tt_chart::ChartStyle,
+    ) -> &'a tt_chart::ChartStyle {
+        self.style.as_ref().unwrap_or(default)
+    }
+}
+
+/// A tab's own style for `style`: `None` (follow the user default) when it
+/// equals `default`, so tabs that look like the default keep following it.
+pub fn tab_style_override(
+    style: &tt_chart::ChartStyle,
+    default: &tt_chart::ChartStyle,
+) -> Option<tt_chart::ChartStyle> {
+    (style != default).then(|| style.clone())
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -446,7 +471,8 @@ pub struct AppSettings {
         skip_serializing_if = "std::collections::BTreeMap::is_empty"
     )]
     pub indicator_presets: std::collections::BTreeMap<StudyKind, Vec<NamedPreset>>,
-    /// Chart settings (TradingView's Settings dialog), shared by all charts.
+    /// The user default chart settings (TradingView's Settings dialog): new
+    /// tabs start from it and tabs without their own `style` follow it.
     pub chart_style: tt_chart::ChartStyle,
     /// Drawings per symbol (shown on every timeframe of that symbol).
     /// Loaded leniently: a drawing this build can't read is skipped and
@@ -582,6 +608,11 @@ impl SettingsStore {
         (settings, store)
     }
 
+    /// The settings file, if settings are saved this session.
+    pub fn path(&self) -> Option<&Path> {
+        self.file.path()
+    }
+
     /// Where an unparseable settings file was moved at load, if any (for a
     /// one-time notice).
     pub fn corrupt_backup(&self) -> Option<&Path> {
@@ -666,6 +697,7 @@ mod tests {
                     legend_collapsed: true,
                     invert_scale: false,
                     main_collapsed: false,
+                    style: None,
                     show_volume: None,
                 },
             ],
@@ -1003,7 +1035,11 @@ mod tests {
         s.indicator_defaults.insert(StudyKind::Rsi, preset.clone());
 
         // Named presets: unique case-insensitively, replaced in place.
-        assert!(save_preset(&mut s.indicator_presets, "  Fast ", preset.clone()));
+        assert!(save_preset(
+            &mut s.indicator_presets,
+            "  Fast ",
+            preset.clone()
+        ));
         let mut slow = preset.clone();
         slow.study.set("length", tt_core::InputValue::Int(50));
         assert!(save_preset(&mut s.indicator_presets, "Slow", slow.clone()));
@@ -1016,8 +1052,7 @@ mod tests {
         );
         assert_eq!(list[0].preset, slow);
 
-        let back: AppSettings =
-            serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        let back: AppSettings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
         assert_eq!(back, s);
 
         // New instances use the default; other kinds use factory settings.
@@ -1028,9 +1063,21 @@ mod tests {
         assert_eq!(sma.study, StudyKind::Sma.default_study());
 
         // Delete; the last one removes the kind's entry.
-        assert!(delete_preset(&mut s.indicator_presets, StudyKind::Rsi, "fast"));
-        assert!(!delete_preset(&mut s.indicator_presets, StudyKind::Rsi, "fast"));
-        assert!(delete_preset(&mut s.indicator_presets, StudyKind::Rsi, "Slow"));
+        assert!(delete_preset(
+            &mut s.indicator_presets,
+            StudyKind::Rsi,
+            "fast"
+        ));
+        assert!(!delete_preset(
+            &mut s.indicator_presets,
+            StudyKind::Rsi,
+            "fast"
+        ));
+        assert!(delete_preset(
+            &mut s.indicator_presets,
+            StudyKind::Rsi,
+            "Slow"
+        ));
         assert!(s.indicator_presets.is_empty());
     }
 
@@ -1065,7 +1112,10 @@ mod tests {
             s.indicator_defaults.keys().copied().collect::<Vec<_>>(),
             [StudyKind::Rsi]
         );
-        assert_eq!(s.indicator_defaults[&StudyKind::Rsi].style.precision, Some(3));
+        assert_eq!(
+            s.indicator_defaults[&StudyKind::Rsi].style.precision,
+            Some(3)
+        );
         let rsi = &s.indicator_presets[&StudyKind::Rsi];
         assert_eq!(rsi.len(), 1);
         assert_eq!(rsi[0].name, "ok");
@@ -1073,6 +1123,60 @@ mod tests {
         // Files without the fields load as before.
         let old: AppSettings = serde_json::from_str(r#"{"active_tab":0}"#).unwrap();
         assert!(old.indicator_defaults.is_empty() && old.indicator_presets.is_empty());
+    }
+
+    #[test]
+    fn per_tab_style_resolution_and_compat() {
+        // Old files: one global style, no per-tab style → every tab follows it.
+        let old: AppSettings = serde_json::from_str(
+            r#"{"chart_style":{"font_size":14.0,"wick":false},"tabs":[{"symbol":"A"},{"symbol":"B"}]}"#,
+        )
+        .unwrap();
+        let old = old.normalized();
+        assert_eq!(
+            old.chart_style.scales.text_size, 14.0,
+            "v1 global style is the user default"
+        );
+        for t in &old.tabs {
+            assert!(t.style.is_none());
+            assert_eq!(t.effective_style(&old.chart_style), &old.chart_style);
+        }
+        // Tabs following the default write no `style` key.
+        let json = serde_json::to_value(&old).unwrap();
+        for tab in json["tabs"].as_array().unwrap() {
+            assert!(tab.get("style").is_none(), "{tab}");
+        }
+
+        // A tab with its own style keeps it through a round trip; the other
+        // tab still follows the default.
+        let mut s = old.clone();
+        let mut own = s.chart_style.clone();
+        own.symbol.line.width = 4.0;
+        s.tabs[1].style = tab_style_override(&own, &s.chart_style);
+        assert!(s.tabs[1].style.is_some());
+        let back: AppSettings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back, s);
+        assert_eq!(
+            back.tabs[1]
+                .effective_style(&back.chart_style)
+                .symbol
+                .line
+                .width,
+            4.0
+        );
+        assert_eq!(
+            back.tabs[0].effective_style(&back.chart_style),
+            &back.chart_style
+        );
+
+        // A style equal to the default means "follow the default".
+        assert_eq!(tab_style_override(&s.chart_style, &s.chart_style), None);
+        // A per-tab v1-shaped style migrates like the global one.
+        let t: TabSettings = serde_json::from_str(r#"{"style":{"dotted_grid":false}}"#).unwrap();
+        assert_eq!(
+            t.style.unwrap().canvas.grid_v_kind,
+            tt_chart::style::LineKind::Solid
+        );
     }
 
     #[test]

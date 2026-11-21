@@ -298,14 +298,15 @@ impl RenderOnce for NavTabs {
     }
 }
 
-type MenuBuild = Rc<dyn Fn(Menu, &mut Window, &mut App) -> Menu>;
+type MenuBuilder = Rc<dyn Fn(Menu, &mut Window, &mut App) -> Menu>;
 
-/// "Template ▾": Apply defaults (later: Save as…).
+/// "Template ▾": Apply defaults, or any rows built when the menu opens
+/// ([`TemplateMenu::build`]: saved templates, Save as…).
 #[derive(Clone)]
 pub struct TemplateMenu {
     rows: Vec<(SharedString, Handler)>,
+    build: Option<MenuBuilder>,
     label: Option<SharedString>,
-    build: Option<MenuBuild>,
 }
 
 impl TemplateMenu {
@@ -313,18 +314,18 @@ impl TemplateMenu {
     pub fn defaults(on_apply: impl Fn(&mut Window, &mut App) + 'static) -> Self {
         Self {
             rows: vec![("Apply defaults".into(), Rc::new(on_apply))],
-            label: None,
             build: None,
+            label: None,
         }
     }
 
-    /// A menu built each time it opens (rows that change while the dialog
-    /// is open: saved presets, "Reset to factory" once a default exists).
-    pub fn dynamic(build: impl Fn(Menu, &mut Window, &mut App) -> Menu + 'static) -> Self {
+    /// Rows built each time the menu opens (after any fixed rows), so they
+    /// can list state that changes while the dialog is open.
+    pub fn build(f: impl Fn(Menu, &mut Window, &mut App) -> Menu + 'static) -> Self {
         Self {
             rows: Vec::new(),
+            build: Some(Rc::new(f)),
             label: None,
-            build: Some(Rc::new(build)),
         }
     }
 
@@ -350,6 +351,7 @@ impl TemplateMenu {
 #[derive(IntoElement, Clone)]
 pub struct DialogFooter {
     template: Option<TemplateMenu>,
+    actions: Vec<(SharedString, Handler)>,
     cancel: Option<SharedString>,
     ok: Option<SharedString>,
     ok_disabled: bool,
@@ -367,6 +369,7 @@ impl DialogFooter {
     pub fn new() -> Self {
         Self {
             template: None,
+            actions: Vec::new(),
             cancel: None,
             ok: None,
             ok_disabled: false,
@@ -377,6 +380,17 @@ impl DialogFooter {
 
     pub fn template(mut self, menu: TemplateMenu) -> Self {
         self.template = Some(menu);
+        self
+    }
+
+    /// An outline button on the left, after the template menu ("Apply to
+    /// all tabs"). It does not close the dialog by itself.
+    pub fn action(
+        mut self,
+        label: impl Into<SharedString>,
+        f: impl Fn(&mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.actions.push((label.into(), Rc::new(f)));
         self
     }
 
@@ -423,7 +437,7 @@ impl RenderOnce for DialogFooter {
             let label = tm.label.unwrap_or_else(|| "Template".into());
             ToolbarButton::text("dialog-template", label)
                 .caret()
-                .menu(move |menu, window, cx| {
+                .menu(move |menu, w, cx| {
                     let mut menu = menu;
                     for (i, (label, f)) in rows.iter().enumerate() {
                         let f = f.clone();
@@ -433,10 +447,14 @@ impl RenderOnce for DialogFooter {
                         );
                     }
                     match &build {
-                        Some(b) => b(menu, window, cx),
+                        Some(b) => b(menu, w, cx),
                         None => menu,
                     }
                 })
+        });
+        let actions = self.actions.into_iter().enumerate().map(|(i, (label, f))| {
+            footer_button(Button::new(("dialog-action", i)).outline().label(label))
+                .on_click(move |_, window, cx| f(window, cx))
         });
         let cancel = self.cancel.map(|label| {
             let f = self.on_cancel.clone();
@@ -464,7 +482,7 @@ impl RenderOnce for DialogFooter {
             .w_full()
             .items_center()
             .justify_between()
-            .child(h_flex().children(left))
+            .child(h_flex().gap(px(S2)).children(left).children(actions))
             .child(h_flex().gap(px(S2)).children(cancel).children(ok))
     }
 }

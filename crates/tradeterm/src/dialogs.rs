@@ -6,10 +6,7 @@ use crate::app::{TabChart, TradeTerm};
 use crate::indicator_settings::IndicatorSettingsPanel;
 use crate::indicators::IndicatorsPanel;
 use crate::search::{self, SymbolSearch};
-use gpui_kit::component::WindowExt as _;
-use gpui_kit::component::dialog::DialogEntrance;
 use gpui_kit::*;
-use tt_theme::Theme;
 
 impl TradeTerm {
     /// Opens the symbol search, optionally with text already typed.
@@ -85,7 +82,7 @@ impl TradeTerm {
         let ok_panel = panel.downgrade();
         let footer = tt_ui::DialogFooter::new()
             .template(
-                tt_ui::TemplateMenu::dynamic(move |menu, _, cx| {
+                tt_ui::TemplateMenu::build(move |menu, _, cx| {
                     IndicatorSettingsPanel::defaults_menu(&menu_panel, menu, cx)
                 })
                 .label("Defaults"),
@@ -100,34 +97,24 @@ impl TradeTerm {
         tt_ui::open_dialog(window, cx, opts, panel);
     }
 
-    /// TradingView's chart "Settings" dialog.
+    /// TradingView's chart "Settings" dialog for the active tab.
     pub fn open_chart_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let app = cx.entity().downgrade();
-        let (style, base) = (self.chart_style.clone(), Theme::for_dark(self.theme.dark));
-        let panel = cx
-            .new(|cx| crate::chart_settings::ChartSettingsPanel::new(app, style, base, window, cx));
-        window.open_dialog(cx, move |dialog, _, _| {
-            dialog
-                .title("Settings")
-                .w(px(780.))
-                .entrance(DialogEntrance::FadeSlide)
-                .child(panel.clone())
-        });
+        self.open_chart_settings_page(crate::chart_settings::Page::Symbol, window, cx);
+    }
+
+    /// The Settings dialog on `page` (the price-scale gear opens Scales).
+    pub fn open_chart_settings_page(
+        &mut self,
+        page: crate::chart_settings::Page,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        crate::chart_settings::ChartSettingsPanel::open(self, page, window, cx);
     }
 
     pub fn open_custom_interval(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let app = cx.entity().downgrade();
         let panel = cx.new(|cx| crate::custom_interval::CustomInterval::new(app, window, cx));
-        let focus_once = std::cell::Cell::new(true);
-        window.open_dialog(cx, move |dialog, window, cx| {
-            if focus_once.replace(false) {
-                crate::custom_interval::CustomInterval::focus_input(&panel, window, cx);
-            }
-            dialog
-                .title("Add custom interval")
-                .w(px(520.))
-                .entrance(DialogEntrance::FadeSlide)
-                .child(panel.clone())
-        });
+        crate::custom_interval::CustomInterval::open(panel, window, cx);
     }
 }
